@@ -1,0 +1,1585 @@
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Annotated design mockup for Shortcut City, a contraction-hierarchies explainer on Canberra's road network."
+    />
+    <title>Shortcut City — design mockup</title>
+    <style>
+      :root {
+        --ground: #0b0e14;
+        --panel: #131826;
+        --panel-2: #0e1420;
+        --ink: #e8ecf4;
+        --muted: #8b94a8;
+        --road: #2a3348;
+        --road-major: #3d4a68;
+        --dijkstra: #d95926;
+        --astar: #9085e9;
+        --bidi: #d55181;
+        --ch: #3987e5;
+        --dijkstra-glow: #f5a962;
+        --astar-glow: #b48ce8;
+        --bidi-glow: #e87ba0;
+        --ch-glow: #4fd8eb;
+        --witness: #7dd8a0;
+        --note: #c9a86a;
+        --mono:
+          ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+        --sans: system-ui, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--ground);
+        color: var(--ink);
+        font-family: var(--sans);
+        line-height: 1.55;
+      }
+
+      a {
+        color: var(--ch-glow);
+      }
+
+      :focus-visible {
+        outline: 2px solid var(--ch);
+        outline-offset: 2px;
+        border-radius: 2px;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .wrap {
+        max-width: 1160px;
+        margin: 0 auto;
+        padding: 0 20px;
+      }
+
+      /* ---------- mockup chrome (meta layer, not product) ---------- */
+
+      .banner {
+        background: repeating-linear-gradient(
+          -45deg,
+          #1a1408,
+          #1a1408 12px,
+          #14100a 12px,
+          #14100a 24px
+        );
+        border-bottom: 1px solid #3a3020;
+        color: var(--note);
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        padding: 8px 20px;
+        text-align: center;
+      }
+
+      header.site {
+        padding: 14px 0 6px;
+        border-bottom: 1px solid #1c2334;
+      }
+
+      header.site nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 18px;
+        font-family: var(--mono);
+        font-size: 0.82rem;
+      }
+
+      header.site nav a {
+        color: var(--muted);
+        text-decoration: none;
+        padding: 4px 0;
+      }
+
+      header.site nav a:hover {
+        color: var(--ink);
+      }
+
+      h1 {
+        font-size: clamp(1.9rem, 4.5vw, 3rem);
+        letter-spacing: -0.03em;
+        font-weight: 800;
+        margin: 18px 0 4px;
+      }
+
+      h1 .tag {
+        font-family: var(--mono);
+        font-size: 0.45em;
+        font-weight: 400;
+        letter-spacing: 0.08em;
+        color: var(--note);
+        vertical-align: middle;
+        margin-left: 10px;
+      }
+
+      .lede {
+        color: var(--muted);
+        max-width: 62ch;
+        margin: 0 0 8px;
+      }
+
+      .pin {
+        display: inline-block;
+        border: 1px dashed #6a5a35;
+        color: var(--note);
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        line-height: 1.4;
+        padding: 5px 9px;
+        border-radius: 6px;
+        margin: 6px 6px 0 0;
+        max-width: 46ch;
+      }
+
+      .pin::before {
+        content: "✎ ";
+      }
+
+      section {
+        margin: 44px 0;
+      }
+
+      h2 {
+        font-size: 1.05rem;
+        font-family: var(--mono);
+        font-weight: 600;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+        border-bottom: 1px solid #1c2334;
+        padding-bottom: 8px;
+      }
+
+      h2 .path {
+        color: var(--ch-glow);
+        text-transform: none;
+        letter-spacing: 0;
+      }
+
+      h3 {
+        font-size: 1rem;
+        margin: 22px 0 6px;
+      }
+
+      /* ---------- browser / phone frames ---------- */
+
+      .frame {
+        background: var(--panel-2);
+        border: 1px solid #222b40;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .frame .bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        background: #10151f;
+        border-bottom: 1px solid #222b40;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--muted);
+      }
+
+      .frame .bar i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #2a3348;
+      }
+
+      .frame .bar .url {
+        background: #0b0e14;
+        border-radius: 4px;
+        padding: 2px 10px;
+        margin-left: 6px;
+      }
+
+      .race-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 300px;
+        gap: 18px;
+        align-items: start;
+      }
+
+      /* ---------- hero mock ---------- */
+
+      .hero {
+        position: relative;
+      }
+
+      .hero canvas {
+        display: block;
+        width: 100%;
+        height: 430px;
+        background: var(--ground);
+      }
+
+      .hero .overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        padding: 14px 18px 26px 16px;
+        max-width: 36ch;
+        pointer-events: none;
+        background: radial-gradient(
+          120% 100% at 0% 0%,
+          rgba(11, 14, 20, 0.92) 40%,
+          rgba(11, 14, 20, 0) 100%
+        );
+      }
+
+      .hero .overlay .site-title,
+      .hero .overlay .core {
+        text-shadow: 0 1px 6px rgba(11, 14, 20, 0.95);
+      }
+
+      .hero .overlay .site-title {
+        font-weight: 800;
+        font-size: 1.5rem;
+        letter-spacing: -0.02em;
+        margin: 0;
+      }
+
+      .hero .overlay .core {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin: 6px 0 0;
+        text-wrap: balance;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 12px;
+        border-top: 1px solid #222b40;
+        align-items: center;
+      }
+
+      .chip {
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        color: var(--muted);
+        background: var(--panel);
+        border: 1px solid #26304a;
+        border-radius: 999px;
+        padding: 5px 12px;
+      }
+
+      .chip .dot {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: baseline;
+      }
+
+      .chip.on {
+        color: var(--ink);
+        border-color: #3a4a70;
+      }
+
+      .chip.ghost {
+        opacity: 0.45;
+        border-style: dashed;
+      }
+
+      button.chip {
+        cursor: pointer;
+      }
+
+      button.chip:hover {
+        color: var(--ink);
+      }
+
+      /* ---------- scoreboard (chart discipline: dataviz skill) ---------- */
+
+      .board {
+        background: var(--panel);
+        border: 1px solid #222b40;
+        border-radius: 10px;
+        padding: 16px;
+      }
+
+      .board .headline {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin: 0 0 2px;
+      }
+
+      .board .big {
+        font-size: 2.1rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        margin: 0 0 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .row {
+        margin: 12px 0;
+      }
+
+      .row .lab {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        margin-bottom: 4px;
+      }
+
+      .row .lab .name .dot {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        margin-right: 7px;
+      }
+
+      .row .lab .val {
+        font-variant-numeric: tabular-nums;
+        color: var(--ink);
+      }
+
+      .track {
+        background: #0d1119;
+        border-radius: 4px;
+        height: 10px;
+        overflow: hidden;
+      }
+
+      .fill {
+        height: 100%;
+        border-radius: 0 4px 4px 0;
+        min-width: 2px;
+        transition: width 0.12s linear;
+      }
+
+      .tiles {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .tile {
+        background: var(--panel-2);
+        border: 1px solid #1e2739;
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+
+      .tile .k {
+        font-family: var(--mono);
+        font-size: 0.65rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .tile .v {
+        font-family: var(--mono);
+        font-size: 0.95rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ---------- phone frame ---------- */
+
+      .duo {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 22px;
+        align-items: start;
+        margin-top: 18px;
+      }
+
+      .phone {
+        width: 250px;
+        border: 2px solid #26304a;
+        border-radius: 26px;
+        overflow: hidden;
+        background: var(--ground);
+      }
+
+      .phone .screen {
+        position: relative;
+      }
+
+      .phone canvas {
+        display: block;
+        width: 100%;
+        height: 300px;
+        background: var(--ground);
+      }
+
+      .phone .hint {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        right: 8px;
+        display: flex;
+        justify-content: space-between;
+        font-family: var(--mono);
+        font-size: 0.6rem;
+        color: var(--muted);
+      }
+
+      .phone .sheet {
+        border-top: 1px solid #26304a;
+        background: var(--panel);
+        padding: 10px 14px 14px;
+      }
+
+      .phone .grab {
+        width: 36px;
+        height: 4px;
+        border-radius: 2px;
+        background: #2a3348;
+        margin: 0 auto 8px;
+      }
+
+      .phone .sheet .big {
+        font-weight: 800;
+        font-size: 1.25rem;
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .phone .sheet .sub {
+        font-family: var(--mono);
+        font-size: 0.62rem;
+        color: var(--muted);
+      }
+
+      .phone .chips {
+        display: flex;
+        gap: 6px;
+        padding: 8px;
+        border-top: 1px solid #1c2334;
+        overflow: hidden;
+      }
+
+      .phone .chips .chip {
+        font-size: 0.6rem;
+        padding: 3px 8px;
+        white-space: nowrap;
+      }
+
+      /* ---------- how-page mocks ---------- */
+
+      .chapters {
+        list-style: none;
+        counter-reset: chap;
+        margin: 18px 0 0;
+        padding: 0;
+        display: grid;
+        gap: 18px;
+      }
+
+      .chapters > li {
+        counter-increment: chap;
+        background: var(--panel-2);
+        border: 1px solid #1e2739;
+        border-radius: 10px;
+        padding: 16px 18px;
+      }
+
+      .chapters > li > h3 {
+        margin: 0 0 2px;
+      }
+
+      .chapters > li > h3::before {
+        content: counter(chap) " · ";
+        font-family: var(--mono);
+        color: var(--ch-glow);
+        font-weight: 400;
+      }
+
+      .goal {
+        color: var(--muted);
+        font-size: 0.88rem;
+        margin: 0 0 10px;
+      }
+
+      .toy {
+        background: var(--ground);
+        border: 1px solid #1c2334;
+        border-radius: 8px;
+        padding: 12px;
+        display: grid;
+        gap: 10px;
+        justify-items: start;
+      }
+
+      .toy svg {
+        max-width: 100%;
+        height: auto;
+      }
+
+      .toy .caption {
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--muted);
+      }
+
+      .toy .btn {
+        background: var(--panel);
+        color: var(--ink);
+        border: 1px solid #3a4a70;
+        border-radius: 6px;
+        padding: 6px 14px;
+        cursor: pointer;
+        font-size: 0.85rem;
+      }
+
+      .toy .btn:hover {
+        border-color: var(--ch);
+      }
+
+      .order-tiles {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .order-tiles .tile {
+        min-width: 130px;
+      }
+
+      .order-tiles .tile.win {
+        border-color: var(--ch);
+      }
+
+      .order-tiles .bar {
+        height: 8px;
+        border-radius: 0 4px 4px 0;
+        background: #55617d;
+        margin-top: 6px;
+        min-width: 2px;
+      }
+
+      .order-tiles .n {
+        font-size: 1.4rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+      }
+
+      label[for="hier"] {
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+
+      input[type="range"] {
+        width: min(300px, 100%);
+        accent-color: var(--ch);
+      }
+
+      .hier-canvas {
+        width: 100%;
+        max-width: 560px;
+        height: 240px;
+        display: block;
+        background: var(--ground);
+        border-radius: 6px;
+      }
+
+      /* ---------- wireframe (stretch page) ---------- */
+
+      .wire {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 10px;
+        opacity: 0.6;
+      }
+
+      .wire .box {
+        border: 1px dashed #33405e;
+        border-radius: 8px;
+        min-height: 90px;
+        display: grid;
+        place-items: center;
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        color: var(--muted);
+        padding: 8px;
+        text-align: center;
+      }
+
+      /* ---------- journey ---------- */
+
+      .journey {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: stretch;
+      }
+
+      .step {
+        flex: 1 1 170px;
+        background: var(--panel-2);
+        border: 1px solid #1e2739;
+        border-radius: 10px;
+        padding: 12px 14px;
+        position: relative;
+      }
+
+      .step .t {
+        font-family: var(--mono);
+        font-size: 0.65rem;
+        color: var(--ch-glow);
+        letter-spacing: 0.1em;
+      }
+
+      .step h3 {
+        margin: 2px 0 4px;
+        font-size: 0.95rem;
+      }
+
+      .step p {
+        margin: 0;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .paths {
+        margin-top: 12px;
+        display: grid;
+        gap: 6px;
+      }
+
+      .paths .p {
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .paths .p b {
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      /* ---------- tokens ---------- */
+
+      .swatches {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 12px 0;
+      }
+
+      .sw {
+        width: 108px;
+        border: 1px solid #1e2739;
+        border-radius: 8px;
+        overflow: hidden;
+        font-family: var(--mono);
+        font-size: 0.62rem;
+      }
+
+      .sw i {
+        display: block;
+        height: 40px;
+      }
+
+      .sw span {
+        display: block;
+        padding: 5px 8px;
+        color: var(--muted);
+      }
+
+      table.roster {
+        border-collapse: collapse;
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        margin: 10px 0;
+        width: 100%;
+        max-width: 560px;
+      }
+
+      table.roster th,
+      table.roster td {
+        text-align: left;
+        padding: 6px 10px;
+        border-bottom: 1px solid #1c2334;
+        color: var(--muted);
+      }
+
+      table.roster th {
+        color: var(--ink);
+        font-weight: 600;
+      }
+
+      table.roster .dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: baseline;
+      }
+
+      .spec {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+      }
+
+      .type-specimens > p {
+        margin: 8px 0;
+      }
+
+      footer {
+        border-top: 1px solid #1c2334;
+        margin-top: 50px;
+        padding: 22px 0 40px;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      footer p {
+        max-width: 75ch;
+      }
+
+      @media (max-width: 940px) {
+        .race-grid,
+        .duo,
+        .wire {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .hero canvas {
+          height: 320px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="banner">
+      DESIGN MOCKUP — annotated proposal, not the prototype · all numbers come
+      from the fake demo city below or are illustrative · full spec:
+      docs/superpowers/specs/2026-08-14-ch-explainer-design.md
+    </div>
+
+    <header class="site">
+      <div class="wrap">
+        <nav aria-label="Primary">
+          <a href="../../">↖ prototype home</a>
+          <a href="#race">/ — the race</a>
+          <a href="#how">/how/ — chapters</a>
+          <a href="#journey">user journey</a>
+          <a href="#tokens">design tokens</a>
+        </nav>
+        <h1>Shortcut City <span class="tag">design mockup · 2026-08-14</span></h1>
+        <p class="lede">
+          An interactive explainer of Contraction Hierarchies on Canberra's real
+          road network. Two pages: <strong>feel it</strong> (a live race on the
+          map), then <strong>understand it</strong> (five chapters, one toy
+          each). Dashed amber notes like the ones below are annotations
+          <em>about</em> the design; everything else shows the product.
+        </p>
+        <span class="pin">solid UI = proposed product · dashed = annotation</span>
+        <span class="pin">the map below is generated fake geometry; the real site renders OSM Canberra (© OpenStreetMap contributors)</span>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <!-- ============================ PAGE 1 ============================ -->
+      <section id="race" aria-labelledby="race-h">
+        <h2 id="race-h">Page 1 <span class="path">/</span> — The Race (hero + sandbox)</h2>
+
+        <div class="race-grid" style="margin-top: 18px">
+          <div class="frame">
+            <div class="bar" aria-hidden="true">
+              <i></i><i></i><i></i>
+              <span class="url">comp4020-agentic-coding-studio.github.io/…/</span>
+              <span style="margin-left: auto">1920 × 1080</span>
+            </div>
+            <div class="hero">
+              <canvas
+                id="cityCanvas"
+                role="img"
+                aria-label="Animated demo: an orange flood of Dijkstra-settled intersections spreads across a stylised city while Contraction Hierarchies lights only a thin blue chain of shortcuts; both end on the same route."
+              ></canvas>
+              <div class="overlay">
+                <p class="site-title">Shortcut City</p>
+                <p class="core">
+                  Drop two pins on Canberra. Watch Dijkstra flood the city while
+                  Contraction Hierarchies thread a handful of shortcuts — same
+                  route, a fraction of the work.
+                </p>
+              </div>
+            </div>
+            <div class="controls">
+              <button class="chip" type="button" id="replay">⟳ replay race</button>
+              <span class="chip on"><span class="dot" style="background: var(--dijkstra)"></span>Dijkstra</span>
+              <span class="chip on"><span class="dot" style="background: var(--ch)"></span>Contraction Hierarchies</span>
+              <span class="chip ghost"><span class="dot" style="background: var(--astar)"></span>A*</span>
+              <span class="chip ghost"><span class="dot" style="background: var(--bidi)"></span>Bidirectional</span>
+              <span class="chip">Across the lake</span>
+              <span class="chip">Suburb hop</span>
+              <span class="chip">Surprise me</span>
+            </div>
+          </div>
+
+          <div class="board" data-testid="scoreboard-mock">
+            <p class="headline">This race, measured</p>
+            <p class="big" id="pct">—</p>
+            <div class="row">
+              <div class="lab">
+                <span class="name"><span class="dot" style="background: var(--dijkstra)"></span>Dijkstra</span>
+                <span class="val"><span id="dijkN">0</span> settled</span>
+              </div>
+              <div class="track"><div class="fill" id="dijkBar" style="width: 0%; background: var(--dijkstra)"></div></div>
+            </div>
+            <div class="row">
+              <div class="lab">
+                <span class="name"><span class="dot" style="background: var(--ch)"></span>Contraction H.</span>
+                <span class="val"><span id="chN">0</span> settled</span>
+              </div>
+              <div class="track"><div class="fill" id="chBar" style="width: 0%; background: var(--ch)"></div></div>
+            </div>
+            <div class="tiles">
+              <div class="tile"><span class="k">wall time</span><br /><span class="v">38.2 ms vs 0.6 ms†</span></div>
+              <div class="tile"><span class="k">route</span><br /><span class="v">identical ✓</span></div>
+            </div>
+            <p class="caption" style="font-family: var(--mono); font-size: 0.68rem; color: var(--muted); margin: 12px 0 0">
+              † illustrative; the real page shows times measured in your
+              browser. CH pre-paid with a one-off preprocessing pass — that
+              trade is the whole story → <a href="#how">how it works</a>
+            </p>
+          </div>
+        </div>
+
+        <span class="pin">signature element: the race replays its worker-computed settle order over ~2.5 s; counters + bars are driven by the same data as the dots you see</span>
+        <span class="pin">pins draggable on desktop, tap-to-place on phone; presets + "surprise me" re-race; keyboard: chips are buttons, R replays, arrow keys nudge the active pin</span>
+        <span class="pin">A* and Bidirectional chips are the target tier — greyed here; on the fake city this demo's ratio is ~10×, Canberra-scale is ~100×</span>
+        <span class="pin">prefers-reduced-motion: no auto-run, no loop — final still + numbers (this mockup obeys it too)</span>
+
+        <div class="duo">
+          <div>
+            <h3>Same page at 390 × 844</h3>
+            <p class="goal" style="max-width: 56ch">
+              Map keeps the top ~55% of the viewport. The scoreboard becomes a
+              bottom sheet, collapsed to its headline number; controls collapse
+              to a scrollable chip row. First tap places A, second places B,
+              third starts over — the hint chip always says which is next.
+            </p>
+            <span class="pin">bottom sheet expands on tap/swipe to the full scoreboard; map never shrinks below 55vh mid-interaction</span>
+            <span class="pin">44 px minimum touch targets; chip row scrolls horizontally rather than wrapping over the map</span>
+          </div>
+          <div class="phone" aria-label="Phone layout mock">
+            <div class="screen">
+              <canvas
+                id="phoneCanvas"
+                role="img"
+                aria-label="The same race shown in a phone-proportioned frame: orange flood, thin blue shortcut chain, white route."
+              ></canvas>
+              <div class="hint" aria-hidden="true">
+                <span class="chip">tap to place B</span>
+                <span class="chip">⟳</span>
+              </div>
+            </div>
+            <div class="chips" aria-hidden="true">
+              <span class="chip on">Dijkstra</span>
+              <span class="chip on">CH</span>
+              <span class="chip">Across the lake</span>
+              <span class="chip">Surprise</span>
+            </div>
+            <div class="sheet">
+              <div class="grab" aria-hidden="true"></div>
+              <p class="big" id="phonePct">—</p>
+              <span class="sub">less work — tap for the full scoreboard</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================ PAGE 2 ============================ -->
+      <section id="how" aria-labelledby="how-h">
+        <h2 id="how-h">Page 2 <span class="path">/how/</span> — five chapters, one toy each</h2>
+        <p class="lede" style="margin-top: 14px">
+          A vertical article. Desktop shows a chapter-progress rail; phone is
+          plain flow. Every toy runs the <em>same algorithm code</em> as the
+          big race, on a 12-node mini-town, and shares one control convention:
+          ▶ play · step · ⟲ reset. Chapters 2–4 are mocked interactively below;
+          1 and 5 are described.
+        </p>
+
+        <ol class="chapters">
+          <li>
+            <h3>What Dijkstra actually does</h3>
+            <p class="goal">
+              30-second refresher: press play, the frontier expands ring by
+              ring until B settles. <em>Dijkstra is perfect and blind</em> — it
+              cannot know a node is irrelevant. (Toy: mini-town flood with a
+              settled counter.)
+            </p>
+          </li>
+
+          <li>
+            <h3>Contraction: remove a node without lying about distances</h3>
+            <p class="goal">
+              The invariant: after deleting a node, every remaining distance is
+              unchanged — shortcuts are the price, witnesses the discount.
+            </p>
+            <div class="toy">
+              <svg id="contractSvg" viewBox="0 0 320 210" width="440" aria-label="Toy graph of seven intersections. Contracting node E either adds dashed shortcut edges or finds green witness paths.">
+                <g stroke="#3d4a68" stroke-width="2" id="cEdges">
+                  <line x1="45" y1="70" x2="160" y2="105" />
+                  <line x1="45" y1="140" x2="160" y2="105" />
+                  <line x1="160" y1="105" x2="275" y2="70" />
+                  <line x1="160" y1="105" x2="275" y2="140" />
+                  <line x1="45" y1="70" x2="160" y2="30" id="wAT" />
+                  <line x1="160" y1="30" x2="275" y2="70" id="wTC" />
+                  <line x1="45" y1="140" x2="160" y2="180" id="wBS" />
+                  <line x1="160" y1="180" x2="275" y2="140" id="wSD" />
+                </g>
+                <g id="shortcuts" stroke="var(--ch)" stroke-width="2" stroke-dasharray="6 5" fill="none" opacity="0">
+                  <path d="M45 70 Q160 148 275 140" />
+                  <path d="M45 140 Q160 62 275 70" />
+                </g>
+                <g font-family="ui-monospace, Consolas, monospace" font-size="11" fill="#8b94a8">
+                  <text x="94" y="78">4</text>
+                  <text x="94" y="136">3</text>
+                  <text x="222" y="78">3</text>
+                  <text x="222" y="136">5</text>
+                  <text x="94" y="42">3</text>
+                  <text x="222" y="42">3</text>
+                  <text x="94" y="172">2</text>
+                  <text x="222" y="172">2</text>
+                </g>
+                <g id="cNodes">
+                  <circle cx="45" cy="70" r="9" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="45" cy="140" r="9" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="160" cy="30" r="9" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle id="nodeE" cx="160" cy="105" r="11" fill="#131826" stroke="var(--dijkstra-glow)" stroke-width="2.5" />
+                  <circle cx="160" cy="180" r="9" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="275" cy="70" r="9" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="275" cy="140" r="9" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                </g>
+                <g font-family="ui-monospace, Consolas, monospace" font-size="11" fill="#e8ecf4" text-anchor="middle">
+                  <text x="45" y="58">A</text>
+                  <text x="45" y="160">B</text>
+                  <text x="160" y="18">T</text>
+                  <text x="160" y="109" id="labelE">E</text>
+                  <text x="160" y="200">S</text>
+                  <text x="275" y="58">C</text>
+                  <text x="275" y="160">D</text>
+                </g>
+                <text id="cTag" x="160" y="205" text-anchor="middle" font-family="ui-monospace, Consolas, monospace" font-size="10" fill="var(--witness)" opacity="0"></text>
+              </svg>
+              <button class="btn" type="button" id="contractBtn">Run witness check</button>
+              <p class="caption" id="contractCap">
+                E routes four neighbour pairs. Before contracting, CH asks: for
+                each pair, is <em>through E</em> the only shortest way?
+              </p>
+            </div>
+            <span class="pin">real version: tap ANY node to contract it; a disclosure animates the local witness Dijkstra; shortcut counter accumulates</span>
+          </li>
+
+          <li>
+            <h3>Order is everything</h3>
+            <p class="goal">
+              Contract the same town in three orders; count the shortcuts each
+              forces. Node selection is the knob that decides preprocessing
+              quality.
+            </p>
+            <div class="order-tiles">
+              <div class="tile">
+                <span class="k">random order</span>
+                <div class="n">23</div>
+                <div class="bar" style="width: 56%"></div>
+                <span class="k">shortcuts</span>
+              </div>
+              <div class="tile">
+                <span class="k">worst order</span>
+                <div class="n">41</div>
+                <div class="bar" style="width: 100%"></div>
+                <span class="k">shortcuts</span>
+              </div>
+              <div class="tile win">
+                <span class="k">edge difference</span>
+                <div class="n">6</div>
+                <div class="bar" style="width: 15%; background: var(--ch)"></div>
+                <span class="k">shortcuts</span>
+              </div>
+            </div>
+            <span class="pin">counts computed live by the real chBuild code on the toy graph (these are illustrative); then "your turn": tap nodes in your own order — beat the heuristic?</span>
+          </li>
+
+          <li>
+            <h3>The hierarchy, revealed</h3>
+            <p class="goal">
+              The money shot, on the <em>real</em> map: sweep from every road
+              to only the top-ranked nodes. Suburbia fades; the arterials and
+              bridges remain — CH discovered Canberra's road hierarchy from
+              structure alone.
+            </p>
+            <div class="toy">
+              <canvas class="hier-canvas" id="hierCanvas" role="img" aria-label="Stylised city map. As the slider rises, minor roads fade until only arterial roads and the lake bridge remain, drawn in blue."></canvas>
+              <label for="hier">show nodes ranked in the top… <output id="hierOut">100%</output></label>
+              <input type="range" id="hier" min="0" max="3" value="0" step="1" />
+              <p class="caption">
+                notice: the bridge survives to the very top — bottleneck nodes
+                rank high.
+              </p>
+            </div>
+          </li>
+
+          <li>
+            <h3>The query: only ever climb</h3>
+            <p class="goal">
+              Mini-town redrawn with height = contraction rank. Two searches
+              climb — forward from A, backward from B — meet near the top, and
+              the winning path <em>unzips</em>: shortcuts expand recursively
+              back into real streets. Every shortest path has a summit; that's
+              why 214 can beat 21,480.
+            </p>
+            <div class="toy">
+              <svg viewBox="0 0 460 170" width="500" aria-label="Diagram: nodes lifted by importance rank. A solid blue path climbs from A on the left, a dashed blue path climbs from B on the right, meeting at a starred summit node.">
+                <g stroke="#2a3348" stroke-width="1.5">
+                  <line x1="40" y1="140" x2="120" y2="100" />
+                  <line x1="120" y1="100" x2="200" y2="55" />
+                  <line x1="200" y1="55" x2="250" y2="35" />
+                  <line x1="420" y1="145" x2="340" y2="110" />
+                  <line x1="340" y1="110" x2="250" y2="35" />
+                  <line x1="120" y1="100" x2="180" y2="130" />
+                  <line x1="340" y1="110" x2="280" y2="140" />
+                </g>
+                <g fill="none" stroke="var(--ch)" stroke-width="2.5">
+                  <path d="M40 140 L120 100 L200 55 L250 35" />
+                  <path d="M420 145 L340 110 L250 35" stroke-dasharray="7 5" />
+                </g>
+                <g>
+                  <circle cx="40" cy="140" r="8" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="120" cy="100" r="8" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="180" cy="130" r="6" fill="#131826" stroke="#2a3348" stroke-width="2" />
+                  <circle cx="200" cy="55" r="8" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="280" cy="140" r="6" fill="#131826" stroke="#2a3348" stroke-width="2" />
+                  <circle cx="340" cy="110" r="8" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="420" cy="145" r="8" fill="#131826" stroke="#8b94a8" stroke-width="2" />
+                  <circle cx="250" cy="35" r="10" fill="#131826" stroke="var(--ch-glow)" stroke-width="2.5" />
+                </g>
+                <g font-family="ui-monospace, Consolas, monospace" font-size="12" fill="#e8ecf4" text-anchor="middle">
+                  <text x="40" y="162">A</text>
+                  <text x="420" y="167">B</text>
+                  <text x="250" y="20">★ meet</text>
+                </g>
+                <text x="14" y="90" font-family="ui-monospace, Consolas, monospace" font-size="10" fill="#8b94a8" transform="rotate(-90 14 90)">rank ↑</text>
+              </svg>
+              <p class="caption">
+                MVP ships this as a played-through animation; free A/B picking
+                is the target tier.
+              </p>
+            </div>
+          </li>
+        </ol>
+
+        <span class="pin">footer on both pages: about, © OpenStreetMap contributors (ODbL), Geisberger et al. 2008, honest-numbers note, repo link</span>
+      </section>
+
+      <!-- ======================= STRETCH PAGE ======================= -->
+      <section id="play" aria-labelledby="play-h">
+        <h2 id="play-h">Page 3 <span class="path">/play/</span> — stretch tier only</h2>
+        <p class="lede" style="margin-top: 12px">
+          Ships only if MVP + target land early. Until then its two knobs fold
+          into page 1 as toggles.
+        </p>
+        <div class="wire" style="margin-top: 10px">
+          <div class="box">full map + search-anatomy view<br />(forward/backward upward search spaces, meet star, unpack toggle)</div>
+          <div class="box">side panel: algorithm multi-select · hierarchy slider · deliberately-bad-ordering comparison</div>
+        </div>
+      </section>
+
+      <!-- ========================= JOURNEY ========================= -->
+      <section id="journey" aria-labelledby="j-h">
+        <h2 id="j-h">User journey</h2>
+        <div class="journey" style="margin-top: 16px">
+          <div class="step">
+            <span class="t">0:00 · land</span>
+            <h3>Read without waiting</h3>
+            <p>Headline + core-interaction sentence render before the graph loads; skeleton map + progress bar behind them.</p>
+          </div>
+          <div class="step">
+            <span class="t">0:05 · wow</span>
+            <h3>The race runs once</h3>
+            <p>Flood vs sparks, counters tick, scoreboard locks: "same route, 99% less work — measured just now".</p>
+          </div>
+          <div class="step">
+            <span class="t">0:30 · poke</span>
+            <h3>Make it personal</h3>
+            <p>Drag pins home → uni. The flood covers your suburb; the sparks don't. Try to break it: presets, surprise me.</p>
+          </div>
+          <div class="step">
+            <span class="t">2:00 · learn</span>
+            <h3>Five chapters</h3>
+            <p>Refresher → contraction → ordering (lose to the heuristic once) → hierarchy revealed on the real map → the climb.</p>
+          </div>
+          <div class="step">
+            <span class="t">8:00 · prove</span>
+            <h3>Back to the race</h3>
+            <p>Chapter 5 echoes your own numbers; return, switch on A*, watch even the clever ones lose. Say the idea in one sentence.</p>
+          </div>
+        </div>
+        <div class="paths">
+          <p class="p"><b>Marker's 60-second skim:</b> land → wow → scan chapter headings → footer credits. The whole idea is legible with zero operation, at both viewports.</p>
+          <p class="p"><b>Exit ramps:</b> stop after the hero and you still got the idea; after ch. 2, the intuition; after ch. 5, enough to implement it.</p>
+        </div>
+      </section>
+
+      <!-- ========================= TOKENS ========================= -->
+      <section id="tokens" aria-labelledby="t-h">
+        <h2 id="t-h">Design tokens (as used on this page)</h2>
+
+        <h3>Surfaces &amp; ink</h3>
+        <div class="swatches">
+          <div class="sw"><i style="background: #0b0e14"></i><span>ground #0b0e14</span></div>
+          <div class="sw"><i style="background: #131826"></i><span>panel #131826</span></div>
+          <div class="sw"><i style="background: #2a3348"></i><span>road #2a3348</span></div>
+          <div class="sw"><i style="background: #3d4a68"></i><span>road-major #3d4a68</span></div>
+          <div class="sw"><i style="background: #e8ecf4"></i><span>ink #e8ecf4</span></div>
+          <div class="sw"><i style="background: #8b94a8"></i><span>muted #8b94a8</span></div>
+        </div>
+
+        <h3>Algorithm roster — fixed order, two layers</h3>
+        <table class="roster">
+          <thead>
+            <tr><th>algorithm</th><th>chart step</th><th>map glow</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><span class="dot" style="background: var(--dijkstra)"></span>Dijkstra</td><td>#d95926</td><td>#f5a962</td></tr>
+            <tr><td><span class="dot" style="background: var(--astar)"></span>A*</td><td>#9085e9</td><td>#b48ce8</td></tr>
+            <tr><td><span class="dot" style="background: var(--bidi)"></span>Bidirectional</td><td>#d55181</td><td>#e87ba0</td></tr>
+            <tr><td><span class="dot" style="background: var(--ch)"></span>Contraction H.</td><td>#3987e5</td><td>#4fd8eb</td></tr>
+          </tbody>
+        </table>
+        <p class="spec" style="color: var(--muted)">
+          Chart steps validated with the dataviz palette validator (dark
+          surface): lightness band, chroma, CVD separation, normal-vision
+          floor, contrast — all pass in this order; MVP pair orange↔blue is
+          worst-case ΔE 26.8 under protanopia. Glow variants are illustration
+          only and never the sole identity carrier. Witness green #7dd8a0 is a
+          status colour, reserved.
+        </p>
+
+        <h3>Type</h3>
+        <div class="type-specimens">
+          <p style="font-size: 2rem; font-weight: 800; letter-spacing: -0.03em; margin: 4px 0">Display: heavy, tight — the exhibit voice</p>
+          <p style="font-family: var(--mono); font-variant-numeric: tabular-nums">
+            Instrument: ui-monospace — 21,480 settled · 38.2 ms · every number
+            the site shows
+          </p>
+          <p style="max-width: 60ch">Body: system sans at 1.55 line-height for chapter prose. No webfonts — the payload budget belongs to the map.</p>
+        </div>
+
+        <h3>Motion rules</h3>
+        <p class="goal" style="max-width: 70ch">
+          One thing animates at a time · every replay is ~2.5 s with a
+          step/scrub alternative · <code>prefers-reduced-motion</code> swaps
+          all animation for final states with the same numbers.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <div class="wrap">
+        <p>
+          Mockup for the COMP4020 assignment-1 prototype. The demo city above
+          is generated fake geometry; the shipped site renders Canberra from
+          OpenStreetMap data — © OpenStreetMap contributors, ODbL — and shows
+          only numbers it measured or precomputed from that graph. Reference:
+          Geisberger, Sanders, Schultes &amp; Delling, “Contraction
+          Hierarchies”, WEA 2008.
+        </p>
+      </div>
+    </footer>
+
+    <script>
+      /* Mockup-only demo code: generates a fake city and replays a race on
+         it. The real prototype runs actual Dijkstra/CH on the OSM graph in a
+         worker; this exists to communicate the feel. */
+
+      function mulberry32(a) {
+        return function () {
+          a |= 0;
+          a = (a + 0x6d2b79f5) | 0;
+          var t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      function buildCity(cols, rows, w, h, seed) {
+        var rnd = mulberry32(seed);
+        var margin = 14;
+        var cw = (w - 2 * margin) / (cols - 1);
+        var ch = (h - 2 * margin) / (rows - 1);
+        var lake = { x: 0.54 * w, y: 0.36 * h, rx: 0.15 * w, ry: 0.13 * h };
+        var cBridge = Math.round(cols * 0.54);
+        var cL = Math.round(cols * 0.22);
+        var cR = Math.round(cols * 0.8);
+        var rTop = Math.round(rows * 0.14);
+        var rBot = Math.round(rows * 0.6);
+        var idx = {};
+        var pts = [];
+        for (var r = 0; r < rows; r++) {
+          for (var c = 0; c < cols; c++) {
+            var x = margin + c * cw + (rnd() - 0.5) * cw * 0.55;
+            var y = margin + r * ch + (rnd() - 0.5) * ch * 0.55;
+            var inLake =
+              Math.pow((x - lake.x) / lake.rx, 2) + Math.pow((y - lake.y) / lake.ry, 2) < 1;
+            if (inLake && c !== cBridge) continue;
+            idx[c + "_" + r] = pts.length;
+            pts.push({ x: x, y: y, c: c, r: r });
+          }
+        }
+        function level(p) {
+          if (p.c === cBridge && p.r >= rTop && p.r <= rBot) return 3;
+          if (p.r === rBot) return 3;
+          if (p.r === rTop || p.c === cL || p.c === cR) return 2;
+          return 0;
+        }
+        var edges = [];
+        function tryEdge(a, bKey) {
+          var b = idx[bKey];
+          if (b === undefined) return;
+          var pa = pts[a];
+          var pb = pts[b];
+          var lv = Math.min(level(pa), level(pb));
+          if (lv === 0 && (level(pa) > 0 || level(pb) > 0)) lv = 1;
+          edges.push({ a: a, b: b, lv: lv, len: Math.hypot(pa.x - pb.x, pa.y - pb.y) });
+        }
+        for (var i = 0; i < pts.length; i++) {
+          var p = pts[i];
+          tryEdge(i, p.c + 1 + "_" + p.r);
+          tryEdge(i, p.c + "_" + (p.r + 1));
+        }
+        var A = idx[2 + "_" + Math.round(rows * 0.45)];
+        var B = idx[cols - 3 + "_" + (rows - 3)];
+        if (A === undefined) A = 0;
+        if (B === undefined) B = pts.length - 1;
+        return { pts: pts, edges: edges, A: A, B: B };
+      }
+
+      /* tiny Dijkstra over the fake city; cost() lets the "CH spine" hug
+         arterials by discounting them. Returns settle order + parent chain. */
+      function dijkstra(city, from, to, cost) {
+        var n = city.pts.length;
+        var dist = new Array(n).fill(Infinity);
+        var done = new Array(n).fill(false);
+        var parent = new Array(n).fill(-1);
+        var adj = city.adj;
+        if (!adj) {
+          adj = city.adj = Array.from({ length: n }, function () {
+            return [];
+          });
+          city.edges.forEach(function (e, ei) {
+            adj[e.a].push({ to: e.b, e: ei });
+            adj[e.b].push({ to: e.a, e: ei });
+          });
+        }
+        dist[from] = 0;
+        var order = [];
+        for (;;) {
+          var u = -1;
+          var best = Infinity;
+          for (var i = 0; i < n; i++) {
+            if (!done[i] && dist[i] < best) {
+              best = dist[i];
+              u = i;
+            }
+          }
+          if (u === -1) break;
+          done[u] = true;
+          order.push(u);
+          if (u === to) break;
+          adj[u].forEach(function (a) {
+            var e = city.edges[a.e];
+            var d = dist[u] + cost(e);
+            if (d < dist[a.to]) {
+              dist[a.to] = d;
+              parent[a.to] = u;
+            }
+          });
+        }
+        var path = [];
+        for (var v = to; v !== -1; v = parent[v]) path.push(v);
+        path.reverse();
+        return { order: order, path: path };
+      }
+
+      function prepCanvas(canvas) {
+        var dpr = Math.min(window.devicePixelRatio || 1, 2);
+        var rect = canvas.getBoundingClientRect();
+        canvas.width = Math.round(rect.width * dpr);
+        canvas.height = Math.round(rect.height * dpr);
+        var ctx = canvas.getContext("2d");
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return { ctx: ctx, w: rect.width, h: rect.height };
+      }
+
+      var ROADC = ["#232c40", "#2a3348", "#3d4a68", "#46577d"];
+
+      function drawBase(ctx, city, minLv, topBlue) {
+        ctx.lineCap = "round";
+        city.edges.forEach(function (e) {
+          if (e.lv < minLv) return;
+          var pa = city.pts[e.a];
+          var pb = city.pts[e.b];
+          ctx.strokeStyle = topBlue && e.lv >= 2 ? "#2f6ab8" : ROADC[e.lv];
+          ctx.lineWidth = e.lv >= 2 ? 1.7 : 1;
+          ctx.beginPath();
+          ctx.moveTo(pa.x, pa.y);
+          ctx.lineTo(pb.x, pb.y);
+          ctx.stroke();
+        });
+      }
+
+      function computeRace(city) {
+        var flood = dijkstra(city, city.A, city.B, function (e) {
+          return e.len;
+        });
+        var spine = dijkstra(city, city.A, city.B, function (e) {
+          return e.len * (e.lv >= 2 ? 0.35 : 1);
+        });
+        var sparkSet = {};
+        spine.path.forEach(function (u, i) {
+          sparkSet[u] = true;
+          if (i % 3 === 0) {
+            city.adj[u].forEach(function (a) {
+              sparkSet[a.to] = true;
+            });
+          }
+        });
+        return {
+          flood: flood.order,
+          route: spine.path,
+          sparks: Object.keys(sparkSet).map(Number),
+        };
+      }
+
+      function drawRaceFrame(ctx, city, race, t) {
+        /* t in [0,1] over the replay; flood reveals 0→0.82, route 0.85→1 */
+        var fN = Math.floor(Math.min(t / 0.82, 1) * race.flood.length);
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = "rgba(245, 169, 98, 0.5)";
+        for (var i = 0; i < fN; i++) {
+          var p = city.pts[race.flood[i]];
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 1.7, 0, 7);
+          ctx.fill();
+        }
+        var sN = Math.floor(Math.min(t / 0.18, 1) * race.sparks.length);
+        ctx.fillStyle = "rgba(79, 216, 235, 0.95)";
+        for (var j = 0; j < sN; j++) {
+          var q = city.pts[race.sparks[j]];
+          ctx.beginPath();
+          ctx.arc(q.x, q.y, 2.3, 0, 7);
+          ctx.fill();
+        }
+        ctx.globalCompositeOperation = "source-over";
+        if (t > 0.85) {
+          var seg = Math.max(2, Math.floor(((t - 0.85) / 0.15) * race.route.length));
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 2.4;
+          ctx.beginPath();
+          race.route.slice(0, seg).forEach(function (u, k) {
+            var pt = city.pts[u];
+            if (k === 0) ctx.moveTo(pt.x, pt.y);
+            else ctx.lineTo(pt.x, pt.y);
+          });
+          ctx.stroke();
+        }
+        var pa = city.pts[city.A];
+        var pb = city.pts[city.B];
+        [pa, pb].forEach(function (pt, k) {
+          ctx.fillStyle = "#ffffff";
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, 4, 0, 7);
+          ctx.fill();
+          ctx.fillStyle = "#0b0e14";
+          ctx.font = "700 6.5px system-ui";
+          ctx.textAlign = "center";
+          ctx.fillText(k === 0 ? "A" : "B", pt.x, pt.y + 2.3);
+        });
+        return { dijk: fN, ch: Math.min(sN, race.sparks.length) };
+      }
+
+      var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      /* ---------- hero ---------- */
+      var heroCanvas = document.getElementById("cityCanvas");
+      var heroState = null;
+
+      function heroSetup() {
+        var s = prepCanvas(heroCanvas);
+        var city = buildCity(46, 24, s.w, s.h, 77);
+        var race = computeRace(city);
+        var base = document.createElement("canvas");
+        base.width = heroCanvas.width;
+        base.height = heroCanvas.height;
+        var bctx = base.getContext("2d");
+        bctx.setTransform(
+          heroCanvas.width / s.w,
+          0,
+          0,
+          heroCanvas.height / s.h,
+          0,
+          0,
+        );
+        drawBase(bctx, city, 0, false);
+        heroState = { s: s, city: city, race: race, base: base, t0: null, raf: 0 };
+        return heroState;
+      }
+
+      function heroCounters(counts, total) {
+        var pctEl = document.getElementById("pct");
+        var pPct = document.getElementById("phonePct");
+        document.getElementById("dijkN").textContent = counts.dijk.toLocaleString("en-AU");
+        document.getElementById("chN").textContent = counts.ch.toLocaleString("en-AU");
+        document.getElementById("dijkBar").style.width = (counts.dijk / total) * 100 + "%";
+        document.getElementById("chBar").style.width = Math.max((counts.ch / total) * 100, 1) + "%";
+        if (counts.dijk > 0) {
+          var pct = (100 * (1 - counts.ch / counts.dijk)).toFixed(1) + "% less work";
+          pctEl.textContent = pct;
+          pPct.textContent = pct;
+        }
+      }
+
+      function heroFrame(now) {
+        var st = heroState;
+        if (!st.t0) st.t0 = now;
+        var t = ((now - st.t0) % 5200) / 5200;
+        var phase = Math.min(t / 0.75, 1);
+        st.s.ctx.clearRect(0, 0, st.s.w, st.s.h);
+        st.s.ctx.drawImage(st.base, 0, 0, st.s.w, st.s.h);
+        var counts = drawRaceFrame(st.s.ctx, st.city, st.race, phase);
+        heroCounters(counts, st.race.flood.length);
+        st.raf = requestAnimationFrame(heroFrame);
+      }
+
+      function heroRun() {
+        if (heroState && heroState.raf) cancelAnimationFrame(heroState.raf);
+        var st = heroSetup();
+        if (reduceMotion) {
+          st.s.ctx.clearRect(0, 0, st.s.w, st.s.h);
+          st.s.ctx.drawImage(st.base, 0, 0, st.s.w, st.s.h);
+          var counts = drawRaceFrame(st.s.ctx, st.city, st.race, 1);
+          heroCounters(counts, st.race.flood.length);
+        } else {
+          st.raf = requestAnimationFrame(heroFrame);
+        }
+      }
+
+      document.getElementById("replay").addEventListener("click", function () {
+        heroRun();
+      });
+
+      /* ---------- phone (static final state) ---------- */
+      function phoneRun() {
+        var s = prepCanvas(document.getElementById("phoneCanvas"));
+        var city = buildCity(22, 26, s.w, s.h, 41);
+        var race = computeRace(city);
+        s.ctx.clearRect(0, 0, s.w, s.h);
+        drawBase(s.ctx, city, 0, false);
+        drawRaceFrame(s.ctx, city, race, 1);
+      }
+
+      /* ---------- hierarchy slider ---------- */
+      var hierCity = null;
+
+      function hierRun() {
+        var canvas = document.getElementById("hierCanvas");
+        var s = prepCanvas(canvas);
+        hierCity = { s: s, city: buildCity(40, 18, s.w, s.h, 12) };
+        hierDraw();
+      }
+
+      function hierDraw() {
+        var lvl = Number(document.getElementById("hier").value);
+        var labels = ["100%", "top 35%", "top 12%", "top 2%"];
+        document.getElementById("hierOut").textContent = labels[lvl];
+        var s = hierCity.s;
+        s.ctx.clearRect(0, 0, s.w, s.h);
+        drawBase(s.ctx, hierCity.city, lvl, lvl >= 2);
+      }
+
+      document.getElementById("hier").addEventListener("input", hierDraw);
+
+      /* ---------- contraction toy: 3-state cycle ---------- */
+      var cState = 0;
+      var contractBtn = document.getElementById("contractBtn");
+
+      contractBtn.addEventListener("click", function () {
+        cState = (cState + 1) % 3;
+        var wit = ["wAT", "wTC", "wBS", "wSD"].map(function (id) {
+          return document.getElementById(id);
+        });
+        var shortcuts = document.getElementById("shortcuts");
+        var nodeE = document.getElementById("nodeE");
+        var tag = document.getElementById("cTag");
+        var cap = document.getElementById("contractCap");
+        if (cState === 1) {
+          wit.forEach(function (el) {
+            el.setAttribute("stroke", "#7dd8a0");
+          });
+          tag.setAttribute("opacity", "1");
+          tag.textContent = "witnesses found: A→T→C (6) beats A→E→C (7); B→S→D (4) beats B→E→D (8)";
+          cap.textContent =
+            "Two pairs have witnesses — a shorter route around E already exists, so no shortcut is owed there.";
+          contractBtn.textContent = "Contract E";
+        } else if (cState === 2) {
+          nodeE.setAttribute("opacity", "0.25");
+          document.getElementById("labelE").setAttribute("opacity", "0.25");
+          shortcuts.setAttribute("opacity", "1");
+          tag.textContent = "E contracted: 2 shortcuts added (A↝D = 9, B↝C = 6), 2 avoided";
+          cap.textContent =
+            "E is gone, yet every remaining distance is unchanged. Shortcuts are the price; witnesses kept it to two.";
+          contractBtn.textContent = "⟲ Reset";
+        } else {
+          wit.forEach(function (el) {
+            el.setAttribute("stroke", "#3d4a68");
+          });
+          nodeE.setAttribute("opacity", "1");
+          document.getElementById("labelE").setAttribute("opacity", "1");
+          shortcuts.setAttribute("opacity", "0");
+          tag.setAttribute("opacity", "0");
+          cap.textContent =
+            "E routes four neighbour pairs. Before contracting, CH asks: for each pair, is through E the only shortest way?";
+          contractBtn.textContent = "Run witness check";
+        }
+      });
+
+      /* ---------- boot + resize (mid-interaction resize must be safe) ---------- */
+      function bootAll() {
+        heroRun();
+        phoneRun();
+        hierRun();
+      }
+
+      var resizeTimer = 0;
+      window.addEventListener("resize", function () {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(bootAll, 150);
+      });
+
+      bootAll();
+    </script>
+  </body>
+</html>

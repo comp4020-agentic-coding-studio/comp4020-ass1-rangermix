@@ -160,3 +160,28 @@ catching you out, a fact about the stack the agent keeps getting wrong --- write
 it down here. Growing this file is the work of harness engineering, and the gap
 between this boilerplate and your own version is part of what your prototype
 says about the developer you're becoming.
+
+## Project: Shortcut City (assignment 1)
+
+An interactive explainer of Contraction Hierarchies raced against Dijkstra on
+Canberra's OSM road network. Designed 2026-08-14; due noon Mon 2026-08-17.
+
+- Design spec (structure, user journey, scope tiers, tests to write):
+  `docs/superpowers/specs/2026-08-14-ch-explainer-design.md`. Build MVP tier
+  first; target/stretch only after MVP is deployed and green.
+- The annotated mockup ships as a real page at `docs/mockup/` --- it must keep
+  passing the invariants; don't link it from the product nav.
+- Algorithm colours are a fixed roster, validated with the dataviz palette
+  validator (don't invent hues): Dijkstra `#d95926`, A* `#9085e9`,
+  bidirectional `#d55181`, CH `#3987e5` for charts/swatches, with brighter
+  glow variants reserved for map dots.
+- The core-interaction sentence on `/` is a spec contract ("Drop two pins on
+  Canberra…"); keep the page copy and its spec test in sync.
+- Every user-visible number must be measured in-browser or precomputed from
+  the real graph --- no invented figures in the product. (The mockup's fake-city
+  demo is labelled as such.)
+- Windows gotcha: several port ranges incl. 5141--5240 are OS-excluded on this
+  machine, so the dev server runs on port 5300 (`.claude/launch.json`, local
+  only --- `.claude/` is gitignored here);
+  `netsh interface ipv4 show excludedportrange protocol=tcp` lists them.
+- Local links check: `pnpm dlx linkinator ./dist --silent` after `pnpm build`.
