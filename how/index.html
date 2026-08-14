@@ -101,13 +101,21 @@
           upward from B, and stop when the two searches meet. No shortest
           path can be missed, because every one of them has a
           highest-ranked node somewhere along it — a summit — and the two
-          climbs are guaranteed to pass through it from either side. The
-          winning route then unzips: each shortcut expands back into the real
-          streets it silently stood in for. The next commit lifts this
-          mini-town so you can watch both climbs happen, live.</p>
-        <div class="toy" data-testid="toy-climb">
-          <p class="coming">interactive lands in the next commit</p>
-        </div>
+          climbs are guaranteed to pass through it from either side.
+          Shortcuts are what keep that guarantee true: contracting a node
+          never breaks the up-path to the summit, because a shortcut stands
+          in for whatever it would have removed — which is exactly why two
+          tiny climbs, one from each end, are enough. The winning route
+          then unzips: press play and watch both climbs happen live, each
+          shortcut expanding back into the real streets it silently stood
+          in for.</p>
+        <div class="toy" data-testid="toy-climb"></div>
+        <p class="caption">What to notice: both climbs only ever move to a
+          higher rank, never down, and between them they still leave some
+          of the mini-town's intersections completely unvisited — the same
+          "a fraction of the work" the race on page one measures at full
+          Canberra scale.</p>
+        <p class="closer-echo" data-testid="closer-echo">Loading your race numbers…</p>
       </section>
     </main>
     <footer class="site-foot">

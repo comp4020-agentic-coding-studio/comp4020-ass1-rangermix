@@ -1,14 +1,13 @@
 // Boot script for the /how/ page: wires the theme toggle (same as home.ts)
 // and mounts each chapter's interactive toy into its already-present
-// data-testid root. Chapter 5 has no mount call yet — its root ships with
-// the honest static placeholder baked into how/index.html until Task 11
-// adds climb.ts here.
+// data-testid root.
 
 import { initTheme } from "../theme";
 import { mountFlood } from "../toys/flood";
 import { mountContraction } from "../toys/contraction";
 import { mountOrder } from "../toys/order";
 import { mountHierarchy } from "../toys/hierarchy";
+import { mountClimb, mountClosingEcho } from "../toys/climb";
 
 function boot(): void {
   initTheme();
@@ -49,6 +48,12 @@ function boot(): void {
       mountHierarchy(hierarchyRoot);
     }
   }
+
+  const climbRoot = document.querySelector<HTMLElement>('[data-testid="toy-climb"]');
+  if (climbRoot) mountClimb(climbRoot);
+
+  const closerRoot = document.querySelector<HTMLElement>('[data-testid="closer-echo"]');
+  if (closerRoot) mountClosingEcho(closerRoot);
 }
 
 boot();

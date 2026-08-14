@@ -270,5 +270,16 @@ export class RaceController {
     this.ui.setHeadline(headlineText(dij.settledCount, ch.settledCount));
     const km = pathKm(graph, path);
     this.ui.announce(formatAnnouncement(dij.settledCount, ch.settledCount, km));
+    // /how/'s closing echo reads this back — same numbers the scoreboard
+    // just showed, so the two can never disagree. try/catch: private-mode
+    // browsers throw on localStorage access.
+    try {
+      localStorage.setItem(
+        "hth-last-race",
+        JSON.stringify({ dj: dij.settledCount, ch: ch.settledCount, km }),
+      );
+    } catch {
+      /* storage unavailable — the echo just falls back to meta.json means */
+    }
   }
 }

@@ -758,3 +758,98 @@ a {
     min-width: 120px;
   }
 }
+
+/* ---------- ch5 toy: the climb (2.5-D rank-lifted upward query) ---------- */
+
+.climb-base-edge {
+  opacity: 0.55;
+}
+
+.climb-node .climb-fill {
+  fill: var(--panel);
+  stroke: var(--muted);
+  stroke-width: 2;
+  transition:
+    fill 200ms ease,
+    stroke 200ms ease;
+}
+
+.climb-node.node-endpoint .climb-fill {
+  stroke-width: 3;
+}
+
+.climb-node.settled-fwd .climb-fill {
+  fill: var(--c-ch);
+  stroke: var(--c-ch);
+}
+
+.climb-node .climb-ring {
+  fill: none;
+  stroke: none;
+  transition: stroke 200ms ease;
+}
+
+.climb-node.settled-bwd .climb-ring {
+  stroke: var(--c-ch);
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
+}
+
+.climb-node text {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: var(--ink);
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.climb-edge {
+  stroke: var(--c-ch);
+  stroke-width: 2;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.climb-edge.revealed {
+  opacity: 1;
+}
+
+.climb-edge-bwd {
+  stroke-dasharray: 5 4;
+}
+
+.climb-meet {
+  opacity: 0;
+  fill: var(--c-ch);
+  font-family: var(--mono);
+  transition: opacity 200ms ease;
+}
+
+.climb-meet.shown {
+  opacity: 1;
+}
+
+.climb-meet .meet-star {
+  font-size: 16px;
+  text-anchor: middle;
+}
+
+.climb-meet .meet-label {
+  font-size: 9px;
+  text-anchor: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.closer-echo {
+  margin: 16px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
