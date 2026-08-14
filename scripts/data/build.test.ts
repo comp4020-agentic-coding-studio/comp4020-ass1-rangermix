@@ -275,3 +275,102 @@ describe("chain contraction: the oneway pattern, distinct from the two-way one",
     expect(chainEdge?.w).toBeCloseTo(want, 6);
   });
 });
+
+describe("edgesForWay: junction-split loop on a real multi-node way", () => {
+  // Every way elsewhere in this file has exactly 2 refs, so the loop's
+  // multi-hop summing (build.ts:68-72) and its mid-way split (:60-61) were
+  // never exercised by a way shaped like real OSM data: several interior
+  // shape points, AND an interior node that's a junction because another
+  // way also touches it. One way, refs=[J1,S1,J2,S2,J3]:
+  //   - S1, S2 are pure shape points: referenced once, only here, never an
+  //     endpoint -> not junctions -> absorbed into whichever segment
+  //     contains them (both their geometry AND their hop distance).
+  //   - J2 is an interior node but IS a junction, because a second way
+  //     (the spur J2-X) also references it -> the main way must split into
+  //     two segments AT J2, not stay one J1..J3 edge.
+  // Coordinates zigzag (not collinear) specifically so "sum of individual
+  // hops" and "direct haversine(endpoint, endpoint)" give different
+  // numbers — a bug that skipped the interior hops (e.g. used
+  // haversineM(J1,J2) directly instead of summing J1-S1 and S1-J2) would
+  // fail the weight assertions below, not just coincidentally pass.
+  const J1: [number, number] = [149.6000, -35.6000];
+  const S1: [number, number] = [149.6006, -35.6004];
+  const J2: [number, number] = [149.6002, -35.6010];
+  const S2: [number, number] = [149.6009, -35.6014];
+  const J3: [number, number] = [149.6004, -35.6021];
+  const X: [number, number] = [149.6020, -35.6010];
+  const synthetic: OverpassJson = {
+    elements: [
+      { type: "node", id: 701, lat: J1[1], lon: J1[0] },
+      { type: "node", id: 702, lat: S1[1], lon: S1[0] },
+      { type: "node", id: 703, lat: J2[1], lon: J2[0] },
+      { type: "node", id: 704, lat: S2[1], lon: S2[0] },
+      { type: "node", id: 705, lat: J3[1], lon: J3[0] },
+      { type: "node", id: 706, lat: X[1], lon: X[0] },
+      { type: "way", id: 7001, nodes: [701, 702, 703, 704, 705], tags: { highway: "residential" } },
+      // only here to make J2(703) a junction by ref-count (endpoint of a 2nd way)
+      { type: "way", id: 7002, nodes: [703, 706], tags: { highway: "residential" } },
+    ],
+  };
+  const g = buildRoutingGraph(parseOsm(synthetic));
+
+  // hand-computed (haversineM, same formula as the sanity test above; the
+  // zigzag means these don't reduce to a closed form the way the mini.json
+  // chain's same-longitude points do, so this uses the function under test
+  // to build the *expectation*, then asserts the pipeline's own sum matches
+  // it independently — see _comment-equivalent numbers in the PR/report):
+  //   hop J1-S1 = 70.150396 m, hop S1-J2 = 75.888351 m -> seg1 = 146.038747 m
+  //   hop J2-S2 = 77.354066 m, hop S2-J3 = 90.011313 m -> seg2 = 167.365379 m
+  //   residential = 40 km/h = 11.111111 m/s
+  //   seg1Seconds = 146.038747 / 11.111111 = 13.143487 s
+  //   seg2Seconds = 167.365379 / 11.111111 = 15.062884 s
+  // (direct haversine(J1,J2) = 112.656 m and haversine(J2,J3) = 123.644 m —
+  // both well short of the hop sums above, confirming the points aren't
+  // collinear and a "skip the shape points" bug would be caught below.)
+  const seg1Seconds =
+    (haversineM(J1[0], J1[1], S1[0], S1[1]) + haversineM(S1[0], S1[1], J2[0], J2[1])) / (40 / 3.6);
+  const seg2Seconds =
+    (haversineM(J2[0], J2[1], S2[0], S2[1]) + haversineM(S2[0], S2[1], J3[0], J3[1])) / (40 / 3.6);
+
+  it("absorbs interior shape points into one edge's geometry and summed weight", () => {
+    expect(indexOf(g, S1)).toBe(-1); // S1 never became its own node
+    expect(indexOf(g, J1)).toBeGreaterThanOrEqual(0);
+    expect(indexOf(g, J2)).toBeGreaterThanOrEqual(0);
+
+    const forward = edgesBetween(g, J1, J2);
+    const backward = edgesBetween(g, J2, J1);
+    expect(forward.length).toBe(1);
+    expect(backward.length).toBe(1);
+    expect(forward[0].geometry).toEqual([J1, S1, J2]);
+    expect(backward[0].geometry).toEqual([J2, S1, J1]);
+    expect(forward[0].w).toBeCloseTo(seg1Seconds, 6);
+    expect(backward[0].w).toBeCloseTo(seg1Seconds, 6);
+  });
+
+  it("splits the way into a second edge at the interior junction, absorbing its own shape point", () => {
+    expect(indexOf(g, S2)).toBe(-1); // S2 never became its own node
+    expect(indexOf(g, J3)).toBeGreaterThanOrEqual(0);
+
+    const forward = edgesBetween(g, J2, J3);
+    const backward = edgesBetween(g, J3, J2);
+    expect(forward.length).toBe(1);
+    expect(backward.length).toBe(1);
+    expect(forward[0].geometry).toEqual([J2, S2, J3]);
+    expect(backward[0].geometry).toEqual([J3, S2, J2]);
+    expect(forward[0].w).toBeCloseTo(seg2Seconds, 6);
+    expect(backward[0].w).toBeCloseTo(seg2Seconds, 6);
+  });
+
+  it("never emits a single J1->J3 edge spanning both segments", () => {
+    expect(edgesBetween(g, J1, J3).length).toBe(0);
+    expect(edgesBetween(g, J3, J1).length).toBe(0);
+  });
+
+  it("keeps the interior junction as a real 3-neighbour node, not contracted", () => {
+    // J2 has J1, J3, AND X as neighbours (the spur) — three distinct
+    // neighbours means it can never match either through-pattern.
+    expect(edgesBetween(g, J2, X).length).toBe(1);
+    expect(edgesBetween(g, X, J2).length).toBe(1);
+    expect(indexOf(g, J2)).toBeGreaterThanOrEqual(0);
+  });
+});
