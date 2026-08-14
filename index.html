@@ -3,22 +3,68 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>COMP4020 prototype</title>
+    <meta name="description" content="Watch Contraction Hierarchies race Dijkstra across Canberra's real road network, then learn exactly why it wins." />
+    <title>Highway to Hill — Contraction Hierarchies on Canberra's streets</title>
+    <script>
+      // pre-paint theme stamp: no flash in either theme
+      try {
+        var t = localStorage.getItem("hth-theme");
+        if (t === "light" || t === "dark")
+          document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header>
+    <header class="site-head">
       <nav aria-label="Primary">
-        <a href="./">Home</a>
+        <a href="./" aria-current="page">Highway to Hill</a>
+        <a href="./how/">How it works</a>
+        <button data-testid="theme-toggle" type="button" class="chip">Theme: system</button>
       </nav>
     </header>
-    <main>
-      <h1>COMP4020 prototype</h1>
-      <p data-testid="intro">
-        Replace this with your prototype. This week's brief is on the course website;
-        <code>spec/README.md</code> explains how the checks in this repo relate to it.
-      </p>
+    <main class="race-layout">
+      <section class="hero">
+        <div class="map-stack" data-testid="race-canvas" role="img" aria-label="Map of Canberra's road network, ready to race.">
+          <canvas id="map-base"></canvas>
+          <canvas id="map-overlay"></canvas>
+        </div>
+        <div class="hero-copy">
+          <h1>Highway to Hill</h1>
+          <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
+        </div>
+        <div class="controls">
+          <button data-testid="race-run" type="button" class="chip" disabled>Race</button>
+          <button data-testid="preset-hill" type="button" class="chip">To the Hill</button>
+          <button data-preset="diagonal" type="button" class="chip">Full diagonal</button>
+          <button data-preset="anu-airport" type="button" class="chip">ANU → Airport</button>
+          <button data-preset="surprise" type="button" class="chip">Surprise me</button>
+          <span class="load-note" id="load-note">loading the road network…</span>
+        </div>
+      </section>
+      <aside class="board" data-testid="scoreboard" aria-label="Race scoreboard">
+        <p class="headline" id="board-headline"></p>
+        <div class="row" data-algo="dijkstra">
+          <span class="name">Dijkstra</span><span class="val"></span>
+          <div class="track"><div class="fill"></div></div>
+        </div>
+        <div class="row" data-algo="ch">
+          <span class="name">Contraction Hierarchies</span><span class="val"></span>
+          <div class="track"><div class="fill"></div></div>
+        </div>
+        <p class="fineprint">Times and counts are measured in your browser.
+          CH did a one-off preprocessing pass before this page loaded — that
+          trade is the whole story. <a href="./how/">How it works →</a></p>
+      </aside>
+      <p class="visually-hidden" data-testid="race-live" aria-live="polite"></p>
     </main>
-    <script type="module" src="./main.ts"></script>
+    <footer class="site-foot">
+      <p>Road data © OpenStreetMap contributors, ODbL. Routing is computed
+        in your browser on a simplified graph (one-ways yes, turn
+        restrictions no). Reference: Geisberger, Sanders, Schultes &amp;
+        Delling, “Contraction Hierarchies”, WEA 2008. No stop signs — speed
+        limits modelled.</p>
+    </footer>
+    <script type="module" src="./src/pages/home.ts"></script>
   </body>
 </html>

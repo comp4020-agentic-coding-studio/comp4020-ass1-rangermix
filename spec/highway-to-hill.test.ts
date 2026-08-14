@@ -98,17 +98,52 @@ describe("spec: static and client-side throughout (live now)", () => {
 
 describe("spec: home page (/) contracts", () => {
   // Flip order: plan Task 7 (shell), Task 8 (race wiring).
-  it.todo(`h1 is exactly "${CONTRACTS.title}" [plan T7]`);
-  it.todo("core-interaction sentence appears verbatim in the hero [plan T7]");
-  it.todo(
-    `theme toggle button [data-testid=${CONTRACTS.testids.themeToggle}] in the header nav [plan T7]`,
+  it(`h1 is exactly "${CONTRACTS.title}"`, () => {
+    const doc = pageDoc("index.html");
+    expect(doc?.querySelector("h1")?.textContent?.trim()).toBe(CONTRACTS.title);
+  });
+
+  it("core-interaction sentence appears verbatim in the hero", () => {
+    const doc = pageDoc("index.html");
+    expect(doc?.body.textContent).toContain(CONTRACTS.coreInteraction);
+  });
+
+  it(
+    `theme toggle button [data-testid=${CONTRACTS.testids.themeToggle}] in the header nav`,
+    () => {
+      const doc = pageDoc("index.html");
+      const toggle = doc?.querySelector(
+        `header nav [data-testid="${CONTRACTS.testids.themeToggle}"]`,
+      );
+      expect(toggle).toBeTruthy();
+      expect(toggle?.tagName).toBe("BUTTON");
+    },
   );
-  it.todo(
-    `race canvas [data-testid=${CONTRACTS.testids.raceCanvas}] has role=img and a non-empty aria-label [plan T7]`,
+
+  it(
+    `race canvas [data-testid=${CONTRACTS.testids.raceCanvas}] has role=img and a non-empty aria-label`,
+    () => {
+      const doc = pageDoc("index.html");
+      const canvas = doc?.querySelector(`[data-testid="${CONTRACTS.testids.raceCanvas}"]`);
+      expect(canvas?.getAttribute("role")).toBe("img");
+      expect(canvas?.getAttribute("aria-label")?.trim()).toBeTruthy();
+    },
   );
-  it.todo(
-    `scoreboard [data-testid=${CONTRACTS.testids.scoreboard}] direct-labels both racers ("Dijkstra", "Contraction Hierarchies") [plan T7]`,
+
+  it(
+    `scoreboard [data-testid=${CONTRACTS.testids.scoreboard}] direct-labels both racers ("Dijkstra", "Contraction Hierarchies")`,
+    () => {
+      const doc = pageDoc("index.html");
+      const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
+      expect(
+        board?.querySelector('[data-algo="dijkstra"] .name')?.textContent?.trim(),
+      ).toBe("Dijkstra");
+      expect(board?.querySelector('[data-algo="ch"] .name')?.textContent?.trim()).toBe(
+        "Contraction Hierarchies",
+      );
+    },
   );
+
   it.todo(
     `run control [data-testid=${CONTRACTS.testids.raceRun}] is a real <button> [plan T8]`,
   );
@@ -118,7 +153,13 @@ describe("spec: home page (/) contracts", () => {
   it.todo(
     `aria-live region [data-testid=${CONTRACTS.testids.raceLive}] announces race results as text [plan T8]`,
   );
-  it.todo("OpenStreetMap ODbL attribution in the footer [plan T7]");
+
+  it("OpenStreetMap ODbL attribution in the footer", () => {
+    const doc = pageDoc("index.html");
+    const footer = doc?.querySelector("footer")?.textContent ?? "";
+    expect(footer).toContain(CONTRACTS.attribution);
+    expect(footer).toContain("ODbL");
+  });
 });
 
 describe("spec: how page (/how/) contracts", () => {
