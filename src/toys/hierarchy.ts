@@ -71,9 +71,13 @@ export function mountHierarchy(root: HTMLElement): void {
   // /how/ is one path segment deeper than the site root, so render.json
   // (committed under public/data/, served at the site ROOT's /data/) needs
   // one more ".." than loadRender's own default ("./data/", right for a
-  // page AT the root) — loadRender's own doc comment: `base` resolves
-  // against the CURRENT PAGE's URL, never an absolute literal.
-  loadRender("../data/")
+  // page AT the root). Resolved through `new URL(..., document.baseURI)` —
+  // the same technique RaceController uses to compute its worker's data
+  // base, and climb.ts's mountClosingEcho uses for meta.json — rather than
+  // handing the bare relative string straight to fetch, so every /how/ data
+  // fetch resolves through one documented pattern instead of two.
+  const dataBase = new URL("../data/", document.baseURI).href;
+  loadRender(dataBase)
     .then((render) => {
       view = new MapView(baseCanvas, overlayCanvas, render);
       applyStep(Number(range?.value ?? 0));

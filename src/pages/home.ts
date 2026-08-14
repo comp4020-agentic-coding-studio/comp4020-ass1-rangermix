@@ -337,7 +337,8 @@ function boot(): void {
         if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
       }, AUTO_RUN_MS);
     })
-    .catch(() => {
+    .catch((err: unknown) => {
+      console.error("failed to load map/routing data", err);
       if (loadNote) loadNote.textContent = "failed to load the map — reload to retry";
     });
 }

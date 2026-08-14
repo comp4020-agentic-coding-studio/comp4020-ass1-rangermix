@@ -86,6 +86,20 @@ export function dispatchResponse(pending: Map<number, PendingRace>, msg: WorkerR
   else entry.resolve(msg);
 }
 
+/** Rejects EVERY currently in-flight request with the same Error, then
+ * empties the map — the worker-level failure path, wired to `Worker`'s own
+ * `error`/`messageerror` events (script failed to load/parse, or posted
+ * something that couldn't be structured-cloned back). Those aren't a single
+ * request's failure the way a RaceErrorResponse is (dispatchResponse's
+ * `msg.id` has nothing to key off — the worker itself is broken), so every
+ * pending promise fails the same way at once. Pulled out pure (no Worker)
+ * so it's testable the same way dispatchResponse is. */
+export function rejectAllPending(pending: Map<number, PendingRace>, reason: string): void {
+  const err = new Error(reason);
+  for (const entry of pending.values()) entry.reject(err);
+  pending.clear();
+}
+
 export interface RaceUi {
   setRow(algo: Algo, settled: number, total: number): void;
   /** Called once per algo after a race completes (never before) — the
@@ -132,6 +146,12 @@ export class RaceController {
   private nextId = 0;
   private raceToken = 0;
   private current: Frame | null = null;
+  // themeColors() reads ~14 CSS custom properties via getComputedStyle —
+  // cheap once, wasteful at 60fps inside renderAt's per-frame hot path — so
+  // it's cached here and refreshed only when it can actually have changed:
+  // once at construction, again at the start of every replay (run()), and
+  // on a real theme change.
+  private colors: Record<string, string>;
 
   constructor(view: MapView, ui: RaceUi) {
     this.view = view;
@@ -142,14 +162,31 @@ export class RaceController {
     // and sends it along with every request.
     this.dataBase = new URL("./data/", document.baseURI).href;
     this.routingPromise = loadRouting(this.dataBase);
+    this.colors = themeColors();
     this.worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
     this.worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
       dispatchResponse(this.pending, e.data);
     };
+    // A Worker `error` event (script failed to load/parse — a bad deploy,
+    // an offline bundle, a CSP block) or `messageerror` (posted something
+    // that couldn't be structured-cloned back) is not a single request's
+    // failure; without this, whatever request() call is in flight at that
+    // moment never resolves OR rejects, and the caller hangs forever
+    // instead of surfacing the same honest failure copy a RaceErrorResponse
+    // already does via dispatchResponse.
+    this.worker.onerror = (e: ErrorEvent) => {
+      rejectAllPending(this.pending, `race worker failed to load: ${e.message || "script error"}`);
+    };
+    this.worker.onmessageerror = () => {
+      rejectAllPending(this.pending, "race worker posted an undeliverable message");
+    };
     // Replay state lives in `this.current`, not in the canvas — so a theme
     // change mid-race is just "redraw the same frame with fresh colors"
     // (MapView repaints its own base layer on the same event already).
-    onThemeChange(() => this.redrawFrame());
+    onThemeChange(() => {
+      this.colors = themeColors();
+      this.redrawFrame();
+    });
   }
 
   private request(req: RaceRequest): Promise<RaceResponse> {
@@ -171,7 +208,7 @@ export class RaceController {
     if (!c) return;
     c.elapsed = elapsedMs;
     const dark = effectiveTheme() === "dark";
-    const colors = themeColors();
+    const colors = this.colors;
     const upDij = sliceForFrame(c.dijTotal, elapsedMs, c.duration);
     const upCh = sliceForFrame(c.chTotal, elapsedMs, c.duration);
 
@@ -242,6 +279,11 @@ export class RaceController {
     const chOrder = new Uint32Array(ch.settled);
     const path = ch.path.length >= 2 ? ch.path : dij.path; // prefer CH's unpacked path (equivalence guarantee)
 
+    // Fresh snapshot for this replay, not a per-frame recompute (see the
+    // `colors` field comment) — covers a theme change that happened while
+    // no race was in flight (so no onThemeChange redraw was needed at the
+    // time) landing correctly on the NEXT race regardless.
+    this.colors = themeColors();
     this.current = {
       graph,
       dijOrder,

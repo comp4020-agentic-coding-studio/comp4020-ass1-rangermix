@@ -7,8 +7,18 @@
 // plain message object in, no Worker needed to exercise it).
 
 import { describe, expect, it } from "vitest";
-import { dispatchResponse, formatAnnouncement, formatMs, headlineText, sliceForFrame, type PendingRace } from "./controller";
+import {
+  dispatchResponse,
+  formatAnnouncement,
+  formatMs,
+  headlineText,
+  pathKm,
+  rejectAllPending,
+  sliceForFrame,
+  type PendingRace,
+} from "./controller";
 import type { RaceErrorResponse, RaceResponse } from "./worker";
+import { toyGraph } from "../algos/graph";
 
 describe("sliceForFrame", () => {
   it("is 0 at t <= 0", () => {
@@ -88,6 +98,38 @@ describe("formatAnnouncement (the once-per-race aria text)", () => {
   });
 });
 
+describe("pathKm (haversine hop-sum, hand-computed against the same R=6,371,000 m sphere snap.ts uses)", () => {
+  it("is 0 for an empty or single-node path — never NaN", () => {
+    const g = toyGraph(2, [[0, 1, 1]]);
+    expect(pathKm(g, [])).toBe(0);
+    expect(pathKm(g, [0])).toBe(0);
+  });
+
+  it("matches R * dLon exactly on the equator, where the haversine formula degenerates to a pure great-circle arc", () => {
+    // On the equator (lat=0 both ends) the haversine term collapses to
+    // a = sin^2(dLon/2), so distance = 2R*atan2(sin(dLon/2), cos(dLon/2)) =
+    // R*dLon-in-radians exactly, no small-angle approximation involved.
+    // R=6,371,000 m, dLon=1 degree=pi/180 rad -> 111.19492664... km.
+    const g = toyGraph(2, [[0, 1, 1]]);
+    g.lon[0] = 0;
+    g.lat[0] = 0;
+    g.lon[1] = 1;
+    g.lat[1] = 0;
+    expect(pathKm(g, [0, 1])).toBeCloseTo(111.195, 2);
+  });
+
+  it("sums hop lengths across a multi-node path — two 1-degree-of-latitude hops on the same meridian, double the single-hop figure above (same exact-arc reasoning, dLon=0 this time)", () => {
+    const g = toyGraph(3, [[0, 1, 1], [1, 2, 1]]);
+    g.lon[0] = 149;
+    g.lat[0] = -35;
+    g.lon[1] = 149;
+    g.lat[1] = -34;
+    g.lon[2] = 149;
+    g.lat[2] = -33;
+    expect(pathKm(g, [0, 1, 2])).toBeCloseTo(222.39, 1);
+  });
+});
+
 describe("dispatchResponse (the pure logic behind request()'s resolve/reject)", () => {
   function pendingPair(): { pending: Map<number, PendingRace>; resolved: RaceResponse[]; rejected: Error[] } {
     const resolved: RaceResponse[] = [];
@@ -134,5 +176,31 @@ describe("dispatchResponse (the pure logic behind request()'s resolve/reject)", 
     expect(() => dispatchResponse(pending, { id: 999, error: "nobody is waiting for this" })).not.toThrow();
     expect(resolved).toEqual([]);
     expect(rejected).toEqual([]);
+  });
+});
+
+describe("rejectAllPending (the Worker onerror/onmessageerror path — a whole-worker failure, not one request's)", () => {
+  it("rejects every pending entry with an Error carrying the given reason, and empties the map", () => {
+    const resolved: RaceResponse[] = [];
+    const rejected: Error[] = [];
+    const pending = new Map<number, PendingRace>();
+    pending.set(1, { resolve: (r) => resolved.push(r), reject: (e) => rejected.push(e) });
+    pending.set(2, { resolve: (r) => resolved.push(r), reject: (e) => rejected.push(e) });
+
+    rejectAllPending(pending, "race worker failed to load: script error");
+
+    expect(resolved).toEqual([]);
+    expect(rejected).toHaveLength(2);
+    for (const err of rejected) {
+      expect(err).toBeInstanceOf(Error);
+      expect(err.message).toBe("race worker failed to load: script error");
+    }
+    expect(pending.size).toBe(0);
+  });
+
+  it("is a no-op on an empty map (no throw) — the failure-before-any-request-was-sent case", () => {
+    const pending = new Map<number, PendingRace>();
+    expect(() => rejectAllPending(pending, "race worker posted an undeliverable message")).not.toThrow();
+    expect(pending.size).toBe(0);
   });
 });
