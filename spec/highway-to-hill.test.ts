@@ -185,18 +185,46 @@ describe("spec: home page (/) contracts", () => {
 });
 
 describe("spec: how page (/how/) contracts", () => {
-  // Flip order: plan Task 9 (shell + ch1-2), Task 10 (ch3-4), Task 11 (ch5).
-  it.todo("how/index.html exists and passes the shared invariants [plan T9]");
-  it.todo(
-    "all five chapter headings appear, in spec order, exact copy from CONTRACTS.chapterHeadings [plan T9: 1-2; T10: 3-4; T11: 5]",
-  );
-  it.todo(
-    "toy roots exist: toy-flood, toy-contraction [plan T9]; toy-order, toy-hierarchy [plan T10]; toy-climb [plan T11]",
-  );
-  it.todo("theme toggle present on /how/ too [plan T9]");
-  it.todo(
-    "footer carries OSM ODbL attribution and the Geisberger et al. 2008 reference [plan T9]",
-  );
+  // Flipped in plan Task 9 (shell + ch1-2 toys). Headings and toy roots are
+  // a single DOM contract that doesn't change in T10/T11 — chapters 3-5
+  // ship their heading and toy-root NOW, carrying an honest placeholder
+  // inside the root until T10/T11 replace it with the real toy.
+  it("how/index.html exists in dist and parses", () => {
+    const doc = pageDoc("how/index.html");
+    expect(doc).toBeTruthy();
+  });
+
+  it("all five chapter headings appear, in spec order, exact copy from CONTRACTS.chapterHeadings", () => {
+    const doc = pageDoc("how/index.html");
+    const headings = [...(doc?.querySelectorAll("h2") ?? [])].map((h) =>
+      h.textContent?.trim(),
+    );
+    expect(headings).toEqual(CONTRACTS.chapterHeadings);
+  });
+
+  it("toy roots exist: toy-flood, toy-contraction, toy-order, toy-hierarchy, toy-climb", () => {
+    const doc = pageDoc("how/index.html");
+    for (const id of CONTRACTS.testids.toys) {
+      expect(doc?.querySelector(`[data-testid="${id}"]`), id).toBeTruthy();
+    }
+  });
+
+  it("theme toggle present on /how/ too", () => {
+    const doc = pageDoc("how/index.html");
+    const toggle = doc?.querySelector(
+      `header nav [data-testid="${CONTRACTS.testids.themeToggle}"]`,
+    );
+    expect(toggle).toBeTruthy();
+    expect(toggle?.tagName).toBe("BUTTON");
+  });
+
+  it("footer carries OSM ODbL attribution and the Geisberger et al. 2008 reference", () => {
+    const doc = pageDoc("how/index.html");
+    const footer = doc?.querySelector("footer")?.textContent ?? "";
+    expect(footer).toContain(CONTRACTS.attribution);
+    expect(footer).toContain("ODbL");
+    expect(footer).toContain("Geisberger");
+  });
 });
 
 describe("spec: honest numbers", () => {

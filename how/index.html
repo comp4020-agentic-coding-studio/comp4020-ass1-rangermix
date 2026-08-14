@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Five short chapters that unpack Contraction Hierarchies one toy at a time — the same search code that just raced across Canberra, small enough to watch by hand." />
+    <title>How it works — Highway to Hill</title>
+    <script>
+      // pre-paint theme stamp: no flash in either theme
+      try {
+        var t = localStorage.getItem("hth-theme");
+        if (t === "light" || t === "dark")
+          document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    </script>
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <header class="site-head">
+      <nav aria-label="Primary">
+        <a href="../">Highway to Hill</a>
+        <a href="./" aria-current="page">How it works</a>
+        <button data-testid="theme-toggle" type="button" class="chip">Theme: system</button>
+      </nav>
+    </header>
+    <main class="how-layout">
+      <div class="how-intro">
+        <h1>How it works</h1>
+        <p class="lede">Five short chapters, one shared twelve-node mini-town, the
+          same search code that just raced across Canberra. Nothing below is
+          simulated for effect — press play and it's the real algorithm,
+          just small enough to watch by hand.</p>
+      </div>
+
+      <section class="chapter" aria-labelledby="ch1-h">
+        <h2 id="ch1-h">What Dijkstra actually does</h2>
+        <p>Dijkstra never guesses. It settles the closest unvisited
+          intersection, over and over, always in order of distance from the
+          start — which is exactly why it always finds the true shortest
+          route. The catch: it has no way to know which nodes matter before
+          it visits them, so it explores in every direction at once, spending
+          real work on streets nowhere near the final path. Press play and
+          watch the frontier bloom outward from A until it reaches L —
+          perfect, and blind.</p>
+        <div class="toy" data-testid="toy-flood"></div>
+        <p class="caption">What to notice: the flood reaches streets nowhere
+          near the route to L — Dijkstra can't skip them without already
+          knowing the answer.</p>
+      </section>
+
+      <section class="chapter" aria-labelledby="ch2-h">
+        <h2 id="ch2-h">Contraction: remove a node without lying about distances</h2>
+        <p>Contraction Hierarchies gets its speed by deleting nodes from the
+          graph — but only if it can prove nothing breaks. Before removing an
+          intersection, it checks every pair of roads that passed through it:
+          if a detour around the intersection is just as short, that pair
+          gets a free pass, a witness. If not, a shortcut edge is added that
+          quietly encodes the trip through the node that's about to
+          disappear. Click any node below to contract it and watch which
+          neighbour pairs pay the shortcut price and which get away with a
+          witness.</p>
+        <div class="toy" data-testid="toy-contraction"></div>
+        <p class="caption">What to notice: a witness means a detour already
+          existed; a dashed shortcut means contracting this node would have
+          broken a shortest path without one.</p>
+      </section>
+
+      <section class="chapter" aria-labelledby="ch3-h">
+        <h2 id="ch3-h">Order is everything</h2>
+        <p>Contracting nodes one at a time raises an obvious question: which
+          one first? Pick badly — say, the town's busiest hub, early — and
+          every path that used to pass through it now needs a shortcut, so
+          the graph gets denser before it gets simpler. A good heuristic
+          prefers nodes that add few shortcuts and remove many edges,
+          contracting quiet cul-de-sacs long before main junctions. The next
+          commit turns this into a game: contract the same mini-town three
+          ways and watch the shortcut count tell the story.</p>
+        <div class="toy" data-testid="toy-order">
+          <p class="coming">interactive lands in the next commit</p>
+        </div>
+      </section>
+
+      <section class="chapter" aria-labelledby="ch4-h">
+        <h2 id="ch4-h">The hierarchy, revealed</h2>
+        <p>Every contraction order implicitly ranks every intersection — and
+          on a real road network, that ranking isn't random. Bridges,
+          parkways, the handful of roads everything else feeds into: these
+          get contracted last, because deleting them early would demand
+          shortcuts everywhere. High rank, it turns out, is just another word
+          for "load-bearing". The next commit sweeps Canberra's real road
+          network by that exact rank, live, so you can watch the arterial
+          skeleton emerge from the suburb around it.</p>
+        <div class="toy" data-testid="toy-hierarchy">
+          <p class="coming">interactive lands in the next commit</p>
+        </div>
+      </section>
+
+      <section class="chapter" aria-labelledby="ch5-h">
+        <h2 id="ch5-h">The query: only ever climb</h2>
+        <p>Once every node has a rank, answering "what's the shortest route
+          from A to B" gets almost boring: search upward from A, search
+          upward from B, and stop when the two searches meet. No shortest
+          path can be missed, because every one of them has a
+          highest-ranked node somewhere along it — a summit — and the two
+          climbs are guaranteed to pass through it from either side. The
+          winning route then unzips: each shortcut expands back into the real
+          streets it silently stood in for. The next commit lifts this
+          mini-town so you can watch both climbs happen, live.</p>
+        <div class="toy" data-testid="toy-climb">
+          <p class="coming">interactive lands in the next commit</p>
+        </div>
+      </section>
+    </main>
+    <footer class="site-foot">
+      <p>Road data © OpenStreetMap contributors, ODbL. Routing is computed
+        in your browser on a simplified graph (one-ways yes, turn
+        restrictions no). Reference: Geisberger, Sanders, Schultes &amp;
+        Delling, “Contraction Hierarchies”, WEA 2008. No stop signs — speed
+        limits modelled.</p>
+    </footer>
+    <script type="module" src="../src/pages/how.ts"></script>
+  </body>
+</html>

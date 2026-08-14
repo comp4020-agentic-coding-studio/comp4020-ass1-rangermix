@@ -397,3 +397,216 @@ a {
     padding: 16px;
   }
 }
+
+/* ---------- /how/ page (chapters, mini-town toys) ---------- */
+
+.how-layout {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.how-intro {
+  max-width: 68ch;
+  margin: 0 auto 24px;
+}
+
+.how-intro h1 {
+  margin: 0 0 10px;
+  font-size: clamp(1.9rem, 3.6vw, 2.75rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.how-intro .lede {
+  margin: 0;
+  color: var(--muted);
+}
+
+.chapter {
+  max-width: 68ch;
+  margin: 0 auto;
+  padding: 40px 0;
+  border-top: 1px solid var(--line);
+}
+
+.chapter h2 {
+  margin: 0 0 12px;
+  font-size: clamp(1.25rem, 2.2vw, 1.6rem);
+  letter-spacing: -0.01em;
+}
+
+.chapter p {
+  margin: 0 0 14px;
+}
+
+.chapter .caption {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.toy {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.coming {
+  margin: 0;
+  padding: 28px 16px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+.toy-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.toy-counter {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* the SVG diagram + its HTML button overlay share one coordinate system:
+   the stage's aspect-ratio matches the SVG viewBox exactly, so node
+   buttons positioned by percentage line up with viewBox coordinates at
+   any rendered size. */
+.minitown-stage {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  aspect-ratio: 460 / 280;
+}
+
+.minitown-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.edge-line {
+  stroke: var(--road);
+  stroke-width: 2;
+  transition: stroke 200ms ease;
+}
+
+.edge-highway {
+  stroke: var(--road-major);
+  stroke-width: 3;
+}
+
+.edge-weight {
+  font-family: var(--mono);
+  font-size: 8px;
+  fill: var(--muted);
+}
+
+.edge-line.flash {
+  stroke: var(--witness);
+}
+
+.shortcut-path {
+  fill: none;
+  stroke: var(--c-ch);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+  transition: stroke 200ms ease;
+}
+
+.shortcut-path.flash {
+  stroke: var(--witness);
+}
+
+.shortcut-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  fill: var(--muted);
+}
+
+.route-path {
+  fill: none;
+  stroke: var(--route);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.flood-node circle {
+  fill: var(--panel);
+  stroke: var(--muted);
+  stroke-width: 2;
+  transition: fill 200ms ease;
+}
+
+.flood-node.node-endpoint circle {
+  stroke-width: 3;
+}
+
+.flood-node text {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: var(--ink);
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: var(--panel);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.flood-node.settled circle {
+  fill: var(--c-dijkstra);
+  stroke: var(--c-dijkstra);
+}
+
+.node-btn {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--muted);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.node-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.25;
+}
+
+.node-btn:hover:not(:disabled) {
+  border-color: var(--c-ch);
+}
+
+@media (width <= 940px) {
+  .how-layout {
+    padding: 16px 16px 40px;
+  }
+
+  .chapter {
+    padding: 28px 0;
+  }
+
+  .toy {
+    padding: 16px;
+  }
+}
