@@ -107,6 +107,17 @@ describe("parseOsm: drivable filter, oneway, maxspeed", () => {
     expect(way102?.maxspeed).toBeUndefined();
   });
 
+  it("ignores an mph-suffixed maxspeed rather than misreading it as km/h", () => {
+    const synthetic: OverpassJson = {
+      elements: [
+        { type: "node", id: 911, lat: -35.0, lon: 149.0 },
+        { type: "node", id: 912, lat: -35.001, lon: 149.0 },
+        { type: "way", id: 9101, nodes: [911, 912], tags: { highway: "residential", maxspeed: "30 mph" } },
+      ],
+    };
+    expect(parseOsm(synthetic).ways[0].maxspeed).toBeUndefined();
+  });
+
   it("leaves maxspeed undefined when the tag is absent", () => {
     const way103 = parseOsm(fixture).ways.find((w) => w.id === 103);
     expect(way103?.maxspeed).toBeUndefined();
@@ -132,7 +143,11 @@ describe("buildRoutingGraph: junction split, oneway expansion, cls mapping", () 
     const reversed = edgesBetween(g, D, A); // way104's two-way leg AND way111's reversed leg
     expect(forward.length).toBe(1);
     expect(reversed.length).toBe(2);
-    expect(reversed.some((e) => e.cls === 2)).toBe(true); // way111 is secondary
+    const way111Edge = reversed.find((e) => e.cls === 2); // way111 is secondary
+    expect(way111Edge).toBeDefined();
+    // geometry must run from ITS from-node (D) to ITS to-node (A), i.e. the
+    // way's own [A,D] polyline reversed — not just from/to swapped.
+    expect(way111Edge?.geometry).toEqual([D, A]);
   });
 
   it("keeps parallel edges distinct rather than merging or dropping them", () => {
@@ -183,5 +198,80 @@ describe("buildRoutingGraph: junction split, oneway expansion, cls mapping", () 
     const dAB = haversineM(A[0], A[1], B[0], B[1]);
     const want = dAB / (50 / 3.6); // way101 maxspeed="50 km/h" overrides residential's 40
     expect(edgesBetween(g, A, B)[0].w).toBeCloseTo(want, 6);
+  });
+});
+
+describe("cls mapping: all 13 highway types via a hub-and-spoke fixture", () => {
+  // A two-way hub H keeps every spoke leaf in one SCC regardless of the
+  // spoke's own highway type, and no spoke (degree 1) is ever eligible for
+  // chain contraction — so this isolates CLS without disturbing SCC/chain
+  // behaviour already covered above.
+  const HUB: [number, number] = [149.3000, -35.0000];
+  const highways = [
+    "motorway", "motorway_link", "trunk", "trunk_link",
+    "primary", "primary_link", "secondary", "secondary_link",
+    "tertiary", "tertiary_link", "unclassified", "residential", "living_street",
+  ];
+  const wantCls: Record<string, number> = {
+    residential: 0, living_street: 0, unclassified: 0,
+    tertiary: 1, tertiary_link: 1,
+    secondary: 2, secondary_link: 2, primary: 2, primary_link: 2,
+    trunk: 3, trunk_link: 3, motorway: 3, motorway_link: 3,
+  };
+  const elements: OverpassJson["elements"] = [{ type: "node", id: 1, lat: HUB[1], lon: HUB[0] }];
+  const leaves: Record<string, [number, number]> = {};
+  highways.forEach((highway, i) => {
+    const id = 100 + i;
+    const leaf: [number, number] = [149.3000 + (i + 1) * 0.001, -35.0000];
+    leaves[highway] = leaf;
+    elements.push({ type: "node", id, lat: leaf[1], lon: leaf[0] });
+    // explicit oneway=no: motorway/motorway_link would otherwise infer
+    // oneway=yes and, as a bare spoke with no return path, get dropped by
+    // SCC — this fixture is about cls, not oneway inference (covered above).
+    elements.push({ type: "way", id: 900 + i, nodes: [1, id], tags: { highway, oneway: "no" } });
+  });
+  const g = buildRoutingGraph(parseOsm({ elements }));
+
+  it.each(highways)("maps %s to its render class", (highway) => {
+    const edges = edgesBetween(g, HUB, leaves[highway]);
+    expect(edges.length).toBe(1);
+    expect(edges[0].cls).toBe(wantCls[highway]);
+  });
+});
+
+describe("chain contraction: the oneway pattern, distinct from the two-way one", () => {
+  it("contracts a {u->v,v->w} oneway through-node, summing weight and taking min(cls)", () => {
+    // H<->K two-way anchor keeps {H,K} strongly connected on its own; the
+    // oneway chain K->M->H (two separate ways, so M is a junction by
+    // ref-count) is the ONLY thing that should get contracted.
+    const H: [number, number] = [149.4000, -35.1000];
+    const K: [number, number] = [149.4000, -35.1010];
+    const M: [number, number] = [149.4010, -35.1005];
+    const synthetic: OverpassJson = {
+      elements: [
+        { type: "node", id: 801, lat: H[1], lon: H[0] },
+        { type: "node", id: 802, lat: K[1], lon: K[0] },
+        { type: "node", id: 803, lat: M[1], lon: M[0] },
+        { type: "way", id: 8001, nodes: [801, 802], tags: { highway: "residential" } },
+        { type: "way", id: 8002, nodes: [802, 803], tags: { highway: "secondary", oneway: "yes" } },
+        { type: "way", id: 8003, nodes: [803, 801], tags: { highway: "tertiary", oneway: "yes" } },
+      ],
+    };
+    const g = buildRoutingGraph(parseOsm(synthetic));
+
+    expect(indexOf(g, M)).toBe(-1); // M contracted away, no longer a node
+    expect(edgesBetween(g, H, K).length).toBe(1); // anchor's H->K leg only, no oneway return this way
+
+    const merged = edgesBetween(g, K, H); // anchor's K->H leg + the new merged K->H
+    expect(merged.length).toBe(2);
+    const chainEdge = merged.find((e) => e.geometry.length === 3);
+    expect(chainEdge).toBeDefined();
+    expect(chainEdge?.geometry).toEqual([K, M, H]);
+    expect(chainEdge?.cls).toBe(1); // min(secondary=2, tertiary=1), not just the first hop's cls
+
+    const want =
+      haversineM(K[0], K[1], M[0], M[1]) / (SPEEDS.secondary / 3.6) +
+      haversineM(M[0], M[1], H[0], H[1]) / (SPEEDS.tertiary / 3.6);
+    expect(chainEdge?.w).toBeCloseTo(want, 6);
   });
 });
