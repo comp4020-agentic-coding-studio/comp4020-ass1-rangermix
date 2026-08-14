@@ -1,13 +1,18 @@
 // Chapter 5 toy: the same mini-town, redrawn in 2.5-D — x stays the
 // original layout x, y lifts by contraction rank (higher rank = higher up)
 // — plus the closing echo below it. Everything the animation plays is
-// scripted from ONE real chQuery(ch, A, B) run made at mount time: its
+// scripted from ONE real chQuery(ch, I, L) run made at mount time: its
 // settled/settledB (forward/backward settle order), meet, and path
 // (already unpacked into original nodes) are recorded once, and the whole
 // step sequence below is DERIVED from that recording plus the real
 // ch.up/ch.downRev structure buildCh produced alongside it — nothing here
-// is a hand-authored sequence. A and B are the flood toy's own far pair
-// (src/toys/flood.ts: A -> L), so chapter 1 and chapter 5 rhyme.
+// is a hand-authored sequence. I -> L is deliberately NOT the flood toy's
+// A -> L pair: a sweep of all 132 ordered MINITOWN pairs against the real
+// modules found I -> L is the one that actually exercises chapter 5's
+// defining beat — the winning path traverses the mini-town's one shortcut
+// (built when K was contracted) and unpacks it into two original edges via
+// K, which A -> L's own winning path never needed. The "rhyme" with
+// chapter 1 is traded for that.
 
 import { buildCh, type Ch } from "../algos/chBuild";
 import { chQuery, type ChResult } from "../algos/chQuery";
@@ -15,7 +20,7 @@ import type { Csr } from "../algos/graph";
 import type { Meta } from "../data";
 import { MINITOWN, VIEWBOX, minitownEdges } from "./minitown";
 
-const FROM_NAME = "A";
+const FROM_NAME = "I";
 const TO_NAME = "L";
 const STEP_MS = 500;
 const BASE_Y = 250;

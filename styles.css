@@ -853,3 +853,13 @@ a {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+.closer-cta {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.cta-link {
+  font-weight: 600;
+}

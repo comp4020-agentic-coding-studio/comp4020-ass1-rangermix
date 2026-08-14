@@ -47,14 +47,38 @@ describe("incomingEdges", () => {
   });
 });
 
-describe("buildSteps: the climb toy's animation script, derived from a real chQuery(A, L) run", () => {
+describe("buildSteps: the climb toy's animation script, derived from a real chQuery(I, L) run", () => {
   const ch = buildCh(MINITOWN.graph);
-  const from = MINITOWN.names.indexOf("A");
+  const from = MINITOWN.names.indexOf("I");
   const to = MINITOWN.names.indexOf("L");
   const result = chQuery(ch, from, to);
 
-  it("A -> L is reachable — the sanity check the toy's own dev-time assertion relies on", () => {
+  it("I -> L is reachable — the sanity check the toy's own dev-time assertion relies on", () => {
     expect(Number.isFinite(result.dist)).toBe(true);
+  });
+
+  it("the winning path threads through K as two original edges (J-K, K-L) — the real shortcut's own expansion", () => {
+    // This is WHY chapter 5 uses I -> L instead of the flood toy's A -> L
+    // pair: a sweep of all 132 ordered MINITOWN pairs found this is the one
+    // whose winning route actually needs the shortcut K's contraction
+    // created, so the unpack phase has something real to split.
+    const kIndex = MINITOWN.names.indexOf("K");
+    const jIndex = MINITOWN.names.indexOf("J");
+    const lIndex = MINITOWN.names.indexOf("L");
+    const kPos = result.path.indexOf(kIndex);
+    expect(kPos).toBeGreaterThan(0);
+    expect(result.path[kPos - 1]).toBe(jIndex);
+    expect(result.path[kPos + 1]).toBe(lIndex);
+  });
+
+  it("at least one highlighted climb edge is a genuine CH shortcut, confirmed against ch.edges directly (not just an original street)", () => {
+    const steps = buildSteps(ch, result);
+    const usesRealShortcut = steps.some(
+      (s) =>
+        (s.kind === "fwd" || s.kind === "bwd") &&
+        s.edges.some((e) => ch.edges[e.edgeIdx].childA !== -1),
+    );
+    expect(usesRealShortcut).toBe(true);
   });
 
   it("step count = forward settles + backward settles + one meet + one per unpacked edge", () => {
