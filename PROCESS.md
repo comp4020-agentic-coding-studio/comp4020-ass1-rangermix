@@ -2,7 +2,8 @@
 
 ## What I built
 
-*Shortcut City* — an interactive explainer of Contraction Hierarchies that
+*Highway to Hill* (titled *Shortcut City* at design time; renamed at the
+design review) — an interactive explainer of Contraction Hierarchies that
 races CH against Dijkstra on Canberra's real OSM road network: feel the
 speedup on page one, understand where it comes from (contraction, shortcuts,
 node ordering, the upward query) on page two. As of this entry the project is

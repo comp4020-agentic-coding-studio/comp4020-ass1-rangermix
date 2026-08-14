@@ -1,7 +1,16 @@
-# Shortcut City — design spec
+# Highway to Hill — design spec
 
-**Working title:** *Shortcut City* — subtitle: *why your GPS out-thinks the
-algorithm you learned in class, on Canberra's actual streets.*
+**Status: v2, APPROVED with amendments (user review, 2026-08-14).**
+Amendments folded in below: title is *Highway to Hill*; the site ships
+**both light and dark themes**; racer set and the turn-restriction
+simplification approved as proposed. Implementation plan:
+`docs/superpowers/plans/2026-08-14-highway-to-hill.md`.
+
+**Title:** *Highway to Hill* (the user's pun on "Highway to Hell" — and
+literal in Canberra: the default race ends at **Capital Hill**, so the hero
+route is the highway to the Hill). Subtitle: *why your GPS out-thinks the
+algorithm you learned in class, on Canberra's actual streets.* The `h1` on
+`/` is exactly "Highway to Hill".
 
 **One strong idea (the point of view):** Dijkstra isn't slow because computers
 are slow — it's slow because it treats every intersection as equally worth
@@ -34,7 +43,7 @@ published brief and this repo's template, with where the design answers each:
 | "deployed and live at its public GitHub Pages URL" | static Vite site, relative asset URLs (template default) | CI deploy + `linkinator` |
 | "static and client-side throughout" | all algorithms run in the browser; data precomputed offline into committed artifacts; no server | code review; no fetch to non-relative URL (spec test) |
 | "starter's invariant checks pass" | every page ships nav landmark, one `h1`, lang, title, viewport, img alt | `spec/invariants.test.ts` |
-| "works at both marking viewports" | §5 gives per-viewport behavior for every component; layouts are designed mobile-first then widened | manual pass at 1920×1080 and 390×844 each work session |
+| "works at both marking viewports" | §5 gives per-viewport behavior for every component; layouts are designed mobile-first then widened | manual pass at 1920×1080 and 390×844, in both themes, each work session |
 | "the visitor does something that changes what they see — state the core interaction plainly" | the sentence above appears verbatim in the home hero | spec test asserts the sentence is in built `index.html` |
 | "one strong idea … and nothing else" | scope tiers in §11; everything ties to the one idea; no second topic, no CMS of algorithms | design review; cut list in §11 |
 | HD artefact: "holds up under … the keyboard, a resize mid-interaction, a slow connection" | §5 keyboard paths, §9 resize + loading design | manual torture pass Sunday |
@@ -68,8 +77,8 @@ have asked are answered here as **overridable decisions**:
 | How deep into theory? | Intuition + invariants, no proofs; a "why this is still exact" prose beat | Audience and 3-day runway. The correctness *argument* (highest-node-on-path) appears as one diagram + paragraph. |
 | Map rendering stack? | Hand-rolled canvas, no tile/map library | The graph *is* the map; a slippy-map dependency adds megabytes and fights the aesthetic. |
 | Site structure? | Two pages (+stretch third) — see §4 | |
-| Visual mode | Single fixed dark theme | Map-as-hero look; avoids double design cost at this deadline. |
-| Title | *Shortcut City* | Change freely; nothing else depends on it. |
+| Visual mode | **Both light and dark** (user amendment) — three-state toggle: system default / light / dark, persisted | Costs a second map recipe and a second validated palette; both are specified in §8 and both are MVP. |
+| Title | *Highway to Hill* (user's choice) | Default race destination Capital Hill makes the pun literal. |
 
 ## 4. Structure: options weighed
 
@@ -92,8 +101,9 @@ have asked are answered here as **overridable decisions**:
 
 ### 5.1 `/` — The Race (hero, sandbox, scoreboard)
 
-**Layout, desktop (1920×1080):** full-viewport dark canvas of Canberra's road
-network (Lake Burley Griffin reads as a void — instantly recognizable).
+**Layout, desktop (1920×1080):** full-viewport theme-aware canvas of
+Canberra's road network (dark: night-map glow; light: paper-map ink; Lake
+Burley Griffin reads as a void either way — instantly recognizable).
 Left-top: title block + the core-interaction sentence. Right: scoreboard
 panel. Bottom: control strip (presets, algorithm chips, Race/Reset).
 
@@ -107,9 +117,11 @@ horizontal chip row above the sheet.
 1. *Loading* — skeleton map (blurred static PNG of the network, ~30 KB) +
    progress bar for the graph fetch; the page is readable and the copy visible
    immediately (slow-connection rubric line).
-2. *Ready / idle* — pins A and B pre-placed on a long preset (Belconnen →
-   Tuggeranong). On desktop, after 1.5 s idle the race auto-runs once (skipped
-   under `prefers-reduced-motion`, replaced by the final still + numbers).
+2. *Ready / idle* — pins A and B pre-placed on the signature preset
+   **Gungahlin → Capital Hill** (the literal highway to the Hill; it crosses
+   the lake, so the bridge-bottleneck story is in the hero route). On
+   desktop, after 1.5 s idle the race auto-runs once (skipped under
+   `prefers-reduced-motion`, replaced by the final still + numbers).
 3. *Racing* — both algorithms have already computed in a worker (results are
    instant); the page *replays* their settle order over ~2.5 s: Dijkstra's
    settled nodes bloom as an amber flood; CH's touched nodes spark in cyan —
@@ -125,7 +137,8 @@ horizontal chip row above the sheet.
    the whole story → **How it works**."
 5. *Sandbox* — at any time: drag pins (desktop) / tap map to place A then B
    (phone; a chip shows which pin is next, third tap starts over); preset
-   chips ("Across the lake", "Suburb hop", "City → Airport", "Full diagonal");
+   chips ("To the Hill" (Gungahlin → Capital Hill, default), "Full diagonal"
+   (Belconnen → Tuggeranong), "ANU → Airport", "Across the lake");
    algorithm chips (MVP: Dijkstra vs CH fixed; target tier adds A\* and
    bidirectional Dijkstra as additional racers, each with its own hue);
    "Race" replays; "Surprise me" picks a random far pair.
@@ -252,19 +265,34 @@ heuristic" (no — no geometry used at query time); "preprocessing is cheating"
 
 ## 8. Visual and motion design
 
-- **Palette (tokens):** ground `#0b0e14`; panel `#131826`; ink `#e8ecf4`;
-  muted `#8b94a8`; roads `#2a3348` (minor) → `#3d4a68` (major); route flash
-  `#ffffff`; status green (witness "no shortcut needed") `#7dd8a0`.
-  Algorithm identity runs in **two layers sharing a hue family per
-  algorithm**: *chart steps* (scoreboard bars, swatches, legends — validated
-  with the dataviz palette validator on the dark surface, all checks pass in
-  roster order): Dijkstra orange `#d95926`, A\* violet `#9085e9`,
-  bidirectional magenta `#d55181`, **CH blue `#3987e5`**; and *glow
-  variants* (additive map-light illustration only, never the sole identity
-  carrier — counters and labels always accompany): Dijkstra `#f5a962`,
-  A\* `#b48ce8`, bidirectional `#e87ba0`, CH `#4fd8eb`. Roster order is
-  fixed (never re-colored by rank); the MVP pair orange/blue is the most
-  CVD-robust pairing of the set (worst-case ΔE 26.8 protan).
+- **Theme system (user amendment: both themes ship, MVP):** three states —
+  system default (`prefers-color-scheme`), explicit light, explicit dark —
+  cycled by a header toggle on every page, persisted in `localStorage`, and
+  applied via `data-theme` on `<html>` by a tiny inline head script so
+  neither theme flashes on load. Canvases re-render on theme change,
+  including mid-race (replay state lives in data). CSS custom properties are
+  the single source of truth; canvas code reads them via
+  `getComputedStyle`.
+- **Surfaces & ink.** Dark: ground `#0b0e14`, panel `#131826`, ink
+  `#e8ecf4`, muted `#8b94a8`, roads `#2a3348`→`#3d4a68`, route `#ffffff`.
+  Light (paper-map): ground `#f3f1ec`, panel `#ffffff`, ink `#1c2330`,
+  muted `#5a6372`, roads `#d8d3c8` (minor) → `#b3ac9d` (major), route
+  `#1c2330`. Status green (witness "no shortcut needed"): `#7dd8a0` dark /
+  `#008300` light — reserved, never a series colour.
+- **Algorithm roster — fixed order, one palette per theme, both
+  machine-validated** with the dataviz palette validator in roster order
+  (Dijkstra, A\*, bidirectional, CH): dark steps `#d95926` / `#9085e9` /
+  `#d55181` / **`#3987e5`** (all checks pass; worst adjacent ΔE 15.9
+  protan; MVP pair orange↔blue ΔE 26.8); light steps `#eb6834` /
+  `#4a3aa7` / `#e87ba4` / **`#2a78d6`** (all checks pass; one WARN —
+  bidirectional `#e87ba4` is 2.62:1 against the light surface, which is
+  legal only under the relief rule, and the scoreboard satisfies it: every
+  row always carries a visible name + count label). Dark mode additionally
+  has *glow variants* for additive map dots only (`#f5a962`/`#b48ce8`/
+  `#e87ba0`/`#4fd8eb`), never the sole identity carrier. Light mode uses
+  the chart steps directly on the map (opaque dots, no additive blending —
+  glow washes out on paper). Roster order is fixed; never re-colour by
+  rank.
 - **Type:** system grotesk stack (`Inter`-ish via `system-ui`) — no webfont
   payload; display sizes for the headline and scoreboard numerals;
   `font-variant-numeric: tabular-nums` on all counters so ticking numbers
@@ -274,8 +302,9 @@ heuristic" (no — no geometry used at query time); "preprocessing is cheating"
   step/scrub alternative; `prefers-reduced-motion` swaps all replays for
   final-state stills with the same numbers. No parallax, no scroll-jacking.
 - **Map style:** roads as 1px polylines with class-weighted alpha; settled
-  nodes as additive-blended dots so the flood reads as light, not paint;
-  the void of the lake and the radial geometry do the aesthetic work.
+  nodes as dots — dark theme blends them additively so the flood reads as
+  light, light theme draws them opaque so it reads as ink on paper; the
+  void of the lake and the radial geometry do the aesthetic work in both.
 - **Annotation voice:** captions under every toy state *what to notice*, one
   sentence, muted color — the site never makes the visitor infer the lesson.
 
@@ -344,9 +373,11 @@ with progress UI; race controls disable until ready with visible reason.
 
 **MVP — must ship (target: green + deployed by Sat night):**
 data pipeline; home race Dijkstra vs CH with pins, presets, scoreboard,
-loading/reduced-motion states; `/how/` chapters 1–4 interactive + chapter 5
-as static-diagram-with-play; footer/attribution; all §10 tests; both
-viewports clean; PROCESS.md + reflection drafted by the *student*.
+loading/reduced-motion states; **both themes with the toggle** (user
+amendment — this is MVP, not polish); `/how/` chapters 1–4 interactive +
+chapter 5 as static-diagram-with-play; footer/attribution; all §10 tests;
+both viewports clean in both themes; PROCESS.md + reflection drafted by the
+*student*.
 
 **Target — Sunday:** A\* + bidirectional racer chips; chapter 5 free-pick
 2.5-D toy; unpack animation on the home route; keyboard pin-nudge mode;
@@ -358,7 +389,7 @@ deliberately-bad CH ordering shipped for a real-map "order matters" toggle;
 `/play/` page absorbing the extra toggles; distance-vs-time weight switch.
 
 **Cut with no mercy:** anything comparing cities, algorithm-internals
-config, theory proofs, light theme, tile maps, turn restrictions.
+config, theory proofs, tile maps, turn restrictions.
 
 ## 12. Risks
 
@@ -370,17 +401,20 @@ config, theory proofs, light theme, tile maps, turn restrictions.
 | PBF parsing pain on Windows | fallback: Overpass API bbox export to JSON, filtered by the same script |
 | Auto-race feels like a trap / motion-sick | runs once only, respects reduced-motion, replay button is the affordance |
 | Scope creep via toy polish | each toy has a "done" definition = its single learning goal lands; chapter 5 has a designed fallback |
+| Dual theme doubles visual QA | tokens are the single source of truth (canvas reads CSS custom properties); every viewport pass runs theme × viewport (4 combos); palettes pre-validated per mode |
 
-## 13. Open questions for you (don't block MVP)
+## 13. Review resolutions (user review, 2026-08-14)
 
-1. Racer set: happy with Dijkstra-only for MVP wow, A\*/bidirectional as
-   target tier? (Adding A\* to MVP costs ~half a day incl. its hue + legend.)
-2. *Shortcut City* as the title, or something drier/more course-flavored?
-3. Chapter 4's "beat the heuristic" game: keep the scoring (stretch) or is
-   the three-way comparison enough?
-4. Any attachment to a light theme? Current design is dark-only by intent.
-5. OK to ignore turn restrictions with a disclosed footnote? (I believe yes
-   for this scope; flagging because it's a factual simplification.)
+1. Racer set — **approved**: Dijkstra vs CH is the MVP race; A\* and
+   bidirectional are target tier.
+2. Title — **changed by user**: *Highway to Hill* (pun on "Highway to
+   Hell"), grounded by making Capital Hill the default race destination.
+3. Chapter 4 scoring — unraised; stays as designed (three-way comparison in
+   MVP, "beat the heuristic" scoring in stretch).
+4. Theme — **changed by user**: both light and dark ship, with a
+   system/light/dark toggle. §8 carries the validated light palette and the
+   two map recipes; §11 moves the toggle into MVP.
+5. Turn restrictions ignored with a disclosed footnote — **approved**.
 
 ## 14. References
 

@@ -161,22 +161,28 @@ it down here. Growing this file is the work of harness engineering, and the gap
 between this boilerplate and your own version is part of what your prototype
 says about the developer you're becoming.
 
-## Project: Shortcut City (assignment 1)
+## Project: Highway to Hill (assignment 1)
 
 An interactive explainer of Contraction Hierarchies raced against Dijkstra on
-Canberra's OSM road network. Designed 2026-08-14; due noon Mon 2026-08-17.
+Canberra's OSM road network. Designed 2026-08-14, approved with amendments
+same day (title, dual theme); due noon Mon 2026-08-17.
 
 - Design spec (structure, user journey, scope tiers, tests to write):
-  `docs/superpowers/specs/2026-08-14-ch-explainer-design.md`. Build MVP tier
-  first; target/stretch only after MVP is deployed and green.
+  `docs/superpowers/specs/2026-08-14-ch-explainer-design.md`. Implementation
+  plan: `docs/superpowers/plans/2026-08-14-highway-to-hill.md`. Build MVP
+  tier first; target/stretch only after MVP is deployed and green.
 - The annotated mockup ships as a real page at `docs/mockup/` --- it must keep
-  passing the invariants; don't link it from the product nav.
-- Algorithm colours are a fixed roster, validated with the dataviz palette
-  validator (don't invent hues): Dijkstra `#d95926`, A* `#9085e9`,
-  bidirectional `#d55181`, CH `#3987e5` for charts/swatches, with brighter
-  glow variants reserved for map dots.
+  passing the invariants; don't link it from the product nav. It predates two
+  amendments (old title, dark-only) and its banner says so.
+- Both light and dark themes ship (three-state toggle, MVP). Algorithm
+  colours are a fixed roster, one palette per theme, both validated with the
+  dataviz palette validator (don't invent hues): dark Dijkstra `#d95926`,
+  A* `#9085e9`, bidi `#d55181`, CH `#3987e5` (+ glow variants for dark map
+  dots only); light Dijkstra `#eb6834`, A* `#4a3aa7`, bidi `#e87ba4` (needs
+  its visible label --- relief rule), CH `#2a78d6`.
 - The core-interaction sentence on `/` is a spec contract ("Drop two pins on
-  Canberra…"); keep the page copy and its spec test in sync.
+  Canberra…"); keep the page copy and its spec test in sync. The `h1` is
+  exactly "Highway to Hill"; default preset Gungahlin → Capital Hill.
 - Every user-visible number must be measured in-browser or precomputed from
   the real graph --- no invented figures in the product. (The mockup's fake-city
   demo is labelled as such.)
