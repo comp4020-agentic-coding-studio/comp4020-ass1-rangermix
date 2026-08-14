@@ -52,6 +52,18 @@ export interface RaceResponse {
   results: Partial<Record<Algo, AlgoResult>>;
 }
 
+/** Posted back instead of a RaceResponse when `handleRequest` throws (in
+ * practice: the one-time `loadRouting` fetch failing) — without this, an
+ * uncaught rejection inside the worker's onmessage handler never posts
+ * anything back, and the matching `RaceController.request()` promise on the
+ * main thread hangs forever. */
+export interface RaceErrorResponse {
+  id: number;
+  error: string;
+}
+
+export type WorkerResponse = RaceResponse | RaceErrorResponse;
+
 let routingPromise: ReturnType<typeof loadRouting> | undefined;
 
 /** Loads the routing artifact on the first call and caches the promise for
@@ -125,7 +137,16 @@ export async function handleRequest(
 
 const ctx = self as unknown as Worker;
 ctx.onmessage = (e: MessageEvent<RaceRequest>) => {
-  void handleRequest(e.data).then(({ response, transfer }) => {
-    ctx.postMessage(response, transfer);
-  });
+  handleRequest(e.data)
+    .then(({ response, transfer }) => {
+      ctx.postMessage(response, transfer);
+    })
+    .catch((err: unknown) => {
+      // Always post SOMETHING back for this id — an uncaught rejection
+      // here would otherwise leave the main thread's matching request()
+      // promise pending forever (a silent hang, not a visible failure).
+      const message = err instanceof Error ? err.message : String(err);
+      const errorResponse: RaceErrorResponse = { id: e.data.id, error: message };
+      ctx.postMessage(errorResponse);
+    });
 };

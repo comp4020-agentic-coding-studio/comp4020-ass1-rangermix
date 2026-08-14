@@ -18,6 +18,7 @@ import { MapView } from "../viz/mapRenderer";
 import { haversine, nearestNode } from "../snap";
 import { PRESETS } from "../presets";
 import { RaceController, type RaceUi, formatMs } from "../race/controller";
+import { makeRaceScheduler } from "../race/scheduler";
 import type { Graph } from "../algos/graph";
 
 const DEBOUNCE_MS = 250;
@@ -53,25 +54,38 @@ function boot(): void {
   let pinA: number | null = null;
   let pinB: number | null = null;
   let nextPin: "A" | "B" = "A";
-  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let hint: HTMLSpanElement | undefined;
 
   function updateHint(): void {
     if (hint) hint.textContent = `Next tap places pin ${nextPin}`;
   }
 
-  function runRace(a: number, b: number): void {
-    controller?.run(a, b).catch((err: unknown) => {
-      console.error("race failed", err);
-    });
+  // A race's own promise rejecting means the WORKER told us it failed (see
+  // worker.ts's onmessage catch + controller.ts's dispatchResponse) — the
+  // one non-silent failure mode this page has. Surface it honestly (same
+  // "reload to retry" voice as the initial-load failure below) and stop
+  // offering a control that can't work until the page is reloaded.
+  function handleRaceError(err: unknown): void {
+    console.error("race failed", err);
+    if (loadNote) {
+      loadNote.hidden = false;
+      loadNote.textContent = "route engine failed — reload to retry";
+    }
+    if (raceRunBtn) raceRunBtn.disabled = true;
   }
 
-  function scheduleRace(delay = DEBOUNCE_MS): void {
+  // Single entry point for "a race should happen now or soon": DIRECT
+  // triggers (Race button, presets, "R", auto-run) call `scheduler.now()`;
+  // pin drag/tap call `scheduler.schedule()` — see src/race/scheduler.ts's
+  // own comment for why `now()` cancelling any pending `schedule()` is the
+  // fix for a stale debounced race silently overwriting a newer direct one.
+  const scheduler = makeRaceScheduler((a, b) => {
+    controller?.run(a, b).catch(handleRaceError);
+  }, DEBOUNCE_MS);
+
+  function scheduleRace(): void {
     if (pinA === null || pinB === null) return;
-    const a = pinA;
-    const b = pinB;
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => runRace(a, b), delay);
+    scheduler.schedule(pinA, pinB);
   }
 
   function drawPinsOnly(): void {
@@ -152,6 +166,18 @@ function boot(): void {
     if (!dragPin) return;
     dragPin = null;
     if (overlayCanvas.hasPointerCapture(e.pointerId)) overlayCanvas.releasePointerCapture(e.pointerId);
+    // The browser normally synthesizes a `click` right after pointerup,
+    // which the click handler below suppresses (so a drag never also
+    // re-places a pin) and which resets `suppressClick` itself. But a
+    // pointer sequence can also end via pointercancel (touch gesture
+    // aborted by the OS — multi-touch, edge-swipe, etc.), which fires no
+    // click at all — leaving suppressClick stuck true forever and silently
+    // swallowing the user's next real tap. Clear it on a macrotask delay:
+    // still set (and so still suppresses) the normal synchronous trailing
+    // click if one comes, but self-heals a moment later if it doesn't.
+    setTimeout(() => {
+      suppressClick = false;
+    }, 0);
     scheduleRace();
   };
   overlayCanvas.addEventListener("pointerup", endDrag);
@@ -168,11 +194,13 @@ function boot(): void {
     placeNext(nearestNode(lon, lat, graph.lon, graph.lat));
   });
 
-  // "R"/"r" re-runs the current pair (ignore browser-refresh chords).
+  // "R"/"r" re-runs the current pair (ignore browser-refresh chords). A
+  // direct trigger, so it goes through scheduler.now() — cancels any
+  // pending debounced race from a drag/tap that hasn't fired yet.
   document.addEventListener("keydown", (e) => {
     if (e.key !== "r" && e.key !== "R") return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (pinA !== null && pinB !== null) runRace(pinA, pinB);
+    if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
   });
 
   // The two stacked canvases fill the race-canvas wrapper; watch IT resize
@@ -240,7 +268,7 @@ function boot(): void {
       nextPin = "A";
       updateHint();
       drawPinsOnly();
-      runRace(pinA, pinB);
+      scheduler.now(pinA, pinB); // direct trigger: cancels any pending debounce
     });
   }
 
@@ -264,11 +292,11 @@ function boot(): void {
     nextPin = "A";
     updateHint();
     drawPinsOnly();
-    runRace(a, b);
+    scheduler.now(a, b); // direct trigger: cancels any pending debounce
   });
 
   raceRunBtn?.addEventListener("click", () => {
-    if (pinA !== null && pinB !== null) runRace(pinA, pinB);
+    if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
   });
 
   const renderReady = loadRender().then((render) => {
@@ -306,7 +334,7 @@ function boot(): void {
 
       setTimeout(() => {
         if (reducedMotion()) return; // no auto-run under reduced motion
-        if (pinA !== null && pinB !== null) runRace(pinA, pinB);
+        if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
       }, AUTO_RUN_MS);
     })
     .catch(() => {

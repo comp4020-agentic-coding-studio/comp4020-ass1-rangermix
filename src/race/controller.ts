@@ -12,7 +12,7 @@ import { haversine } from "../snap";
 import { effectiveTheme, onThemeChange, themeColors } from "../theme";
 import { strideFor, type MapView } from "../viz/mapRenderer";
 import type { Graph } from "../algos/graph";
-import type { Algo, AlgoResult, RaceRequest, RaceResponse } from "./worker";
+import type { Algo, AlgoResult, RaceRequest, RaceResponse, WorkerResponse } from "./worker";
 
 const REPLAY_MS = 2500;
 const DOT_RADIUS = 1.8;
@@ -65,6 +65,27 @@ export function pathKm(graph: Graph, path: number[]): number {
   return metres / 1000;
 }
 
+export interface PendingRace {
+  resolve: (res: RaceResponse) => void;
+  reject: (err: Error) => void;
+}
+
+/** Routes one incoming worker message to its matching in-flight request:
+ * resolves the pending promise on a normal RaceResponse, REJECTS it (with
+ * an Error wrapping the worker's message) on a RaceErrorResponse — and
+ * always removes the entry from `pending` either way. Pulled out as a pure
+ * function (no Worker, no `this`) so `RaceController.request()`'s
+ * reject-on-error behavior is testable without a real Worker: the class's
+ * `worker.onmessage` handler is just `dispatchResponse(this.pending,
+ * e.data)`. */
+export function dispatchResponse(pending: Map<number, PendingRace>, msg: WorkerResponse): void {
+  const entry = pending.get(msg.id);
+  if (!entry) return;
+  pending.delete(msg.id);
+  if ("error" in msg) entry.reject(new Error(msg.error));
+  else entry.resolve(msg);
+}
+
 export interface RaceUi {
   setRow(algo: Algo, settled: number, total: number): void;
   /** Called once per algo after a race completes (never before) — the
@@ -107,7 +128,7 @@ export class RaceController {
   private readonly worker: Worker;
   private readonly dataBase: string;
   private readonly routingPromise: Promise<{ graph: Graph }>;
-  private readonly pending = new Map<number, (res: RaceResponse) => void>();
+  private readonly pending = new Map<number, PendingRace>();
   private nextId = 0;
   private raceToken = 0;
   private current: Frame | null = null;
@@ -122,12 +143,8 @@ export class RaceController {
     this.dataBase = new URL("./data/", document.baseURI).href;
     this.routingPromise = loadRouting(this.dataBase);
     this.worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
-    this.worker.onmessage = (e: MessageEvent<RaceResponse>) => {
-      const resolve = this.pending.get(e.data.id);
-      if (resolve) {
-        this.pending.delete(e.data.id);
-        resolve(e.data);
-      }
+    this.worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
+      dispatchResponse(this.pending, e.data);
     };
     // Replay state lives in `this.current`, not in the canvas — so a theme
     // change mid-race is just "redraw the same frame with fresh colors"
@@ -136,8 +153,8 @@ export class RaceController {
   }
 
   private request(req: RaceRequest): Promise<RaceResponse> {
-    return new Promise((resolve) => {
-      this.pending.set(req.id, resolve);
+    return new Promise((resolve, reject) => {
+      this.pending.set(req.id, { resolve, reject });
       this.worker.postMessage(req);
     });
   }
