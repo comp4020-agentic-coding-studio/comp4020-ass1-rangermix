@@ -1,0 +1,33 @@
+{
+  "elements": [
+    { "type": "node", "id": 1, "lat": -35.2800, "lon": 149.1000 },
+    { "type": "node", "id": 2, "lat": -35.2805, "lon": 149.1010 },
+    { "type": "node", "id": 3, "lat": -35.2810, "lon": 149.1000 },
+    { "type": "node", "id": 4, "lat": -35.2805, "lon": 149.0990 },
+    { "type": "node", "id": 5, "lat": -35.2805, "lon": 149.1000 },
+    { "type": "node", "id": 6, "lat": -35.2805, "lon": 149.0980 },
+    { "type": "node", "id": 7, "lat": -35.5000, "lon": 149.5000 },
+    { "type": "node", "id": 8, "lat": -35.5000, "lon": 149.5010 },
+    { "type": "node", "id": 9, "lat": -35.2799, "lon": 149.1002 },
+    { "type": "way", "id": 101, "nodes": [1, 2], "tags": { "highway": "residential", "maxspeed": "50 km/h" } },
+    { "type": "way", "id": 102, "nodes": [2, 3], "tags": { "highway": "residential", "maxspeed": "signals" } },
+    { "type": "way", "id": 103, "nodes": [3, 4], "tags": { "highway": "residential" } },
+    { "type": "way", "id": 104, "nodes": [4, 1], "tags": { "highway": "residential" } },
+    { "type": "way", "id": 105, "nodes": [2, 4], "tags": { "highway": "tertiary", "oneway": "yes" } },
+    { "type": "way", "id": 106, "nodes": [1, 5], "tags": { "highway": "tertiary", "maxspeed": "60" } },
+    { "type": "way", "id": 107, "nodes": [5, 3], "tags": { "highway": "tertiary", "maxspeed": "60" } },
+    { "type": "way", "id": 108, "nodes": [4, 6], "tags": { "highway": "living_street" } },
+    { "type": "way", "id": 109, "nodes": [7, 8], "tags": { "highway": "residential" } },
+    { "type": "way", "id": 110, "nodes": [1, 9], "tags": { "highway": "footway" } },
+    { "type": "way", "id": 111, "nodes": [1, 4], "tags": { "highway": "secondary", "oneway": "-1" } }
+  ],
+  "expect": {
+    "sccNodes": 5,
+    "chainSeconds": 6.6717,
+    "finalEdgeCount": 14,
+    "_comment": "Nodes 1-4 are a diamond A(1)-B(2)-C(3)-D(4), two-way residential (ways 101-104). way105 B->D tertiary oneway=yes -> one directed edge 2->4. Chain: ways 106+107 split A-M(5)-C into TWO ways sharing node 5, so M is a junction by ref-count (endpoint of both) even though it is a plain through-point; after junction-splitting, node 5 has exactly {1->5,5->1,5->3,3->5} (the two-way through-pattern, u=1,w=3,u!=w) so chain-contraction removes it, replacing with direct 1->3 (geometry [A,M,C]) and 3->1 (geometry [C,M,A]). Spur: way108 D-Y(6) two-way, degree 1 -> survives SCC (mutually reachable via D) but is never contracted (only one neighbor, u===w for the oneway pattern). Island: way109 nodes 7-8 is two-way but shares no edge with 1-6 -> its own SCC of size 2, dropped. Footway: way110 A-F(9) has highway=footway, not a key of SPEEDS, so parseOsm drops the whole way and node 9 never touches the routing graph. Reversed oneway: way111 refs=[1,4] (ref order A->D) with oneway=-1 -> emits the single edge reversed, 4->1, PARALLEL to way104's two-way 4<->1 pair (tests both the -1 reversal and that parallel edges survive uncontracted, since node 1/4 then have 3+ distinct neighbours regardless).",
+    "_sccNodesWorking": "SCC over nodes {1..6} (7,8 excluded: no path in either direction to 1-6) forms one component of size 6; {7,8} is a second component of size 2. Keep the largest (6 nodes: 1,2,3,4,5,6). Chain-contraction then removes node 5 (the only node matching a through-pattern), leaving {1,2,3,4,6} = 5 nodes. buildRoutingGraph(...).lon.length must be 5.",
+    "_chainSecondsWorking": "A(149.1000,-35.2800), M(149.1000,-35.2805), C(149.1000,-35.2810) share one longitude, so haversine's dLon term is 0 and c = dLat exactly (no small-angle approximation): each 0.0005 deg latitude hop = 6371000 * (0.0005 * pi/180) = 6371000 * 0.00000872664626 = 55.597463 m; A->M->C = two hops = 111.194927 m. maxspeed=60 km/h on ways 106/107 overrides tertiary's default 50 -> 60/3.6 = 16.666667 m/s. time = 111.194927 / 16.666667 = 6.671696 s, same total for 1->3 and 3->1 (symmetric hops).",
+    "_finalEdgeCountWorking": "diamond two-way (101-104): 8 directed edges. way105 oneway: 1. spur two-way (108): 2. way111 reversed oneway: 1 (parallel to way104's 4->1). contracted chain, both directions: 2. Total 8+1+2+1+2 = 14."
+  }
+}
