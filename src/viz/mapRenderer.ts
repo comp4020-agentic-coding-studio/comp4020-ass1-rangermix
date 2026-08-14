@@ -284,22 +284,36 @@ export class MapView {
     ctx.restore();
   }
 
-  /** Draws pin `label` ("A" or "B") as a white disc with a dark letter —
-   * fixed styling independent of theme, since a white disc's readable
-   * partner is always dark ink, in either theme. */
+  /** Draws pin `label` ("A" or "B") as a disc + letter, entirely
+   * theme-sourced (read fresh from `themeColors()` on every call, so a
+   * theme switch is correct on the very next draw, mid-race included): disc
+   * = `ink`, letter = `ground` — `ink`/`ground` are each theme's own
+   * validated contrast pair (design spec "Surfaces & ink"), so this inverts
+   * sensibly instead of just re-coloring — dark theme gets a near-white
+   * disc with a near-black letter (matching the original fixed design),
+   * light theme gets a near-black disc with a near-white letter (the
+   * inversion that actually reads against light theme's near-white
+   * ground/panel, unlike a literal white disc would). The ring is `ground`
+   * again at reduced `globalAlpha` (a translucent DERIVATION of a theme
+   * token via the canvas API's own alpha channel, not a hardcoded
+   * rgba literal) — a soft halo in the opposite tone from the disc that
+   * separates the pin from the road lines under it, in either theme. */
   drawPin(lonV: number, latV: number, label: "A" | "B"): void {
     const ctx = this.overlayCtx;
+    const colors = themeColors();
     const [x, y] = this.project(lonV, latV);
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
     ctx.beginPath();
     ctx.arc(x, y, 9, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = colors.ink;
     ctx.fill();
     ctx.lineWidth = 1.5;
-    ctx.strokeStyle = "rgba(15, 18, 26, 0.4)";
+    ctx.strokeStyle = colors.ground;
+    ctx.globalAlpha = 0.4;
     ctx.stroke();
-    ctx.fillStyle = "#1c2330";
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = colors.ground;
     ctx.font = "bold 11px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
