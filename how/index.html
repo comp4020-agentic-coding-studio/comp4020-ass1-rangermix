@@ -72,12 +72,11 @@
           every path that used to pass through it now needs a shortcut, so
           the graph gets denser before it gets simpler. A good heuristic
           prefers nodes that add few shortcuts and remove many edges,
-          contracting quiet cul-de-sacs long before main junctions. The next
-          commit turns this into a game: contract the same mini-town three
-          ways and watch the shortcut count tell the story.</p>
-        <div class="toy" data-testid="toy-order">
-          <p class="coming">interactive lands in the next commit</p>
-        </div>
+          contracting quiet cul-de-sacs long before main junctions. Run the
+          buttons below — random order, worst order, the heuristic's own
+          smart order — and watch the shortcut count tell the story, then try
+          "your turn" and see if you can beat the heuristic yourself.</p>
+        <div class="toy" data-testid="toy-order"></div>
       </section>
 
       <section class="chapter" aria-labelledby="ch4-h">
@@ -87,12 +86,12 @@
           parkways, the handful of roads everything else feeds into: these
           get contracted last, because deleting them early would demand
           shortcuts everywhere. High rank, it turns out, is just another word
-          for "load-bearing". The next commit sweeps Canberra's real road
-          network by that exact rank, live, so you can watch the arterial
-          skeleton emerge from the suburb around it.</p>
-        <div class="toy" data-testid="toy-hierarchy">
-          <p class="coming">interactive lands in the next commit</p>
-        </div>
+          for "load-bearing". Drag the slider below over Canberra's real road
+          network and watch the arterial skeleton emerge as suburbia
+          fades.</p>
+        <div class="toy" data-testid="toy-hierarchy"></div>
+        <p class="caption">notice: the lake bridges survive to the very top —
+          bottleneck nodes rank high.</p>
       </section>
 
       <section class="chapter" aria-labelledby="ch5-h">
