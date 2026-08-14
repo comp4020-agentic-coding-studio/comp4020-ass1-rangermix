@@ -144,14 +144,36 @@ describe("spec: home page (/) contracts", () => {
     },
   );
 
-  it.todo(
-    `run control [data-testid=${CONTRACTS.testids.raceRun}] is a real <button> [plan T8]`,
+  it(`run control [data-testid=${CONTRACTS.testids.raceRun}] is a real <button>`, () => {
+    const doc = pageDoc("index.html");
+    const btn = doc?.querySelector(`[data-testid="${CONTRACTS.testids.raceRun}"]`);
+    expect(btn).toBeTruthy();
+    expect(btn?.tagName).toBe("BUTTON");
+  });
+
+  it(
+    `default preset [data-testid=${CONTRACTS.testids.presetHill}] "To the Hill" (Gungahlin → Capital Hill) exists`,
+    () => {
+      const doc = pageDoc("index.html");
+      const btn = doc?.querySelector(`[data-testid="${CONTRACTS.testids.presetHill}"]`);
+      expect(btn).toBeTruthy();
+      expect(btn?.tagName).toBe("BUTTON");
+      expect(btn?.textContent?.trim()).toBe("To the Hill");
+    },
   );
-  it.todo(
-    `default preset [data-testid=${CONTRACTS.testids.presetHill}] "To the Hill" (Gungahlin → Capital Hill) exists [plan T8]`,
-  );
-  it.todo(
-    `aria-live region [data-testid=${CONTRACTS.testids.raceLive}] announces race results as text [plan T8]`,
+
+  it(
+    `aria-live region [data-testid=${CONTRACTS.testids.raceLive}] announces race results as text`,
+    () => {
+      // The region's content only becomes non-empty once a real race has
+      // run in a browser, which isn't statically checkable from built HTML
+      // — what IS checkable here is the contract that makes it work at all:
+      // the region exists and is wired for a screen reader to hear updates.
+      const doc = pageDoc("index.html");
+      const region = doc?.querySelector(`[data-testid="${CONTRACTS.testids.raceLive}"]`);
+      expect(region).toBeTruthy();
+      expect(region?.getAttribute("aria-live")).toBe("polite");
+    },
   );
 
   it("OpenStreetMap ODbL attribution in the footer", () => {
@@ -183,7 +205,13 @@ describe("spec: honest numbers", () => {
   // hardcode settled-node counts; the scoreboard renders from live race
   // results only. Static HTML must ship the scoreboard EMPTY (counts appear
   // only after a race runs).
-  it.todo(
-    "built index.html contains no pre-filled settled-node counts in the scoreboard [plan T8]",
-  );
+  it("built index.html contains no pre-filled settled-node counts in the scoreboard", () => {
+    const doc = pageDoc("index.html");
+    const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
+    expect(board).toBeTruthy();
+    // Whole-board sweep (not just .val elements) so this also covers the
+    // headline and catches any future addition that sneaks in a number —
+    // race results only ever reach the DOM via JS after a real race runs.
+    expect(board?.textContent).not.toMatch(/\d/);
+  });
 });
