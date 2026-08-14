@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "check": "pnpm typecheck && pnpm build && oxlint --ignore-path .gitignore && stylelint \"**/*.css\" --ignore-path .gitignore --allow-empty-input && vitest run",
     "check:evidence": "node scripts/check-evidence.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "data:fetch": "node --experimental-strip-types scripts/data/fetch.ts",
+    "data:build": "node --experimental-strip-types scripts/data/build.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^27.0.0",

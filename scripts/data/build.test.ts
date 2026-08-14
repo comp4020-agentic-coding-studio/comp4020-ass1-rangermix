@@ -374,3 +374,53 @@ describe("edgesForWay: junction-split loop on a real multi-node way", () => {
     expect(indexOf(g, J2)).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe("self-loops: a closed way with no other junction on it (e.g. a roundabout)", () => {
+  // The real Canberra extract has ~470 of these (see task-5-report.md) — a
+  // way whose ref list starts and ends at the SAME node, with no OTHER
+  // junction along it, so edgesForWay's segment-splitting loop only ever
+  // stops at that shared start/end id and emits one PipeEdge with
+  // from === to. Without excluding self-loops, throughPattern sees R as
+  // its OWN neighbour (outKeys/inKeys both include R) and matches it as a
+  // two-way through-node; contracting it then removes and re-adds rows of
+  // R's own adjacency out from under the very iteration reading them,
+  // corrupting the Map and throwing "Cannot read properties of undefined
+  // (reading '0')" on real data (never reproduced by any fixture above,
+  // none of which contain a closed way).
+  const H: [number, number] = [149.7, -35.2];
+  const R: [number, number] = [149.701, -35.2];
+  const X: [number, number] = [149.7015, -35.1995]; // roundabout shape point
+  const Y: [number, number] = [149.7015, -35.2005]; // roundabout shape point
+  const synthetic: OverpassJson = {
+    elements: [
+      { type: "node", id: 20001, lat: H[1], lon: H[0] },
+      { type: "node", id: 20002, lat: R[1], lon: R[0] },
+      { type: "node", id: 20003, lat: X[1], lon: X[0] },
+      { type: "node", id: 20004, lat: Y[1], lon: Y[0] },
+      { type: "way", id: 40001, nodes: [20001, 20002], tags: { highway: "residential" } },
+      // closed way: first and last ref are BOTH 20002 (R) -> a self-loop
+      // PipeEdge, same shape a real unbranched roundabout produces.
+      {
+        type: "way", id: 40002, nodes: [20002, 20003, 20004, 20002],
+        tags: { highway: "residential", junction: "roundabout" },
+      },
+    ],
+  };
+
+  it("builds without throwing", () => {
+    expect(() => buildRoutingGraph(parseOsm(synthetic))).not.toThrow();
+  });
+
+  it("keeps the looped node as a survivor with its self-loop edge intact, uncontracted", () => {
+    const g = buildRoutingGraph(parseOsm(synthetic));
+    expect(indexOf(g, H)).toBeGreaterThanOrEqual(0);
+    expect(indexOf(g, R)).toBeGreaterThanOrEqual(0);
+    expect(edgesBetween(g, H, R).length).toBe(1);
+    expect(edgesBetween(g, R, H).length).toBe(1);
+
+    const rIdx = indexOf(g, R);
+    const selfLoops = g.edges.filter((e) => e.from === rIdx && e.to === rIdx);
+    expect(selfLoops.length).toBe(1);
+    expect(selfLoops[0].geometry).toEqual([R, X, Y, R]);
+  });
+});

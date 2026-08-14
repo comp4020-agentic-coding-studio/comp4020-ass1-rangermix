@@ -1,5 +1,5 @@
-import { buildCsr, type Csr, type Graph } from "./graph";
-import { MinHeap } from "./heap";
+import { buildCsr, type Csr, type Graph } from "./graph.ts";
+import { MinHeap } from "./heap.ts";
 
 export interface ChEdge {
   from: number; to: number; w: number; childA: number; childB: number; src: number;

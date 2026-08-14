@@ -1,4 +1,4 @@
-import { MinHeap } from "./heap";
+import { MinHeap } from "./heap.ts";
 import type { SearchResult } from "./dijkstra";
 import type { Ch, ChEdge } from "./chBuild";
 

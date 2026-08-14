@@ -1,4 +1,4 @@
-import { MinHeap } from "./heap";
+import { MinHeap } from "./heap.ts";
 import type { Csr, Graph } from "./graph";
 
 export interface SearchResult {

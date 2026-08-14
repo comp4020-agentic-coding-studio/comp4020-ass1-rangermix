@@ -1,12 +1,25 @@
 // Turns parsed OSM ways into a routing graph: split at junctions, weight each
 // hop by travel time, expand oneway semantics, keep only the largest
 // strongly-connected component, then contract degree-2 through-nodes to a
-// fixed point. Every stage is a pure function over in-memory data — no
-// network, no filesystem — so it's exercised entirely by fixtures/mini.json
-// in build.test.ts. fetch.ts (a later task) is what actually hits Overpass
-// and calls these on the real Canberra extract.
+// fixed point. Every stage up to buildRoutingGraph is a pure function over
+// in-memory data — no network, no filesystem — so it's exercised entirely by
+// fixtures/mini.json in build.test.ts.
+//
+// Below that: emit() runs the CH build over the real routing graph and
+// writes the three frozen artifacts (public/data/{render,routing,meta}.json),
+// and the CLI main() at the bottom wires fetch.ts's cached Overpass extract
+// through parseOsm -> buildRoutingGraph -> emit() when this file is run
+// directly (`pnpm data:build`).
 
-import { haversineM, parseOsm, SPEEDS, type OsmWay, type ParsedOsm } from "./osm.ts";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { gzipSync } from "node:zlib";
+import { haversineM, parseOsm, SPEEDS, type OsmWay, type OverpassJson, type ParsedOsm } from "./osm.ts";
+import { buildCsr, type Graph } from "../../src/algos/graph.ts";
+import { buildChOrdered } from "../../src/algos/chBuild.ts";
+import { dijkstraCsr } from "../../src/algos/dijkstra.ts";
+import { chQuery } from "../../src/algos/chQuery.ts";
 
 export { haversineM, parseOsm, SPEEDS };
 export type { OsmWay, ParsedOsm, OverpassJson, OverpassElement, OverpassNode, OverpassWay } from "./osm.ts";
@@ -190,6 +203,19 @@ function throughPattern(
 ): { u: number; w: number; twoWay: boolean } | null {
   const outRow = out.get(v);
   const inRow = inn.get(v);
+  // A self-loop at v (v->v — a closed OSM way with no other junction on it,
+  // e.g. an unbranched roundabout) makes v its own neighbor, which breaks
+  // BOTH patterns' "exactly two/one DISTINCT other node(s)" assumption:
+  // outKeys/inKeys below would include v itself, u/w could come out equal
+  // to v, and the removeLiveEdge/addLiveEdge pair below corrupts its own
+  // out.get(v)/inn.get(v) bookkeeping (self-referential row mutated out
+  // from under itself) and throws. It's also the semantically correct
+  // call, not just a crash workaround: traversing the loop is an optional
+  // detour, not a mandatory through-hop, so folding its length into a
+  // straight-line shortcut would silently misweight every route past v.
+  // Leave v as a permanent survivor instead — its self-loop and other
+  // edges just pass through to the final graph unmerged.
+  if (outRow?.has(v) || inRow?.has(v)) return null;
   const outKeys = outRow ? [...outRow.keys()] : [];
   const inKeys = inRow ? [...inRow.keys()] : [];
   if (
@@ -308,4 +334,270 @@ export function buildRoutingGraph(parsed: ParsedOsm): RoutingGraph {
   }));
 
   return { lon, lat, edges };
+}
+
+// ---------------------------------------------------------------------
+// emit(): CH-build the routing graph and write the three frozen artifacts.
+//
+// Coordinates and weights are quantized to the shipped grid FIRST, then
+// immediately dequantized — every float used from that point on (the Graph
+// the CH build and the benchmark run on) is bit-identical to what a decoder
+// (src/data-node.ts) reconstructs from the artifacts later, so the
+// exact-equality assertions in spec/data.test.ts can never drift by a
+// rounding hair. Coordinates: 1e-5°, integer, relative to this routing
+// graph's own bbox min corner. Weights: deciseconds, `Math.max(1, ...)` so
+// no edge ever quantizes to zero.
+// ---------------------------------------------------------------------
+
+const COORD_SCALE = 1e5; // 1e-5 degree grid, matches render.json's line encoding
+
+// mulberry32 — seeded RNG so the benchmark pairs are reproducible (same
+// generator as src/algos/*.test.ts).
+function mulberry32(seed: number): () => number {
+  let a = seed | 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function boundingBox(points: Iterable<readonly [number, number]>): [number, number, number, number] {
+  let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+  for (const [lon, lat] of points) {
+    if (lon < minLon) minLon = lon;
+    if (lat < minLat) minLat = lat;
+    if (lon > maxLon) maxLon = lon;
+    if (lat > maxLat) maxLat = lat;
+  }
+  return [minLon, minLat, maxLon, maxLat];
+}
+
+function fmtKB(bytes: number): string {
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+export interface EmitResult {
+  nodes: number;
+  originalEdges: number;
+  shortcuts: number;
+  buildMs: number;
+  meanDjSettled: number;
+  meanChSettled: number;
+  settledRatio: number;
+  gz: { render: number; routing: number; meta: number; total: number };
+}
+
+/** Runs the CH build and the 300-pair benchmark on `g`, and writes
+ * render.json, routing.json, meta.json into `outDir`. Throws — aborting the
+ * whole emit — if any benchmark pair's CH distance disagrees with
+ * Dijkstra's: that's a correctness bug to surface loudly, never something
+ * to paper over by re-rolling past it. */
+export function emit(g: RoutingGraph, outDir: string): EmitResult {
+  const n = g.lon.length;
+  const pipeEdges = g.edges;
+
+  const allPoints: [number, number][] = [];
+  for (let i = 0; i < n; i++) allPoints.push([g.lon[i], g.lat[i]]);
+  for (const e of pipeEdges) for (const p of e.geometry) allPoints.push(p);
+  const bbox = boundingBox(allPoints);
+  const [minLon, minLat] = bbox;
+  const qLon = (lon: number) => Math.round((lon - minLon) * COORD_SCALE);
+  const qLat = (lat: number) => Math.round((lat - minLat) * COORD_SCALE);
+  const dqLon = (q: number) => minLon + q / COORD_SCALE;
+  const dqLat = (q: number) => minLat + q / COORD_SCALE;
+
+  const nodeQLon: number[] = Array.from({ length: n });
+  const nodeQLat: number[] = Array.from({ length: n });
+  const nodeLon = new Float64Array(n); // dequantized: what the Graph is built on
+  const nodeLat = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    nodeQLon[i] = qLon(g.lon[i]);
+    nodeQLat[i] = qLat(g.lat[i]);
+    nodeLon[i] = dqLon(nodeQLon[i]);
+    nodeLat[i] = dqLat(nodeQLat[i]);
+  }
+  const dequantW = pipeEdges.map((e) => Math.max(1, Math.round(e.w * 10)) / 10);
+
+  // ---- the Graph the CH build & benchmark actually run on ----
+  const csrEdges = pipeEdges.map((e, i) => ({ from: e.from, to: e.to, w: dequantW[i] }));
+  const fwd = buildCsr(n, csrEdges);
+  const graph: Graph = { n, lon: nodeLon, lat: nodeLat, fwd };
+
+  console.log(`Building CH over ${n.toLocaleString()} nodes, ${pipeEdges.length.toLocaleString()} edges...`);
+  const t0 = Date.now();
+  const { ch, shortcutCount } = buildChOrdered(graph);
+  const buildMs = Date.now() - t0;
+  console.log(`CH build done in ${buildMs.toLocaleString()} ms — ${shortcutCount.toLocaleString()} shortcuts.`);
+
+  // ---- render.json: one line per PipeEdge, same order (renderOf below
+  // links routing.json's original edges back to these by index) ----
+  const denom = Math.max(1, n - 1);
+  const pctOf = (from: number, to: number) =>
+    Math.floor((255 * Math.min(ch.rank[from], ch.rank[to])) / denom);
+  const lines: number[][] = pipeEdges.map((e) => {
+    const pts = e.geometry;
+    const x0 = qLon(pts[0][0]);
+    const y0 = qLat(pts[0][1]);
+    const line: number[] = [e.cls, pctOf(e.from, e.to), x0, y0];
+    let px = x0, py = y0;
+    for (let i = 1; i < pts.length; i++) {
+      const x = qLon(pts[i][0]);
+      const y = qLat(pts[i][1]);
+      line.push(x - px, y - py);
+      px = x; py = y;
+    }
+    return line;
+  });
+  const renderJson = { bbox, lines };
+
+  // ---- routing.json: full augmented ChEdge[], originals then shortcuts.
+  // bbox travels with routing.json too (not just render.json) because
+  // lon/lat below are quantized relative to it — see src/data-node.ts. ----
+  const m = ch.edges.length;
+  const rFrom: number[] = Array.from({ length: m });
+  const rTo: number[] = Array.from({ length: m });
+  const rW: number[] = Array.from({ length: m });
+  const rChildA: number[] = Array.from({ length: m });
+  const rChildB: number[] = Array.from({ length: m });
+  const rSrc: number[] = Array.from({ length: m });
+  const renderOf: number[] = Array.from({ length: m });
+  let originalEdges = 0;
+  ch.edges.forEach((e, i) => {
+    rFrom[i] = e.from; rTo[i] = e.to;
+    rW[i] = Math.max(1, Math.round(e.w * 10));
+    rChildA[i] = e.childA; rChildB[i] = e.childB; rSrc[i] = e.src;
+    if (e.childA < 0) { renderOf[i] = e.src; originalEdges++; } else { renderOf[i] = -1; }
+  });
+  const routingJson = {
+    n, bbox,
+    lon: nodeQLon, lat: nodeQLat,
+    from: rFrom, to: rTo, w: rW,
+    childA: rChildA, childB: rChildB, src: rSrc,
+    rank: Array.from(ch.rank),
+    renderOf,
+  };
+
+  // ---- benchmark: 300 seeded, reachable, coordinate-distinct pairs on
+  // this SAME quantized graph, aborting loudly on any CH/Dijkstra mismatch.
+  // (The routing graph is always one strongly-connected component by
+  // construction — see buildRoutingGraph above — so unreachable pairs
+  // shouldn't occur in practice; the re-roll guards against it anyway.) ----
+  const rand = mulberry32(2026);
+  const bench: { from: number; to: number; dds: number; dj: number; ch: number }[] = [];
+  const MAX_TRIES = 300 * 2000;
+  let tries = 0;
+  while (bench.length < 300) {
+    if (++tries > MAX_TRIES)
+      throw new Error(`could not find 300 reachable benchmark pairs after ${tries} tries`);
+    const a = Math.floor(rand() * n);
+    const b = Math.floor(rand() * n);
+    if (a === b) continue;
+    if (nodeLon[a] === nodeLon[b] && nodeLat[a] === nodeLat[b]) continue; // coordinate-distinct
+    const dj = dijkstraCsr(n, graph.fwd, a, b);
+    if (dj.dist === Infinity) continue; // reachable pairs only; re-roll
+    const chRes = chQuery(ch, a, b);
+    const djDds = Math.round(dj.dist * 10);
+    const chDds = Math.round(chRes.dist * 10);
+    if (chRes.dist === Infinity || chDds !== djDds)
+      throw new Error(
+        `CH/Dijkstra mismatch for ${a}->${b}: dijkstra=${dj.dist} (${djDds}dds) ` +
+        `ch=${chRes.dist} (${chDds}dds) — aborting emit, this is a correctness bug`,
+      );
+    bench.push({
+      from: a, to: b, dds: djDds,
+      dj: dj.settled.length,
+      ch: chRes.settled.length + chRes.settledB.length,
+    });
+  }
+  const meanDjSettled = bench.reduce((s, b) => s + b.dj, 0) / bench.length;
+  const meanChSettled = bench.reduce((s, b) => s + b.ch, 0) / bench.length;
+  const settledRatio = meanChSettled / meanDjSettled;
+
+  const metaJson = {
+    built: new Date().toISOString(),
+    nodes: n,
+    originalEdges,
+    shortcuts: shortcutCount,
+    buildMs,
+    bench,
+  };
+
+  // ---- write + gzip-check the budget ----
+  mkdirSync(outDir, { recursive: true });
+  const renderPath = resolve(outDir, "render.json");
+  const routingPath = resolve(outDir, "routing.json");
+  const metaPath = resolve(outDir, "meta.json");
+  writeFileSync(renderPath, JSON.stringify(renderJson));
+  writeFileSync(routingPath, JSON.stringify(routingJson));
+  writeFileSync(metaPath, JSON.stringify(metaJson));
+
+  const gzRender = gzipSync(readFileSync(renderPath)).length;
+  const gzRouting = gzipSync(readFileSync(routingPath)).length;
+  const gzMeta = gzipSync(readFileSync(metaPath)).length;
+  const gzTotal = gzRender + gzRouting + gzMeta;
+
+  console.log("--- stats ---");
+  console.log(`nodes:          ${n.toLocaleString()}`);
+  console.log(`original edges: ${originalEdges.toLocaleString()}`);
+  console.log(`shortcuts:      ${shortcutCount.toLocaleString()}`);
+  console.log(`CH build time:  ${buildMs.toLocaleString()} ms`);
+  console.log(
+    `mean settled:   dijkstra ${meanDjSettled.toFixed(1)}, ch ${meanChSettled.toFixed(1)} ` +
+    `(ratio ${(settledRatio * 100).toFixed(2)}%)`,
+  );
+  console.log(
+    `gzip sizes:     render ${fmtKB(gzRender)}, routing ${fmtKB(gzRouting)}, ` +
+    `meta ${fmtKB(gzMeta)}, total ${fmtKB(gzTotal)}`,
+  );
+
+  return {
+    nodes: n, originalEdges, shortcuts: shortcutCount, buildMs,
+    meanDjSettled, meanChSettled, settledRatio,
+    gz: { render: gzRender, routing: gzRouting, meta: gzMeta, total: gzTotal },
+  };
+}
+
+// ---------------------------------------------------------------------
+// CLI: `pnpm data:build` (node --experimental-strip-types scripts/data/build.ts)
+// Reads the cached Overpass extract fetch.ts saved, builds the routing
+// graph, and emits the artifacts. Guarded so importing build.ts's pure
+// functions (e.g. from build.test.ts) never runs the pipeline as a side
+// effect of import — only running this file directly does.
+//
+// `--drop-living-street` re-filters the ALREADY-FETCHED cache at parse time
+// (dropping the lowest-value, highest-shape-point-density road class) —
+// the budget lever from the plan's binding resolution #7, for if the
+// gzipped total ever comes in over the 4 MB spec test's budget.
+// ---------------------------------------------------------------------
+
+async function main(): Promise<void> {
+  const cachePath = resolve("scripts/data/cache/canberra.json");
+  if (!existsSync(cachePath)) {
+    console.error(`missing ${cachePath} — run "pnpm data:fetch" first.`);
+    process.exitCode = 1;
+    return;
+  }
+  const dropLivingStreet = process.argv.includes("--drop-living-street");
+  const raw = JSON.parse(readFileSync(cachePath, "utf8")) as OverpassJson;
+  const parsed = parseOsm(raw);
+  const ways = dropLivingStreet
+    ? parsed.ways.filter((w) => w.highway !== "living_street")
+    : parsed.ways;
+  if (dropLivingStreet)
+    console.log(`--drop-living-street: kept ${ways.length.toLocaleString()}/${parsed.ways.length.toLocaleString()} ways`);
+  const routing = buildRoutingGraph({ nodes: parsed.nodes, ways });
+  console.log(
+    `Parsed ${routing.lon.length.toLocaleString()} nodes, ` +
+    `${routing.edges.length.toLocaleString()} edges from ${cachePath}`,
+  );
+  emit(routing, resolve("public/data"));
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err: unknown) => {
+    console.error("build failed:", err instanceof Error ? (err.stack ?? err.message) : err);
+    process.exitCode = 1;
+  });
 }
