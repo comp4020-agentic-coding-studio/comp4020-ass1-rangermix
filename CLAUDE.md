@@ -191,3 +191,9 @@ same day (title, dual theme); due noon Mon 2026-08-17.
   only --- `.claude/` is gitignored here);
   `netsh interface ipv4 show excludedportrange protocol=tcp` lists them.
 - Local links check: `pnpm dlx linkinator ./dist --silent` after `pnpm build`.
+- `scripts/` sits outside tsconfig's include (vitest still type-transpiles
+  its tests, but `pnpm typecheck` is blind there) --- don't assume the
+  compiler has your back in `scripts/data/`.
+- The pipeline is offline-only: `pnpm data:fetch` caches the Overpass
+  extract (gitignored), `pnpm data:build` regenerates `public/data/` from
+  the cache; artifacts are committed, CI never touches the network.
