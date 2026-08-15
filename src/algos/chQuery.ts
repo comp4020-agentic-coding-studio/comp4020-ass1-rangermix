@@ -4,30 +4,76 @@ import type { Ch, ChEdge } from "./chBuild";
 
 export interface ChResult extends SearchResult { settledB: Uint32Array; meet: number }
 
+// Module-held scratch, reused across every chQuery call instead of
+// allocating dist/parent/done + a MinHeap (six n-sized arrays total,
+// roughly 1.3 MB on the real 27k-node Canberra graph) fresh on every query.
+// CH's whole point is that it only ever touches ~1% of the graph per
+// query — an allocate-and-fill of the OTHER 99% every time was pure GC
+// noise, and enough of it to swamp the wall-clock gap the race is supposed
+// to show honestly against Dijkstra (which has the same fix, for fairness:
+// see dijkstra.ts).
+//
+// Bidirectional, so there are two independent scratch sets (`fwd`/`bwd`):
+// climb() reads the OTHER direction's dist/done mid-search (the
+// meeting-point check) while writing its own, so they can't share storage
+// within one query — but both directions always start fresh together, so
+// one shared generation counter covers both.
+interface Scratch {
+  dist: Float64Array; parent: Int32Array;
+  touchGen: Int32Array; doneGen: Int32Array; heap: MinHeap;
+}
+
+function makeScratch(n: number): Scratch {
+  return {
+    dist: new Float64Array(n), parent: new Int32Array(n),
+    touchGen: new Int32Array(n), doneGen: new Int32Array(n),
+    heap: new MinHeap(n),
+  };
+}
+
+let scratchN = 0;
+let fwd = makeScratch(0);
+let bwd = makeScratch(0);
+let gen = 0;
+
+function ensureScratch(n: number): void {
+  if (n <= scratchN) return;
+  scratchN = n;
+  fwd = makeScratch(n);
+  bwd = makeScratch(n);
+}
+
+function getDist(s: Scratch, v: number): number { return s.touchGen[v] === gen ? s.dist[v] : Infinity; }
+function getParent(s: Scratch, v: number): number { return s.touchGen[v] === gen ? s.parent[v] : -1; }
+function isDone(s: Scratch, v: number): boolean { return s.doneGen[v] === gen; }
+
 function climb(
   ch: Ch, dir: "up" | "downRev", from: number,
-  dist: Float64Array, parentEdge: Int32Array, done: Uint8Array,
-  settled: number[], other: Float64Array, otherDone: Uint8Array,
+  s: Scratch, other: Scratch, settled: number[],
   best: { d: number; meet: number }, counters: { relaxed: number },
 ): void {
   const csr = ch[dir];
-  const heap = new MinHeap(ch.n);
-  dist[from] = 0; heap.update(from, 0);
-  while (heap.size > 0) {
-    const u = heap.pop();
-    if (done[u]) continue;
-    if (dist[u] > best.d) break; // termination: frontier beyond best meeting
-    done[u] = 1; settled.push(u);
-    if (otherDone[u] && dist[u] + other[u] < best.d) {
-      best.d = dist[u] + other[u]; best.meet = u;
+  s.heap.reset();
+  s.dist[from] = 0; s.parent[from] = -1; s.touchGen[from] = gen;
+  s.heap.update(from, 0);
+  while (s.heap.size > 0) {
+    const u = s.heap.pop();
+    if (isDone(s, u)) continue;
+    if (getDist(s, u) > best.d) break; // termination: frontier beyond best meeting
+    s.doneGen[u] = gen; settled.push(u);
+    if (isDone(other, u) && getDist(s, u) + getDist(other, u) < best.d) {
+      best.d = getDist(s, u) + getDist(other, u); best.meet = u;
     }
-    for (let s = csr.firstOut[u]; s < csr.firstOut[u + 1]; s++) {
-      const v = csr.head[s];
-      const d = dist[u] + csr.weight[s];
+    for (let e = csr.firstOut[u]; e < csr.firstOut[u + 1]; e++) {
+      const v = csr.head[e];
+      const d = getDist(s, u) + csr.weight[e];
       counters.relaxed++;
-      if (d < dist[v]) {
-        dist[v] = d; parentEdge[v] = csr.edge[s]; heap.update(v, d);
-        if (otherDone[v] && d + other[v] < best.d) { best.d = d + other[v]; best.meet = v; }
+      if (d < getDist(s, v)) {
+        s.dist[v] = d; s.parent[v] = csr.edge[e]; s.touchGen[v] = gen;
+        s.heap.update(v, d);
+        if (isDone(other, v) && d + getDist(other, v) < best.d) {
+          best.d = d + getDist(other, v); best.meet = v;
+        }
       }
     }
   }
@@ -42,34 +88,34 @@ function expand(edges: ChEdge[], ei: number, acc: number[]): void {
 
 export function chQuery(ch: Ch, from: number, to: number): ChResult {
   const INF = Infinity;
-  const dF = new Float64Array(ch.n).fill(INF);
-  const dB = new Float64Array(ch.n).fill(INF);
-  const pF = new Int32Array(ch.n).fill(-1);
-  const pB = new Int32Array(ch.n).fill(-1);
-  const doneF = new Uint8Array(ch.n);
-  const doneB = new Uint8Array(ch.n);
+  ensureScratch(ch.n);
+  gen++;
   const sF: number[] = []; const sB: number[] = [];
   const best = { d: INF, meet: -1 };
   const counters = { relaxed: 0 };
   // NOTE: the two climbs must interleave for correct early termination in
   // adversarial graphs; sequential is exact too (termination check is
   // conservative: frontier-min > best), just occasionally settles more.
-  climb(ch, "up", from, dF, pF, doneF, sF, dB, doneB, best, counters);
-  climb(ch, "downRev", to, dB, pB, doneB, sB, dF, doneF, best, counters);
+  climb(ch, "up", from, fwd, bwd, sF, best, counters);
+  climb(ch, "downRev", to, bwd, fwd, sB, best, counters);
   // meeting scan (covers nodes settled by only one side)
-  for (let v = 0; v < ch.n; v++)
-    if (dF[v] + dB[v] < best.d) { best.d = dF[v] + dB[v]; best.meet = v; }
+  for (let v = 0; v < ch.n; v++) {
+    const d = getDist(fwd, v) + getDist(bwd, v);
+    if (d < best.d) { best.d = d; best.meet = v; }
+  }
   if (best.meet === -1)
     return { dist: INF, path: [], settled: Uint32Array.from(sF), settledB: Uint32Array.from(sB), relaxed: counters.relaxed, meet: -1 };
   // reconstruct: forward chain of up-edges to meet, then backward chain
   const upSeq: number[] = [];
-  for (let v = best.meet; v !== from && pF[v] !== -1; ) {
-    upSeq.push(pF[v]); v = ch.edges[pF[v]].from;
+  for (let v = best.meet; v !== from && getParent(fwd, v) !== -1; ) {
+    const pe = getParent(fwd, v);
+    upSeq.push(pe); v = ch.edges[pe].from;
   }
   upSeq.reverse();
   const dnSeq: number[] = [];
-  for (let v = best.meet; v !== to && pB[v] !== -1; ) {
-    dnSeq.push(pB[v]); v = ch.edges[pB[v]].to; // downRev edges stored reversed
+  for (let v = best.meet; v !== to && getParent(bwd, v) !== -1; ) {
+    const pe = getParent(bwd, v);
+    dnSeq.push(pe); v = ch.edges[pe].to; // downRev edges stored reversed
   }
   const originalEdges: number[] = [];
   for (const ei of upSeq) expand(ch.edges, ei, originalEdges);

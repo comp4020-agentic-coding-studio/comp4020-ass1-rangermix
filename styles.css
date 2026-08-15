@@ -298,9 +298,15 @@ a {
 }
 
 .board .row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
+  /* Grid, not flex+space-between: space-between only distributes LEFTOVER
+     width, so it silently collapses to a zero gap once name+val+ms sum to
+     the card's full width (exactly what happened at 1920: "Contraction
+     Hierarchies238 2.7 ms", no gap before the count). A grid column-gap is
+     a MINIMUM, guaranteed at every width — the long name's 1fr column
+     shrinks (and wraps) before it can ever touch its neighbors. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 10px;
   align-items: baseline;
   margin: 0 0 16px;
 }
@@ -312,6 +318,12 @@ a {
 }
 
 .board .row .name {
+  /* min-width:0 lets the grid track shrink the label below its intrinsic
+     width instead of forcing overflow into the count/time columns; the
+     text wraps at its own word boundary (or breaks one if it ever has to)
+     rather than colliding. */
+  min-width: 0;
+  overflow-wrap: break-word;
   color: var(--ink);
 }
 
@@ -334,19 +346,22 @@ a {
 
 .board .row .val {
   color: var(--muted);
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
 .board .row .ms {
-  margin-left: 8px;
+  /* No margin-left: the grid's column-gap already guarantees the same
+     minimum gap here as between name/val, uniformly. */
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.78rem;
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
 
 .board .row .track {
-  flex-basis: 100%;
+  grid-column: 1 / -1;
   height: 8px;
   margin-top: 6px;
   overflow: hidden;

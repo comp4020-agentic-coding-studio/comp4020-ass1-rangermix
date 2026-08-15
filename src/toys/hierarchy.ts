@@ -88,7 +88,12 @@ export function mountHierarchy(root: HTMLElement): void {
     if (stack) {
       stack.setAttribute("aria-label", `Map of Canberra's road network, ${label} shown.`);
     }
-    view?.setPctThreshold(pctSteps[clamped]);
+    // Emphasize the top TWO stops only (index 2 = top 12%, 3 = top 2% —
+    // the two most exclusive fractions): "top 35%" stays in normal colors
+    // as the sanity/transition step, matching the design spec's own
+    // "notice: the lake bridges survive to the very top" payoff landing at
+    // the narrow end, not partway through.
+    view?.setPctThreshold(pctSteps[clamped], { emphasize: clamped >= 2 });
   }
 
   range?.addEventListener("input", () => applyStep(Number(range.value)));

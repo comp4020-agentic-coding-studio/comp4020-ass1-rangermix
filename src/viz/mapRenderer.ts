@@ -134,6 +134,7 @@ export class MapView {
   private render: RenderData;
   private transform: Transform = { scale: 1, ox: 0, oy: 0 };
   private pctThreshold: number | null = null;
+  private emphasize = false;
   private dpr = 1;
   private cssWidth = 0;
   private cssHeight = 0;
@@ -175,9 +176,14 @@ export class MapView {
   }
 
   /** Sets the hierarchy-slider filter (`null` = show every road) and
-   * repaints the base layer immediately. */
-  setPctThreshold(pct: number | null): void {
+   * repaints the base layer immediately. `emphasize` (the toy's top-two
+   * slider stops — top 12%/top 2%) strokes every retained line in the
+   * CH-blue family at a touch of extra width instead of the normal
+   * road/road-major greys, so the surviving skeleton reads as one connected
+   * thing rather than same-weight leftover fragments. */
+  setPctThreshold(pct: number | null, opts: { emphasize?: boolean } = {}): void {
     this.pctThreshold = pct;
+    this.emphasize = opts.emphasize ?? false;
     this.drawBase();
   }
 
@@ -218,9 +224,9 @@ export class MapView {
         const [x, y] = this.project(pts[i][0], pts[i][1]);
         ctx.lineTo(x, y);
       }
-      ctx.strokeStyle = major ? colors.roadMajor : colors.road;
+      ctx.strokeStyle = this.emphasize ? colors.ch : (major ? colors.roadMajor : colors.road);
       ctx.globalAlpha = major ? 0.9 : 0.55;
-      ctx.lineWidth = major ? 1.6 : 1;
+      ctx.lineWidth = (major ? 1.6 : 1) + (this.emphasize ? 0.6 : 0);
       ctx.stroke();
     }
     ctx.restore();

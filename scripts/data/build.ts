@@ -434,8 +434,17 @@ export function emit(g: RoutingGraph, outDir: string): EmitResult {
   // ---- render.json: one line per PipeEdge, same order (renderOf below
   // links routing.json's original edges back to these by index) ----
   const denom = Math.max(1, n - 1);
+  // MAX, not MIN: an edge's percentile is the rank of its MORE important
+  // endpoint. MIN severs arterial chains at whichever endpoint the
+  // contraction heuristic happened to rank lower — two consecutive hops of
+  // the same physical road (A-B, B-C) both get capped by node B's rank even
+  // when B sits on a continuous major corridor, so the "top k%" reveal
+  // rendered as disconnected dust instead of the promised connected spine
+  // (see the hierarchy toy's own percentile calibration, which retains the
+  // right FRACTION of lines either way — this only changes WHICH lines,
+  // toward ones that chain together).
   const pctOf = (from: number, to: number) =>
-    Math.floor((255 * Math.min(ch.rank[from], ch.rank[to])) / denom);
+    Math.floor((255 * Math.max(ch.rank[from], ch.rank[to])) / denom);
   const lines: number[][] = pipeEdges.map((e) => {
     const pts = e.geometry;
     const x0 = qLon(pts[0][0]);
