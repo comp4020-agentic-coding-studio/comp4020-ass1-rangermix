@@ -20,7 +20,10 @@
       <nav aria-label="Primary">
         <a href="../">Highway to Hill</a>
         <a href="./" aria-current="page">How it works</a>
-        <button data-testid="theme-toggle" type="button" class="chip">Theme: system</button>
+        <button data-testid="theme-toggle" type="button" class="chip" aria-label="Switch theme (current: system)">
+          <span class="theme-toggle-icon" aria-hidden="true">◐S</span>
+          <span class="theme-toggle-label">Theme: system</span>
+        </button>
       </nav>
     </header>
     <main class="how-layout">
@@ -130,11 +133,13 @@
       </section>
     </main>
     <footer class="site-foot">
-      <p>Road data © OpenStreetMap contributors, ODbL. Routing is computed
-        in your browser on a simplified graph (one-ways yes, turn
-        restrictions no). Reference: Geisberger, Sanders, Schultes &amp;
-        Delling, “Contraction Hierarchies”, WEA 2008. No stop signs — speed
-        limits modelled. <a href=https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix>source &amp; build history</a></p>
+      <div class="foot-inner">
+        <p>Road data © OpenStreetMap contributors, ODbL. Routing is computed
+          in your browser on a simplified graph (one-ways yes, turn
+          restrictions no). Reference: Geisberger, Sanders, Schultes &amp;
+          Delling, “Contraction Hierarchies”, WEA 2008. No stop signs — speed
+          limits modelled. <a href=https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix>source &amp; build history</a></p>
+      </div>
     </footer>
     <script type="module" src="../src/pages/how.ts"></script>
   </body>

@@ -171,8 +171,8 @@ function boot(): void {
   const compareGrid = document.querySelector<HTMLElement>('[data-testid="compare-panels"]');
   const loadNote = document.getElementById("load-note");
   const raceRunBtn = document.querySelector<HTMLButtonElement>('[data-testid="race-run"]');
-  const astarChip = document.querySelector<HTMLButtonElement>('[data-testid="algo-astar"]');
-  const bidiChip = document.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]');
+  const astarToggle = document.querySelector<HTMLButtonElement>('[data-testid="algo-astar"]');
+  const bidiToggle = document.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]');
   const zoomInBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-in"]');
   const zoomOutBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-out"]');
   const viewToggleBtn = document.querySelector<HTMLButtonElement>('[data-testid="view-toggle"]');
@@ -722,30 +722,33 @@ function boot(): void {
     applyViewMode();
   });
 
-  // The two optional-racer chips (A*, Bidirectional) — default OFF, real
-  // aria-pressed toggle buttons (Dijkstra/CH have no equivalent chip: they
-  // race unconditionally, the disable-proof core comparison). Toggling
-  // updates the controller's participation state for every future race,
-  // rebuilds the Compare panel set if Compare mode is active (a racer
-  // toggle changes which panels SHOULD exist), AND re-races the current
-  // pins right away, through the same cancel-first `scheduler.now()` every
-  // other direct trigger already goes through. The matching scoreboard row
-  // is shown/hidden here too (not left empty): "rows for inactive algos
-  // hidden entirely" is a scoreboard-shape contract, not something RaceUi
-  // (a per-RACE reporting interface) owns.
-  function wireAlgoToggle(chip: HTMLButtonElement | null, algo: "astar" | "bidi"): void {
-    chip?.addEventListener("click", () => {
-      const active = chip.getAttribute("aria-pressed") !== "true";
-      chip.setAttribute("aria-pressed", String(active));
+  // The two optional racers (A*, Bidirectional) get a real aria-pressed
+  // toggle switch INSIDE their own scoreboard row now (build-review
+  // §16.1/§16.5 — algorithm selection merges into the scoreboard itself;
+  // Dijkstra/CH have no equivalent toggle, they race unconditionally, the
+  // disable-proof core comparison). Toggling updates the controller's
+  // participation state for every future race, rebuilds the Compare panel
+  // set if Compare mode is active (a racer toggle changes which panels
+  // SHOULD exist), AND re-races the current pins right away, through the
+  // same cancel-first `scheduler.now()` every other direct trigger already
+  // goes through. The row's own `data-active` attribute (styles.css) is
+  // what actually dims it and hides its bar/value while off — set here
+  // alongside the toggle's own aria-pressed so the two can never disagree;
+  // a row is never `hidden` anymore (build-review §16.1 — it stays
+  // visible, just dimmed with a hollow swatch).
+  function wireAlgoToggle(toggle: HTMLButtonElement | null, algo: "astar" | "bidi"): void {
+    toggle?.addEventListener("click", () => {
+      const active = toggle.getAttribute("aria-pressed") !== "true";
+      toggle.setAttribute("aria-pressed", String(active));
       controller?.setAlgoActive(algo, active);
       const row = document.querySelector(`.board .row[data-algo="${algo}"]`);
-      if (row instanceof HTMLElement) row.hidden = !active;
+      if (row instanceof HTMLElement) row.dataset.active = String(active);
       if (viewMode === "compare") syncPanels();
       if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB); // direct trigger: cancels any pending debounce
     });
   }
-  wireAlgoToggle(astarChip, "astar");
-  wireAlgoToggle(bidiChip, "bidi");
+  wireAlgoToggle(astarToggle, "astar");
+  wireAlgoToggle(bidiToggle, "bidi");
 
   // render.json and routing.json load independently — nothing orders one
   // before the other — so routingReady's rejection can land BEFORE
@@ -774,14 +777,15 @@ function boot(): void {
       if (loadNote) loadNote.hidden = true;
       if (raceRunBtn) raceRunBtn.disabled = false;
       // Ship disabled (index.html) so a pre-load click can't flip
-      // aria-pressed / un-hide a scoreboard row that has nothing to show
+      // aria-pressed / light up a scoreboard row that has nothing to show
       // yet (unlike the preset buttons, which no-op silently on their own
-      // `if (!graph) return` guard, a chip's own click handler has a
-      // visible side effect — aria-pressed, row.hidden — before it ever
-      // checks whether `controller` exists, so disabling until ready is
-      // the honest fix here, not a redundant belt-and-braces one).
-      if (astarChip) astarChip.disabled = false;
-      if (bidiChip) bidiChip.disabled = false;
+      // `if (!graph) return` guard, a toggle's own click handler has a
+      // visible side effect — aria-pressed, the row's data-active dimming
+      // — before it ever checks whether `controller` exists, so disabling
+      // until ready is the honest fix here, not a redundant
+      // belt-and-braces one).
+      if (astarToggle) astarToggle.disabled = false;
+      if (bidiToggle) bidiToggle.disabled = false;
       if (zoomInBtn) zoomInBtn.disabled = false;
       if (zoomOutBtn) zoomOutBtn.disabled = false;
       if (viewToggleBtn) viewToggleBtn.disabled = false;

@@ -15,8 +15,17 @@ describe("theme", () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.removeAttribute("data-theme");
+    // Matches the real header markup (index.html/how/index.html, build-
+    // review §16.2): a label span (full "Theme: <state>" text, hidden at
+    // ≤520px) and an icon span (compact form, shown only at ≤520px) —
+    // jsdom doesn't apply styles.css's media query, so both are always
+    // "visible" here, which is fine: these tests check what theme.ts WRITES
+    // into each, not which one CSS shows.
     document.body.innerHTML =
-      '<button data-testid="theme-toggle" type="button"></button>';
+      '<button data-testid="theme-toggle" type="button">' +
+      '<span class="theme-toggle-icon" aria-hidden="true"></span>' +
+      '<span class="theme-toggle-label"></span>' +
+      "</button>";
   });
 
   it("defaults to system (no data-theme attribute)", () => {
@@ -51,6 +60,17 @@ describe("theme", () => {
     btn?.click();
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
     expect(btn?.textContent).toContain("dark");
+  });
+
+  it("writes the full sentence into aria-label and the label span, and a compact icon+letter into the icon span, regardless of viewport (build-review §16.2)", () => {
+    initTheme();
+    const btn = document.querySelector<HTMLButtonElement>(
+      '[data-testid="theme-toggle"]',
+    );
+    btn?.click(); // -> dark
+    expect(btn?.getAttribute("aria-label")).toBe("Switch theme (current: dark)");
+    expect(btn?.querySelector(".theme-toggle-label")?.textContent).toBe("Theme: dark");
+    expect(btn?.querySelector(".theme-toggle-icon")?.textContent).toBe("◐D");
   });
 
   it("cycles and applies themes in-memory when localStorage throws", () => {

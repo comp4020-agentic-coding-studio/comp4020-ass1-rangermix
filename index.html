@@ -20,7 +20,10 @@
       <nav aria-label="Primary">
         <a href="./" aria-current="page">Highway to Hill</a>
         <a href="./how/">How it works</a>
-        <button data-testid="theme-toggle" type="button" class="chip">Theme: system</button>
+        <button data-testid="theme-toggle" type="button" class="chip" aria-label="Switch theme (current: system)">
+          <span class="theme-toggle-icon" aria-hidden="true">◐S</span>
+          <span class="theme-toggle-label">Theme: system</span>
+        </button>
       </nav>
     </header>
     <main class="race-layout">
@@ -41,17 +44,6 @@
           <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
         </div>
         <div class="controls">
-          <button data-testid="race-run" type="button" class="btn-primary" disabled>▶ Race again</button>
-          <div class="control-group" role="group" aria-labelledby="racers-label">
-            <p class="group-label" id="racers-label">Racers</p>
-            <div class="group-chips">
-              <span class="chip chip-fixed" data-algo="dijkstra">Dijkstra</span>
-              <span class="chip chip-fixed" data-algo="ch">Contraction Hierarchies</span>
-              <button data-testid="algo-astar" data-algo="astar" type="button" class="chip algo-toggle" aria-pressed="false" disabled>A*</button>
-              <button data-testid="algo-bidi" data-algo="bidi" type="button" class="chip algo-toggle" aria-pressed="false" disabled>Bidirectional</button>
-            </div>
-          </div>
-          <button data-testid="view-toggle" type="button" class="chip" aria-pressed="false" disabled>View: overlay</button>
           <div class="control-group" role="group" aria-labelledby="routes-label">
             <p class="group-label" id="routes-label">Routes</p>
             <div class="group-chips">
@@ -67,36 +59,57 @@
         </div>
       </section>
       <aside class="board" data-testid="scoreboard" aria-label="Race scoreboard">
+        <p class="board-eyebrow">Algorithms</p>
         <p class="headline" id="board-headline"></p>
         <div class="row" data-algo="dijkstra">
-          <span class="name">Dijkstra</span><span class="val"></span>
+          <div class="row-main">
+            <span class="name">Dijkstra</span><span class="val"></span>
+          </div>
           <div class="track"><div class="fill"></div></div>
         </div>
-        <div class="row" data-algo="astar" hidden>
-          <span class="name">A*</span><span class="val"></span>
+        <div class="row row-optional" data-algo="astar" data-active="false">
+          <div class="row-main">
+            <span class="name">A*</span><span class="val"></span>
+          </div>
+          <button data-testid="algo-astar" type="button" class="row-toggle" aria-pressed="false" aria-label="Toggle A*" disabled>
+            <span class="row-toggle-track"><span class="row-toggle-thumb"></span></span>
+          </button>
           <div class="track"><div class="fill"></div></div>
         </div>
-        <div class="row" data-algo="bidi" hidden>
-          <span class="name">Bidirectional</span><span class="val"></span>
+        <div class="row row-optional" data-algo="bidi" data-active="false">
+          <div class="row-main">
+            <span class="name">Bidirectional</span><span class="val"></span>
+          </div>
+          <button data-testid="algo-bidi" type="button" class="row-toggle" aria-pressed="false" aria-label="Toggle Bidirectional" disabled>
+            <span class="row-toggle-track"><span class="row-toggle-thumb"></span></span>
+          </button>
           <div class="track"><div class="fill"></div></div>
         </div>
         <div class="row" data-algo="ch">
-          <span class="name">Contraction Hierarchies</span><span class="val"></span>
+          <div class="row-main">
+            <span class="name">Contraction Hierarchies</span><span class="val"></span>
+          </div>
           <div class="track"><div class="fill"></div></div>
         </div>
         <p class="fineprint">Times and counts are measured in your browser.
           CH did a one-off preprocessing pass before this page loaded — that
           trade is the whole story.</p>
-        <a data-testid="how-cta" class="how-cta" href="./how/">How is that possible? →</a>
+        <div class="board-actions">
+          <button data-testid="view-toggle" type="button" class="chip board-action" aria-pressed="false" disabled>View: overlay</button>
+          <button data-testid="race-run" type="button" class="btn-primary board-action" disabled>▶ Race again</button>
+          <a data-testid="how-cta" class="how-cta board-action" href="./how/">How is that possible? →</a>
+        </div>
       </aside>
       <p class="visually-hidden" data-testid="race-live" aria-live="polite"></p>
     </main>
     <footer class="site-foot">
-      <p>Road data © OpenStreetMap contributors, ODbL. Routing is computed
-        in your browser on a simplified graph (one-ways yes, turn
-        restrictions no). Reference: Geisberger, Sanders, Schultes &amp;
-        Delling, “Contraction Hierarchies”, WEA 2008. No stop signs — speed
-        limits modelled. <a href=https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix>source &amp; build history</a></p>
+      <div class="foot-inner">
+        <p>Road data © OpenStreetMap contributors, ODbL. Routing is computed
+          in your browser on a simplified graph (one-ways yes, turn
+          restrictions no). Reference: Geisberger, Sanders, Schultes &amp;
+          Delling, “Contraction Hierarchies”, WEA 2008. No stop signs — speed
+          limits modelled. <a href=https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix>source &amp; build history</a></p>
+      </div>
     </footer>
     <script type="module" src="./src/pages/home.ts"></script>
   </body>

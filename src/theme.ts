@@ -1,6 +1,14 @@
 export type ThemeSetting = "system" | "light" | "dark";
 const KEY = "hth-theme";
 const ORDER: ThemeSetting[] = ["system", "dark", "light"];
+// Slim-viewport theme toggle (build-review §16.2): "◐" stands for "theme"
+// generically, the state's own first letter (S/D/L) tags which one is
+// active — shown in place of the full "Theme: <state>" label at ≤520px
+// (styles.css's own .theme-toggle-icon/.theme-toggle-label rule) so the
+// header's three items never wrap onto a second line at 390px. Purely
+// decorative: aria-label (below) carries the full sentence at every
+// viewport, so nothing accessible is lost.
+const COMPACT_ICON = "◐";
 let listeners: (() => void)[] = [];
 
 function safeGetItem(key: string): string | null {
@@ -37,11 +45,21 @@ function apply(setting: ThemeSetting): void {
   if (setting === "system")
     document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", setting);
+  const full = `Theme: ${setting}`;
+  const compact = `${COMPACT_ICON}${setting.charAt(0).toUpperCase()}`;
   for (const btn of document.querySelectorAll<HTMLButtonElement>(
     '[data-testid="theme-toggle"]',
   )) {
-    btn.textContent = `Theme: ${setting}`;
+    // aria-label always carries the FULL sentence regardless of viewport —
+    // only the VISIBLE text compacts (CSS media query) — so a screen
+    // reader never loses information a sighted narrow-viewport visitor
+    // also can't see (they get the same full sentence, just via aria-label
+    // instead of the on-screen text).
     btn.setAttribute("aria-label", `Switch theme (current: ${setting})`);
+    const label = btn.querySelector<HTMLElement>(".theme-toggle-label");
+    const icon = btn.querySelector<HTMLElement>(".theme-toggle-icon");
+    if (label) label.textContent = full;
+    if (icon) icon.textContent = compact;
   }
   for (const cb of listeners) cb();
 }

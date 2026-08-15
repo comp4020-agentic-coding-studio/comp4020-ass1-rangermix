@@ -188,77 +188,6 @@ a {
   border-color: var(--c-ch);
 }
 
-/* The two optional-racer toggle chips (A*, Bidirectional) — off by default.
-   aria-pressed carries the accessible on/off state (a screen reader hears
-   "pressed"/"not pressed" on a toggle button, no reliance on color alone);
-   the dot + tinted background/border give sighted users the same signal in
-   the racer's own validated roster hue, only once pressed. */
-.chip.algo-toggle::before {
-  content: "";
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.chip.algo-toggle[aria-pressed="true"][data-algo="astar"] {
-  border-color: var(--c-astar);
-  background: color-mix(in srgb, var(--c-astar) 14%, var(--panel));
-}
-
-.chip.algo-toggle[aria-pressed="true"][data-algo="astar"]::before {
-  background: var(--c-astar);
-}
-
-.chip.algo-toggle[aria-pressed="true"][data-algo="bidi"] {
-  border-color: var(--c-bidi);
-  background: color-mix(in srgb, var(--c-bidi) 14%, var(--panel));
-}
-
-.chip.algo-toggle[aria-pressed="true"][data-algo="bidi"]::before {
-  background: var(--c-bidi);
-}
-
-/* Dijkstra + CH "always-on" indicators in the Racers group — same dot+tint
-   language as a PRESSED algo-toggle chip (so all four racers read as one
-   family), but permanently tinted and not a button: these two can never be
-   switched off, so there is nothing to press. cursor stays default and hover
-   is neutralized so the chip doesn't imply an affordance it doesn't have. */
-.chip.chip-fixed {
-  cursor: default;
-}
-
-.chip.chip-fixed:hover {
-  border-color: var(--line);
-}
-
-.chip.chip-fixed::before {
-  content: "";
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-}
-
-.chip.chip-fixed[data-algo="dijkstra"] {
-  border-color: var(--c-dijkstra);
-  background: color-mix(in srgb, var(--c-dijkstra) 14%, var(--panel));
-}
-
-.chip.chip-fixed[data-algo="dijkstra"]::before {
-  background: var(--c-dijkstra);
-}
-
-.chip.chip-fixed[data-algo="ch"] {
-  border-color: var(--c-ch);
-  background: color-mix(in srgb, var(--c-ch) 14%, var(--panel));
-}
-
-.chip.chip-fixed[data-algo="ch"]::before {
-  background: var(--c-ch);
-}
-
 .site-head {
   border-bottom: 1px solid var(--line);
 }
@@ -300,6 +229,28 @@ a {
 
 .site-head nav .chip {
   margin-left: auto;
+}
+
+/* Slim viewports (build-review §16.2 — the theme toggle's full "Theme:
+   system/dark/light" text is what wraps the 390px header onto a second
+   line): theme.ts always writes the full sentence into .theme-toggle-label
+   and a two-character compact form into .theme-toggle-icon, and CSS alone
+   decides which one is visible at the current width — aria-label (also
+   always the full sentence, see theme.ts) is what a screen reader hears
+   regardless, so nothing accessible is lost, only what a sighted
+   narrow-viewport visitor also doesn't have room to read. */
+.theme-toggle-icon {
+  display: none;
+}
+
+@media (width <= 520px) {
+  .theme-toggle-label {
+    display: none;
+  }
+
+  .theme-toggle-icon {
+    display: inline;
+  }
 }
 
 .race-layout {
@@ -626,28 +577,40 @@ a {
   text-transform: uppercase;
 }
 
+/* Flex, not grid, on .row itself (the name/val/ms grid lives one level
+   down now, on .row-main — see below): a core row (Dijkstra/CH) has only
+   ONE flex child, an optional row (A* / Bidirectional) has two (.row-main,
+   then its .row-toggle switch — build-review §16.1/§16.5, "algorithm
+   selection merges INTO the scoreboard itself"). Flex's column-gap only
+   inserts space BETWEEN items that actually exist, so a core row's
+   .row-main is never squeezed by a gap reserved for a toggle it doesn't
+   have, the way a fixed grid-template-columns (this row's old layout)
+   would reserve that column regardless of content. `.track` claims
+   flex-basis:100% (below) to force itself onto its own full-width line
+   under flex-wrap — the same "one item claims the whole row" trick grid's
+   old `grid-column:1/-1` did. */
 .board .row {
-  /* Grid, not flex+space-between: space-between only distributes LEFTOVER
-     width, so it silently collapses to a zero gap once name+val+ms sum to
-     the card's full width (exactly what happened at 1920: "Contraction
-     Hierarchies238 2.7 ms", no gap before the count). A grid column-gap is
-     a MINIMUM, guaranteed at every width — the long name's 1fr column
-     shrinks (and wraps) before it can ever touch its neighbors. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 10px;
+  margin: 0 0 16px;
+}
+
+/* name + val (+ the .ms node RaceUi.setTime inserts after .val once a race
+   reports a wall-clock time) — the grid that used to live on .row itself:
+   a MINIMUM column-gap that the long "Contraction Hierarchies" label's 1fr
+   track shrinks (and wraps) below before it can ever collide with its
+   neighbors (found live at 1920: "Contraction Hierarchies238 2.7 ms", no
+   gap before the count — space-between's leftover-only gap is what caused
+   that; grid's gap is a floor, guaranteed at every width). */
+.board .row .row-main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   column-gap: 10px;
   align-items: baseline;
-  margin: 0 0 16px;
-}
-
-/* `[hidden]` and `.board .row` are equal-ish specificity (two class
-   selectors beats one attribute selector); without this, an inactive
-   optional racer's row (A* or Bidirectional, hidden by default and toggled
-   via the chips in home.ts) would still lay out as an empty grid row
-   instead of disappearing — same fix, same reason, as .hier-loading[hidden]
-   elsewhere in this file. */
-.board .row[hidden] {
-  display: none;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .board .row .name,
@@ -708,7 +671,7 @@ a {
 }
 
 .board .row .track {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
   height: 8px;
   margin-top: 6px;
   overflow: hidden;
@@ -741,10 +704,152 @@ a {
   min-width: 2px;
 }
 
+/* The eyebrow label above the rows (build-review §16.4/16.5: "the group is
+   called Algorithms, not Racers") — same small mono/uppercase/tracked voice
+   as .group-label (the Routes group's own heading), kept as its own class
+   since .board is not a .control-group. */
+.board-eyebrow {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Dijkstra and CH are the disable-proof core comparison — always raced,
+   never toggled — so their rows never carry .row-optional or data-active
+   and nothing below touches them. A* and Bidirectional are optional:
+   data-active (written by home.ts's wireAlgoToggle alongside the toggle
+   button's own aria-pressed, so the two can never disagree) drives both
+   the row's dimmed/hollow "off" look and hiding its bar/value entirely —
+   build-review §16.1: "disabled-state rows show name + toggle only", so a
+   racer that's never run, or was switched off after running, never shows a
+   dead 0%-filled track or a stale count. */
+.board .row.row-optional {
+  transition: opacity 150ms ease;
+}
+
+.board .row.row-optional[data-active="false"] {
+  opacity: 0.55;
+}
+
+.board .row.row-optional[data-active="false"] .val,
+.board .row.row-optional[data-active="false"] .ms,
+.board .row.row-optional[data-active="false"] .track {
+  display: none;
+}
+
+.board .row.row-optional[data-active="false"] .name::before {
+  background: transparent;
+  border: 1.5px solid var(--muted);
+}
+
+.board .row[data-algo="astar"][data-active="false"] .name::before {
+  border-color: var(--c-astar);
+}
+
+.board .row[data-algo="bidi"][data-active="false"] .name::before {
+  border-color: var(--c-bidi);
+}
+
+/* The toggle itself: a small switch-affordance button, ≥44px hit target via
+   padding around a much smaller visual (30x16 track + 14px/7px padding =
+   44x44px total) — the same "pad up to the target, don't stretch the
+   visual" technique .chip/.zoom-btn already use elsewhere in this file. No
+   visible text (the row's own .name already names the racer) — aria-label
+   carries the accessible name, aria-pressed the on/off state, the same
+   toggle-button pattern the old .algo-toggle chip used before this section
+   replaced it. */
+.row-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 7px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.row-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.row-toggle-track {
+  position: relative;
+  display: block;
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
+}
+
+.row-toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition:
+    transform 150ms ease,
+    background 150ms ease;
+}
+
+.row-toggle:hover:not(:disabled) .row-toggle-track {
+  border-color: var(--c-ch);
+}
+
+.row-toggle[aria-pressed="true"] .row-toggle-thumb {
+  transform: translateX(14px);
+  background: var(--ink);
+}
+
+.board .row[data-algo="astar"] .row-toggle[aria-pressed="true"] .row-toggle-track {
+  background: color-mix(in srgb, var(--c-astar) 35%, var(--panel-2));
+  border-color: var(--c-astar);
+}
+
+.board .row[data-algo="bidi"] .row-toggle[aria-pressed="true"] .row-toggle-track {
+  background: color-mix(in srgb, var(--c-bidi) 35%, var(--panel-2));
+  border-color: var(--c-bidi);
+}
+
 .board .fineprint {
   margin: 18px 0 0;
   color: var(--muted);
   font-size: 0.8rem;
+}
+
+/* View toggle, Race again, and the /how/ CTA move into the scoreboard panel
+   itself (build-review §16.5), stacked full-width in this exact order —
+   "select a view → run the race → go deeper" — instead of scattered across
+   the old bottom control strip. .board-action (index.html) is a plain,
+   single-class modifier rather than a `.board-actions .chip`-style
+   descendant selector: a descendant selector here would share its
+   rightmost class with .chip/.btn-primary/.how-cta rules elsewhere in this
+   file that carry a DIFFERENT specificity (stylelint's
+   no-descending-specificity flags exactly that, since it can't know the
+   two never actually target the same element) — a dedicated class sidesteps
+   the conflict instead of fighting it. */
+.board-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.board-action {
+  width: 100%;
+  justify-content: center;
 }
 
 /* The real CTA to /how/ (build-review amendment §14.7): a large, inviting
@@ -753,13 +858,13 @@ a {
    completes, see home.ts's setHeadline) turns the emphasis up. The one-time
    pulse relies on the file's own global `prefers-reduced-motion` rule
    (near the top of this file) to go inert — no separate media query needed
-   here. */
+   here. Margin comes from .board-actions's own gap now (build-review
+   §16.5's move into the scoreboard panel), not a margin-top of its own. */
 .how-cta {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  margin-top: 18px;
   padding: 14px 20px;
   border: 1px solid var(--c-ch);
   border-radius: 10px;
@@ -795,19 +900,35 @@ a {
   }
 }
 
+/* Build review §16.1: the footer used to span the full viewport as a
+   background band while its text stayed capped at a narrow 68ch prose
+   measure — on a wide screen that read as a mismatched band with huge
+   empty gutters either side, and the extra vertical padding made it feel
+   like its own heavy section rather than a closing line. .foot-inner now
+   shares the exact max-width + horizontal padding .race-layout/.how-layout
+   use for their own content (same left/right edges as the map/board above
+   at any width — see the matching ≤940px override below), and .site-foot's
+   own padding carries only the vertical component, roughly halved from its
+   previous figures. Visual treatment (panel background, top border) is
+   unchanged from the F1 pass. */
 .site-foot {
   margin-top: 40px;
-  padding: 28px 20px 40px;
+  padding: 14px 0 20px;
   border-top: 1px solid var(--line);
   background: var(--panel);
+}
+
+.site-foot .foot-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 0 20px;
 }
 
 .site-foot p {
   /* No separate `.site-foot a` rule: the base `a { color: var(--link); }`
      already covers the repo link here — adding an identical override just
      to scope it would be redundant. */
-  max-width: 68ch;
-  margin: 0 auto;
+  margin: 0;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.78rem;
@@ -898,6 +1019,14 @@ a {
 
   .board {
     padding: 16px;
+  }
+
+  /* Matches .race-layout/.how-layout's own ≤940px horizontal padding (16px,
+     down from 20px) so the footer's left/right edges keep tracking the
+     content column at this width too — see the base .foot-inner rule's own
+     comment for why they're matched at all. */
+  .site-foot .foot-inner {
+    padding: 0 16px;
   }
 }
 
