@@ -6,9 +6,12 @@
 // fixtures/mini.json in build.test.ts.
 //
 // Below that: emit() runs the CH build over the real routing graph and
-// writes the three frozen artifacts (public/data/{render,routing,meta}.json),
-// and the CLI main() at the bottom wires fetch.ts's cached Overpass extract
-// through parseOsm -> buildRoutingGraph -> emit() when this file is run
+// writes the three frozen artifacts (public/data/{render,routing,meta}.json);
+// emitToytown() cuts a second, much smaller bbox-restricted subgraph through
+// the SAME buildRoutingGraph pipeline and writes public/data/toytown.json
+// (see that function's own comment). The CLI main() at the bottom wires
+// fetch.ts's cached Overpass extract through parseOsm -> buildRoutingGraph
+// -> emit() and -> cutToytown() -> emitToytown() when this file is run
 // directly (`pnpm data:build`).
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -569,6 +572,109 @@ export function emit(g: RoutingGraph, outDir: string): EmitResult {
 }
 
 // ---------------------------------------------------------------------
+// Toytown: a small ANU-area drivable subgraph cut from the SAME cached
+// extract, for the /how/ toys (Task F5 rewires the toys onto it; this task
+// ships only the artifact + loader — src/toys/minitown.ts's hand-made
+// 12-node graph stays live until then). Reuses buildRoutingGraph verbatim
+// on a bbox-restricted way list — same drivable filter, same largest-SCC
+// keep, same chain contraction as the main Canberra graph — so this is a
+// real subgraph, not a second pipeline to keep in sync.
+//
+// Unlike routing.json, toytown.json carries no CH data: the /how/ toys
+// build their own CH from the decoded graph at load time, exactly how
+// MINITOWN's toys call buildCh(MINITOWN.graph) themselves (see
+// src/toys/climb.ts) — shipping precomputed shortcuts here would just be
+// dead weight for a ≤80-node graph a browser can CH-build in milliseconds.
+// What IS shipped: node coordinates and, per edge, its full geometry, so
+// the toys can draw real street shapes instead of straight lines.
+// ---------------------------------------------------------------------
+
+// Tuned against the cached extract (scratch run, not committed — see the
+// task report for the full candidate table) so the post-chain-contraction
+// node count lands inside the 40-80 target: the plan's starting bbox
+// ([149.106,-35.290]->[149.135,-35.262], the full ANU/Acton/Civic sweep)
+// produced 509 nodes — far too many for a toy a visitor reads at a glance.
+// Shrunk to the ANU campus core (Fellows/Sullivans Creek/Kambri roads) ->
+// 55 nodes / 113 edges, comfortably mid-range (candidates from 41 to 131
+// nodes were tried by growing/shrinking this box by a few percent each
+// edge; 55 was kept for the widest safety margin in both directions).
+const TOYTOWN_BBOX: [number, number, number, number] = [149.115, -35.284, 149.125, -35.274];
+
+export interface ToytownEmitResult { nodes: number; edges: number; gzBytes: number }
+
+/** Keeps only ways whose EVERY referenced node falls inside `bbox` — a way
+ * with even one node outside is dropped whole rather than clipped, so every
+ * kept way's geometry stays fully resolvable from `nodes` with no dangling
+ * ends at the box edge. */
+export function waysWithinBbox(
+  ways: OsmWay[], nodes: Map<number, [number, number]>,
+  bbox: [number, number, number, number],
+): OsmWay[] {
+  const [minLon, minLat, maxLon, maxLat] = bbox;
+  const inBbox = (id: number): boolean => {
+    const c = nodes.get(id);
+    return c !== undefined && c[0] >= minLon && c[0] <= maxLon && c[1] >= minLat && c[1] <= maxLat;
+  };
+  return ways.filter((w) => w.refs.length > 0 && w.refs.every(inBbox));
+}
+
+/** Cuts the ANU-area toy subgraph from `parsed` (the SAME parsed OSM
+ * build.ts's main() already holds — no second parse) through the identical
+ * buildRoutingGraph pipeline the main graph uses. Deliberately independent
+ * of the main graph's `--drop-living-street` budget lever: toytown is tiny
+ * regardless of that flag, and living_street ways (Kambri, campus
+ * laneways) are exactly the kind of texture worth keeping at this
+ * zoomed-in scale. */
+export function cutToytown(
+  parsed: ParsedOsm, bbox: [number, number, number, number] = TOYTOWN_BBOX,
+): RoutingGraph {
+  return buildRoutingGraph({ nodes: parsed.nodes, ways: waysWithinBbox(parsed.ways, parsed.nodes, bbox) });
+}
+
+/** Quantizes `g` (relative to ITS OWN bbox, not the main graph's) and
+ * writes public/data/toytown.json. Geometry encoding: each edge's
+ * `geometry` is its full point list (endpoints included, matching
+ * PipeEdge.geometry) as ABSOLUTE quantized [x, y] integer pairs on the same
+ * 1e-5deg grid as everywhere else in this file — see
+ * src/toys/toytown.ts's decodeToytown for the matching decoder. Deliberately
+ * NOT delta-encoded like render.json's lines: at toytown's scale (dozens of
+ * nodes, ~100 edges) the byte savings are noise against the 4 MB budget,
+ * and absolute coordinates decode with no running-position bookkeeping —
+ * simplicity wins over density here. */
+export function emitToytown(g: RoutingGraph, outDir: string): ToytownEmitResult {
+  const n = g.lon.length;
+  const allPoints: [number, number][] = [];
+  for (let i = 0; i < n; i++) allPoints.push([g.lon[i], g.lat[i]]);
+  for (const e of g.edges) for (const p of e.geometry) allPoints.push(p);
+  const bbox = boundingBox(allPoints);
+  const [minLon, minLat] = bbox;
+  const qLon = (lon: number) => Math.round((lon - minLon) * COORD_SCALE);
+  const qLat = (lat: number) => Math.round((lat - minLat) * COORD_SCALE);
+
+  const lon = g.lon.map(qLon);
+  const lat = g.lat.map(qLat);
+  const edges = g.edges.map((e) => ({
+    from: e.from, to: e.to,
+    w: Math.max(1, Math.round(e.w * 10)),
+    geometry: e.geometry.map(([elon, elat]): [number, number] => [qLon(elon), qLat(elat)]),
+  }));
+
+  const json = { bbox, n, lon, lat, edges };
+  mkdirSync(outDir, { recursive: true });
+  const outPath = resolve(outDir, "toytown.json");
+  writeFileSync(outPath, JSON.stringify(json));
+  const gzBytes = gzipSync(readFileSync(outPath)).length;
+
+  console.log("--- toytown ---");
+  console.log(`bbox:  ${JSON.stringify(bbox)}`);
+  console.log(`nodes: ${n}`);
+  console.log(`edges: ${edges.length}`);
+  console.log(`gzip:  ${fmtKB(gzBytes)}`);
+
+  return { nodes: n, edges: edges.length, gzBytes };
+}
+
+// ---------------------------------------------------------------------
 // CLI: `pnpm data:build` (node --experimental-strip-types scripts/data/build.ts)
 // Reads the cached Overpass extract fetch.ts saved, builds the routing
 // graph, and emits the artifacts. Guarded so importing build.ts's pure
@@ -602,6 +708,13 @@ async function main(): Promise<void> {
     `${routing.edges.length.toLocaleString()} edges from ${cachePath}`,
   );
   emit(routing, resolve("public/data"));
+
+  const toytownRouting = cutToytown(parsed);
+  console.log(
+    `Toytown cut: ${toytownRouting.lon.length.toLocaleString()} nodes, ` +
+    `${toytownRouting.edges.length.toLocaleString()} edges (bbox ${JSON.stringify(TOYTOWN_BBOX)})`,
+  );
+  emitToytown(toytownRouting, resolve("public/data"));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

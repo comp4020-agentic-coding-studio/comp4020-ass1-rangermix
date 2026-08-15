@@ -2,11 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { Ch } from "../src/algos/chBuild";
-import type { Graph } from "../src/algos/graph";
+import { buildCh, type Ch } from "../src/algos/chBuild";
+import { transpose, type Graph } from "../src/algos/graph";
 import { dijkstraCsr } from "../src/algos/dijkstra";
 import { chQuery } from "../src/algos/chQuery";
 import { chFromArtifact, graphFromArtifact, type RoutingArtifact } from "../src/data-node";
+import { decodeToytown, type Toytown, type ToytownArtifact } from "../src/toys/toytown";
 
 // The data-layer contracts: CH<->Dijkstra equivalence on the SHIPPED
 // Canberra graph, the settled-nodes headline ratio, and the payload budget.
@@ -18,6 +19,7 @@ const DATA = resolve("public/data");
 const have = ["render.json", "routing.json", "meta.json"].every((f) =>
   existsSync(resolve(DATA, f)),
 );
+const haveToytown = have && existsSync(resolve(DATA, "toytown.json"));
 
 interface MetaArtifact {
   bench: { from: number; to: number; dds: number; dj: number; ch: number }[];
@@ -71,4 +73,65 @@ describe.skipIf(!have)("shipped Canberra artifacts", () => {
 
 describe.skipIf(have)("artifacts missing", () => {
   it.todo("run pnpm data:fetch && pnpm data:build, commit public/data");
+});
+
+// The toytown-layer contracts (Task F4, design spec §14.8): the ANU-area
+// subgraph that replaces the hand-made 12-node mini-town under the /how/
+// toys. Same skip-if-absent pattern as above, gated on the committed
+// public/data/toytown.json existing (and — via `have` — the main artifacts
+// too, since the combined-budget test below reads all four files).
+describe.skipIf(!haveToytown)("toytown artifact (ANU-area /how/ subgraph)", () => {
+  let artifact: ToytownArtifact;
+  let toytown: Toytown;
+
+  beforeAll(() => {
+    artifact = JSON.parse(readFileSync(resolve(DATA, "toytown.json"), "utf8"));
+    toytown = decodeToytown(artifact);
+  });
+
+  it("has between 40 and 80 nodes — the design spec's toy-graph target range", () => {
+    expect(artifact.n).toBeGreaterThanOrEqual(40);
+    expect(artifact.n).toBeLessThanOrEqual(80);
+  });
+
+  it("is strongly connected: node 0 reaches every node, and every node reaches node 0", () => {
+    const { graph } = toytown;
+    // Forward reachability from 0 (to=-1 means "don't stop early", same
+    // convention src/toys/minitown.test.ts already uses for MINITOWN).
+    const fwd = dijkstraCsr(graph.n, graph.fwd, 0, -1);
+    expect(new Set(fwd.settled).size).toBe(graph.n);
+    // Backward reachability from 0, via the transposed graph — "every node
+    // reaches 0" on the original graph is exactly "0 reaches every node" on
+    // the transpose. Forward + backward reachability from the SAME node
+    // together prove strong connectivity (any u, v: u -> 0 via the
+    // transpose result, 0 -> v via the forward result, so u -> v).
+    const rev = transpose(graph.n, graph.fwd);
+    const bwd = dijkstraCsr(graph.n, rev, 0, -1);
+    expect(new Set(bwd.settled).size).toBe(graph.n);
+  });
+
+  it("CH distance equals Dijkstra distance for every ordered pair (exhaustive: n <= 80)", () => {
+    const { graph } = toytown;
+    const ch = buildCh(graph);
+    for (let a = 0; a < graph.n; a++) {
+      for (let b = 0; b < graph.n; b++) {
+        if (a === b) continue;
+        const dj = dijkstraCsr(graph.n, graph.fwd, a, b);
+        const chRes = chQuery(ch, a, b);
+        expect(chRes.dist, `${a}->${b}: CH unreachable`).toBeLessThan(Infinity);
+        expect(Math.round(chRes.dist * 10), `${a}->${b}`).toBe(Math.round(dj.dist * 10));
+      }
+    }
+  });
+
+  it("keeps public/data's total gzipped size, INCLUDING toytown.json, under the 4 MB budget", () => {
+    let total = 0;
+    for (const f of ["render.json", "routing.json", "meta.json", "toytown.json"])
+      total += gzipSync(readFileSync(resolve(DATA, f))).length;
+    expect(total).toBeLessThan(4 * 1024 * 1024);
+  });
+});
+
+describe.skipIf(haveToytown)("toytown artifact missing", () => {
+  it.todo("run pnpm data:build (needs the cached extract already fetched), commit public/data/toytown.json");
 });

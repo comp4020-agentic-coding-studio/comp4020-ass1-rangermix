@@ -60,3 +60,34 @@ export async function loadRouting(
     meta,
   };
 }
+
+/** The exact shape scripts/data/build.ts's emitToytown() writes to
+ * public/data/toytown.json: a small ANU-area drivable subgraph (bboxed,
+ * drivable-filtered, largest-SCC-kept, chain-contracted — same pipeline as
+ * the main graph, just cut down) for the /how/ toys to run on. Coordinates
+ * are quantized ints on the same 1e-5-degree grid as routing.json, but
+ * relative to THIS artifact's own bbox, not the main graph's. Each edge's
+ * `geometry` is its full point list (endpoints included) as ABSOLUTE
+ * quantized [x, y] pairs — not delta-encoded like render.json's lines, a
+ * deliberate simplicity-over-density choice at this artifact's tiny scale
+ * (see build.ts's emitToytown for the full rationale). Decoding (dequantize
+ * + build a Graph + project to screen space) lives in src/toys/toytown.ts's
+ * decodeToytown, not here — this interface only describes the fetched
+ * shape, same division of labor as RenderData/loadRender above. */
+export interface ToytownArtifact {
+  bbox: [number, number, number, number];
+  n: number;
+  lon: number[];
+  lat: number[];
+  edges: { from: number; to: number; w: number; geometry: [number, number][] }[];
+}
+
+/** Fetches public/data/toytown.json — the small ANU-area drivable subgraph
+ * the /how/ toys run on (replacing the old hand-made 12-node mini-town,
+ * src/toys/minitown.ts). Raw/undecoded: src/toys/toytown.ts's decodeToytown
+ * does the dequantize + Graph-build + screen-projection step, same split as
+ * loadRender/decodeLine. `base` is relative, same client-side-only contract
+ * as every other loader in this file. */
+export async function loadToytown(base = "./data/"): Promise<ToytownArtifact> {
+  return fetchJson<ToytownArtifact>(`${base}toytown.json`);
+}
