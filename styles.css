@@ -149,6 +149,38 @@ a {
   opacity: 0.5;
 }
 
+/* The two optional-racer toggle chips (A*, Bidirectional) — off by default.
+   aria-pressed carries the accessible on/off state (a screen reader hears
+   "pressed"/"not pressed" on a toggle button, no reliance on color alone);
+   the dot + tinted background/border give sighted users the same signal in
+   the racer's own validated roster hue, only once pressed. */
+.chip.algo-toggle::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.chip.algo-toggle[aria-pressed="true"][data-algo="astar"] {
+  border-color: var(--c-astar);
+  background: color-mix(in srgb, var(--c-astar) 14%, var(--panel));
+}
+
+.chip.algo-toggle[aria-pressed="true"][data-algo="astar"]::before {
+  background: var(--c-astar);
+}
+
+.chip.algo-toggle[aria-pressed="true"][data-algo="bidi"] {
+  border-color: var(--c-bidi);
+  background: color-mix(in srgb, var(--c-bidi) 14%, var(--panel));
+}
+
+.chip.algo-toggle[aria-pressed="true"][data-algo="bidi"]::before {
+  background: var(--c-bidi);
+}
+
 .site-head {
   border-bottom: 1px solid var(--line);
 }
@@ -311,6 +343,16 @@ a {
   margin: 0 0 16px;
 }
 
+/* `[hidden]` and `.board .row` are equal-ish specificity (two class
+   selectors beats one attribute selector); without this, an inactive
+   optional racer's row (A* or Bidirectional, hidden by default and toggled
+   via the chips in home.ts) would still lay out as an empty grid row
+   instead of disappearing — same fix, same reason, as .hier-loading[hidden]
+   elsewhere in this file. */
+.board .row[hidden] {
+  display: none;
+}
+
 .board .row .name,
 .board .row .val {
   font-family: var(--mono);
@@ -338,6 +380,14 @@ a {
 
 .board .row[data-algo="dijkstra"] .name::before {
   background: var(--c-dijkstra);
+}
+
+.board .row[data-algo="astar"] .name::before {
+  background: var(--c-astar);
+}
+
+.board .row[data-algo="bidi"] .name::before {
+  background: var(--c-bidi);
 }
 
 .board .row[data-algo="ch"] .name::before {
@@ -377,6 +427,16 @@ a {
 
 .board .row[data-algo="dijkstra"] .fill {
   background: var(--c-dijkstra);
+}
+
+.board .row[data-algo="astar"] .fill {
+  background: var(--c-astar);
+  min-width: 2px;
+}
+
+.board .row[data-algo="bidi"] .fill {
+  background: var(--c-bidi);
+  min-width: 2px;
 }
 
 .board .row[data-algo="ch"] .fill {

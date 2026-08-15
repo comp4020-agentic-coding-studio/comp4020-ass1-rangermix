@@ -39,6 +39,8 @@
           <button data-preset="diagonal" type="button" class="chip">Full diagonal</button>
           <button data-preset="anu-airport" type="button" class="chip">ANU → Airport</button>
           <button data-preset="surprise" type="button" class="chip">Surprise me</button>
+          <button data-testid="algo-astar" data-algo="astar" type="button" class="chip algo-toggle" aria-pressed="false">A*</button>
+          <button data-testid="algo-bidi" data-algo="bidi" type="button" class="chip algo-toggle" aria-pressed="false">Bidirectional</button>
           <span class="load-note" id="load-note">loading the road network…</span>
         </div>
       </section>
@@ -46,6 +48,14 @@
         <p class="headline" id="board-headline"></p>
         <div class="row" data-algo="dijkstra">
           <span class="name">Dijkstra</span><span class="val"></span>
+          <div class="track"><div class="fill"></div></div>
+        </div>
+        <div class="row" data-algo="astar" hidden>
+          <span class="name">A*</span><span class="val"></span>
+          <div class="track"><div class="fill"></div></div>
+        </div>
+        <div class="row" data-algo="bidi" hidden>
+          <span class="name">Bidirectional</span><span class="val"></span>
           <div class="track"><div class="fill"></div></div>
         </div>
         <div class="row" data-algo="ch">

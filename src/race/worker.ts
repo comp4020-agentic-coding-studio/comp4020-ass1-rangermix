@@ -27,8 +27,14 @@
 import { loadRouting } from "../data";
 import { dijkstraCsr } from "../algos/dijkstra";
 import { chQuery } from "../algos/chQuery";
+import { astar, MAX_SPEED_MPS } from "../algos/astar";
+import { bidijkstra } from "../algos/bidijkstra";
+import { transpose } from "../algos/graph";
+import { haversine } from "../snap";
+import type { SearchResult } from "../algos/dijkstra";
+import type { Csr, Graph } from "../algos/graph";
 
-export type Algo = "dijkstra" | "ch";
+export type Algo = "dijkstra" | "astar" | "bidi" | "ch";
 
 export interface RaceRequest {
   id: number;
@@ -75,11 +81,39 @@ function getRouting(base: string): ReturnType<typeof loadRouting> {
   return routingPromise;
 }
 
+// bidijkstra's backward search needs the transposed graph — built ONCE
+// (from the same cached `graph` every request already shares) and reused,
+// not rebuilt per query. Lazy, not eager alongside routingPromise: a race
+// that never toggles "bidi" on should never pay this O(n+m) cost at all.
+let gRev: Csr | undefined;
+function getGRev(graph: Graph): Csr {
+  if (!gRev) gRev = transpose(graph.n, graph.fwd);
+  return gRev;
+}
+
+/** Copies a SearchResult's settle log into a freshly-allocated, concretely
+ * ArrayBuffer-backed typed array before exposing `.buffer`, and shapes the
+ * rest into the wire AlgoResult — shared by dijkstra/astar/bidi below,
+ * which all return the same single-`settled`-array SearchResult shape (CH
+ * is the odd one out: two settle logs to merge, see its own block). The
+ * copy matters because SearchResult types `settled` as a bare `Uint32Array`
+ * (buffer type ArrayBufferLike, which admits SharedArrayBuffer), and this
+ * wire format promises a plain, transferable ArrayBuffer. */
+function shapeResult(r: SearchResult, ms: number): { result: AlgoResult; buffer: ArrayBuffer } {
+  const settled = new Uint32Array(r.settled.length);
+  settled.set(r.settled);
+  return {
+    result: { dist: r.dist, ms, relaxed: r.relaxed, settledCount: settled.length, settled: settled.buffer, path: r.path },
+    buffer: settled.buffer,
+  };
+}
+
 /** Runs the requested algorithms and shapes the wire response. Pure aside
  * from the one-time `loadRouting` fetch; exported so it's directly
  * callable/testable without a real Worker. Times each algo with
- * `performance.now()` around the call only (excludes routing load, which
- * only happens once and would otherwise make the first race look slow). */
+ * `performance.now()` around the call only (excludes routing load and
+ * gRev's one-time transpose, neither of which should make an algo's FIRST
+ * race look artificially slow). */
 export async function handleRequest(
   req: RaceRequest,
 ): Promise<{ response: RaceResponse; transfer: ArrayBuffer[] }> {
@@ -90,23 +124,33 @@ export async function handleRequest(
   if (req.algos.includes("dijkstra")) {
     const t0 = performance.now();
     const r = dijkstraCsr(graph.n, graph.fwd, req.from, req.to);
-    const ms = performance.now() - t0;
-    // Copy into a freshly-allocated, concretely-ArrayBuffer-backed typed
-    // array before exposing `.buffer`: dijkstra.ts's own SearchResult types
-    // `settled` as a bare `Uint32Array` (buffer type ArrayBufferLike, which
-    // admits SharedArrayBuffer), and this wire format promises a plain,
-    // transferable ArrayBuffer.
-    const settled = new Uint32Array(r.settled.length);
-    settled.set(r.settled);
-    results.dijkstra = {
-      dist: r.dist,
-      ms,
-      relaxed: r.relaxed,
-      settledCount: settled.length,
-      settled: settled.buffer,
-      path: r.path,
-    };
-    transfer.push(settled.buffer);
+    const { result, buffer } = shapeResult(r, performance.now() - t0);
+    results.dijkstra = result;
+    transfer.push(buffer);
+  }
+
+  if (req.algos.includes("astar")) {
+    const to = req.to;
+    // 100 km/h ceiling heuristic (see astar.ts's MAX_SPEED_MPS doc for the
+    // exact constant and the admissibility caveat, checked against the
+    // real data, that justifies it) — built here, not inside astar.ts,
+    // since astar() takes `h` as a parameter and stays agnostic to how the
+    // caller derives it.
+    const h = (v: number) => haversine(graph.lon[v], graph.lat[v], graph.lon[to], graph.lat[to]) / MAX_SPEED_MPS;
+    const t0 = performance.now();
+    const r = astar(graph, req.from, req.to, h);
+    const { result, buffer } = shapeResult(r, performance.now() - t0);
+    results.astar = result;
+    transfer.push(buffer);
+  }
+
+  if (req.algos.includes("bidi")) {
+    const rev = getGRev(graph);
+    const t0 = performance.now();
+    const r = bidijkstra(graph, rev, req.from, req.to);
+    const { result, buffer } = shapeResult(r, performance.now() - t0);
+    results.bidi = result;
+    transfer.push(buffer);
   }
 
   if (req.algos.includes("ch")) {

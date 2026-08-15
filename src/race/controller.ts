@@ -18,6 +18,27 @@ const REPLAY_MS = 2500;
 const DOT_RADIUS = 1.8;
 const DRAW_CAP = 4000; // see mapRenderer.strideFor: visual sampling cap per frame
 
+// Fixed roster order — Dijkstra and CH are the always-on core comparison
+// (disable-proof: no chip can turn them off); A* and Bidirectional are the
+// two optional racers toggled by chips. This order is never re-derived
+// from which chips happen to be active — scoreboard rows, replay draw
+// order (CH last so its sparks land on top of everything else), and the
+// aria announcement's clause order all read off THIS array so the three
+// surfaces can never disagree with each other.
+const ROSTER: Algo[] = ["dijkstra", "astar", "bidi", "ch"];
+
+// Matches the scoreboard's own static row labels (index.html) exactly, so
+// the spoken aria text and the visible row name are always the same word —
+// "Bidirectional", not "Bidirectional Dijkstra", both to keep the aria
+// sentence readable with four clauses and because the magenta row's label
+// IS this text (the accessibility "direct-label every row" obligation).
+const ALGO_LABEL: Record<Algo, string> = {
+  dijkstra: "Dijkstra",
+  astar: "A*",
+  bidi: "Bidirectional",
+  ch: "Contraction Hierarchies",
+};
+
 /** How many of `total` items should be visible at `elapsedMs` into a
  * `durationMs` replay: 0 before the replay starts, `total` once it's done,
  * a linear (floored, so it only ever grows) fraction in between. Pure and
@@ -42,15 +63,39 @@ export function headlineText(dijSettled: number, chSettled: number): string {
   return `${pct.toFixed(1)}% less work`;
 }
 
-/** The once-per-race aria text: canvas wrapper aria-label AND the
- * `race-live` region share this exact string. Settled counts use en-AU
+/** The once-per-race aria text for an arbitrary ROSTER-ORDER list of active
+ * racers — canvas wrapper aria-label AND the `race-live` region share this
+ * exact string. Only active racers are named (an inactive chip's algorithm
+ * never appears), which is why this takes the caller's own already-filtered
+ * `entries` rather than a fixed algorithm list. Settled counts use en-AU
  * thousands separators (matches the scoreboard rows); km is the haversine
- * route length, one decimal — never the graph's own travel-TIME distance. */
+ * route length, one decimal — never the graph's own travel-TIME distance.
+ * "intersections" establishes the unit after the FIRST racer only — every
+ * later clause reads as the same count of the same thing, exactly the
+ * pattern the original two-racer copy (Dijkstra/CH) already used, extended
+ * rather than replaced (see formatAnnouncement below, which is that
+ * original two-racer call written in terms of this one). */
+export function formatRosterAnnouncement(entries: { label: string; settled: number }[], km: number): string {
+  const clauses = entries.map((e, i) => {
+    const count = e.settled.toLocaleString("en-AU");
+    return i === 0 ? `${e.label} settled ${count} intersections` : `${e.label} settled ${count}`;
+  });
+  return `${clauses.join("; ")}. Same ${km.toFixed(1)} km route.`;
+}
+
+/** The MVP two-racer announcement (Dijkstra, CH) — kept as its own function
+ * (not inlined at call sites) because it's still exactly what a race with
+ * both optional chips OFF produces, and its exact copy is a pinned test
+ * contract. Implemented as a call into formatRosterAnnouncement rather than
+ * a second copy of the sentence-building logic, so the two can never drift
+ * apart. */
 export function formatAnnouncement(dijSettled: number, chSettled: number, km: number): string {
-  return (
-    `Dijkstra settled ${dijSettled.toLocaleString("en-AU")} intersections; ` +
-    `Contraction Hierarchies settled ${chSettled.toLocaleString("en-AU")}. ` +
-    `Same ${km.toFixed(1)} km route.`
+  return formatRosterAnnouncement(
+    [
+      { label: ALGO_LABEL.dijkstra, settled: dijSettled },
+      { label: ALGO_LABEL.ch, settled: chSettled },
+    ],
+    km,
   );
 }
 
@@ -113,14 +158,19 @@ export interface RaceUi {
   announce(text: string): void;
 }
 
+/** One racer's replay data for one frame — ROSTER-ordered inside Frame.layers
+ * (only ACTIVE racers present), so draw order and bar-scale max both fall
+ * out of "iterate the array", never a per-algo if/else. */
+interface AlgoLayer {
+  algo: Algo;
+  order: Uint32Array;
+  total: number;
+  stride: number;
+}
+
 interface Frame {
   graph: Graph;
-  dijOrder: Uint32Array;
-  dijTotal: number;
-  dijStride: number;
-  chOrder: Uint32Array;
-  chTotal: number;
-  chStride: number;
+  layers: AlgoLayer[];
   path: number[];
   pinA: number;
   pinB: number;
@@ -152,6 +202,14 @@ export class RaceController {
   // once at construction, again at the start of every replay (run()), and
   // on a real theme change.
   private colors: Record<string, string>;
+  // Which OPTIONAL racers (A*, Bidirectional) the chips currently have
+  // switched on — Dijkstra and CH need no such flag, they're unconditional
+  // in every run() call (disable-proof, the core comparison). Lives on the
+  // controller rather than being threaded through every run() call because
+  // run() has several independent callers (pin drag, presets, "R", the
+  // auto-run) that all need to respect whatever the chips currently say,
+  // not just whichever trigger happens to fire next.
+  private readonly optionalActive = new Set<"astar" | "bidi">();
 
   constructor(view: MapView, ui: RaceUi) {
     this.view = view;
@@ -189,6 +247,17 @@ export class RaceController {
     });
   }
 
+  /** Flips one optional racer's chip state for every FUTURE run() call
+   * (this race and on) — home.ts calls this from the chip's click handler,
+   * then re-races the current pins through the scheduler's cancel-first
+   * `now()` entry point (same as any other direct trigger), never `run()`
+   * directly. Dijkstra/CH have no equivalent: they're not in this set, and
+   * run() always includes them regardless. */
+  setAlgoActive(algo: "astar" | "bidi", active: boolean): void {
+    if (active) this.optionalActive.add(algo);
+    else this.optionalActive.delete(algo);
+  }
+
   private request(req: RaceRequest): Promise<RaceResponse> {
     return new Promise((resolve, reject) => {
       this.pending.set(req.id, { resolve, reject });
@@ -209,31 +278,32 @@ export class RaceController {
     c.elapsed = elapsedMs;
     const dark = effectiveTheme() === "dark";
     const colors = this.colors;
-    const upDij = sliceForFrame(c.dijTotal, elapsedMs, c.duration);
-    const upCh = sliceForFrame(c.chTotal, elapsedMs, c.duration);
-
-    this.view.clearOverlay();
-    this.view.drawDots(c.dijOrder, upDij, c.graph.lon, c.graph.lat, dark ? colors.dijkstraGlow : colors.dijkstra, {
-      additive: dark,
-      radius: DOT_RADIUS,
-      stride: c.dijStride,
-    });
-    this.view.drawDots(c.chOrder, upCh, c.graph.lon, c.graph.lat, dark ? colors.chGlow : colors.ch, {
-      additive: dark,
-      radius: DOT_RADIUS,
-      stride: c.chStride,
-    });
-    if (elapsedMs >= c.duration && c.path.length >= 2) this.view.drawRoute(c.path, c.graph.lon, c.graph.lat);
-    this.view.drawPin(c.graph.lon[c.pinA], c.graph.lat[c.pinA], "A");
-    this.view.drawPin(c.graph.lon[c.pinB], c.graph.lat[c.pinB], "B");
 
     // Bar width is "% of max" on a SHARED scale (design contract: CH's bar
     // reads as a sliver next to Dijkstra's full one) — each row's own total
-    // as its own denominator would make both bars end at 100%, erasing the
-    // entire visual point of the comparison.
-    const maxTotal = Math.max(c.dijTotal, c.chTotal);
-    this.ui.setRow("dijkstra", upDij, maxTotal);
-    this.ui.setRow("ch", upCh, maxTotal);
+    // as its own denominator would make every bar end at 100%, erasing the
+    // entire visual point of the comparison. "Max among ACTIVE racers"
+    // falls out for free here: c.layers only ever holds the racers THIS
+    // race actually ran (see run()), so an inactive algo's total can never
+    // enter the max.
+    const maxTotal = Math.max(...c.layers.map((l) => l.total));
+
+    this.view.clearOverlay();
+    // ROSTER order (c.layers is built in that order in run()) — CH is
+    // always last in the roster, so its sparks land visually on top of
+    // every other active racer's dots, per the design contract.
+    for (const layer of c.layers) {
+      const up = sliceForFrame(layer.total, elapsedMs, c.duration);
+      this.view.drawDots(
+        layer.order, up, c.graph.lon, c.graph.lat,
+        dark ? colors[`${layer.algo}Glow`] : colors[layer.algo],
+        { additive: dark, radius: DOT_RADIUS, stride: layer.stride },
+      );
+      this.ui.setRow(layer.algo, up, maxTotal);
+    }
+    if (elapsedMs >= c.duration && c.path.length >= 2) this.view.drawRoute(c.path, c.graph.lon, c.graph.lat);
+    this.view.drawPin(c.graph.lon[c.pinA], c.graph.lat[c.pinA], "A");
+    this.view.drawPin(c.graph.lon[c.pinB], c.graph.lat[c.pinB], "B");
   }
 
   private animate(token: number, duration: number): Promise<void> {
@@ -253,19 +323,25 @@ export class RaceController {
     });
   }
 
-  /** Computes (via the worker) and replays a Dijkstra-vs-CH race between two
-   * already-snapped node indices. Superseded races (a newer `run()` call
-   * landing while this one is still animating) bail out silently instead of
-   * fighting the newer race for the canvas. */
+  /** Computes (via the worker) and replays a race between two already-
+   * snapped node indices — Dijkstra and CH always, plus whichever optional
+   * racers the chips currently have active (see setAlgoActive). Superseded
+   * races (a newer `run()` call landing while this one is still animating)
+   * bail out silently instead of fighting the newer race for the canvas. */
   async run(fromNode: number, toNode: number): Promise<void> {
     const token = ++this.raceToken;
+    // ROSTER order, filtered to what's actually active this race — Dijkstra
+    // and CH unconditionally, A*/Bidirectional only if their chip is on.
+    // This exact array is also what gets requested from the worker, so
+    // "active this race" and "computed this race" can never disagree.
+    const algos: Algo[] = ROSTER.filter((a) => a === "dijkstra" || a === "ch" || this.optionalActive.has(a));
     const [{ graph }, res] = await Promise.all([
       this.routingPromise,
       this.request({
         id: ++this.nextId,
         from: fromNode,
         to: toNode,
-        algos: ["dijkstra", "ch"],
+        algos,
         dataBase: this.dataBase,
       }),
     ]);
@@ -275,8 +351,13 @@ export class RaceController {
     const ch = res.results.ch;
     if (!dij || !ch) return; // worker only omits a key if we didn't ask for it
 
-    const dijOrder = new Uint32Array(dij.settled);
-    const chOrder = new Uint32Array(ch.settled);
+    const active = algos
+      .map((algo) => ({ algo, label: ALGO_LABEL[algo], result: res.results[algo] }))
+      .filter((a): a is { algo: Algo; label: string; result: AlgoResult } => a.result !== undefined);
+    const layers: AlgoLayer[] = active.map(({ algo, result }) => {
+      const order = new Uint32Array(result.settled);
+      return { algo, order, total: result.settledCount, stride: strideFor(order.length, DRAW_CAP) };
+    });
     const path = ch.path.length >= 2 ? ch.path : dij.path; // prefer CH's unpacked path (equivalence guarantee)
 
     // Fresh snapshot for this replay, not a per-frame recompute (see the
@@ -284,37 +365,31 @@ export class RaceController {
     // no race was in flight (so no onThemeChange redraw was needed at the
     // time) landing correctly on the NEXT race regardless.
     this.colors = themeColors();
-    this.current = {
-      graph,
-      dijOrder,
-      dijTotal: dij.settledCount,
-      dijStride: strideFor(dijOrder.length, DRAW_CAP),
-      chOrder,
-      chTotal: ch.settledCount,
-      chStride: strideFor(chOrder.length, DRAW_CAP),
-      path,
-      pinA: fromNode,
-      pinB: toNode,
-      duration: REPLAY_MS,
-      elapsed: 0,
-    };
+    this.current = { graph, layers, path, pinA: fromNode, pinB: toNode, duration: REPLAY_MS, elapsed: 0 };
 
     if (isReducedMotion()) this.renderAt(REPLAY_MS);
     else await this.animate(token, REPLAY_MS);
     if (token !== this.raceToken) return;
 
-    this.reportResults(dij, ch, graph, path);
+    this.reportResults(active, dij, ch, graph, path);
   }
 
-  private reportResults(dij: AlgoResult, ch: AlgoResult, graph: Graph, path: number[]): void {
-    this.ui.setTime("dijkstra", dij.ms);
-    this.ui.setTime("ch", ch.ms);
+  private reportResults(
+    active: { algo: Algo; label: string; result: AlgoResult }[],
+    dij: AlgoResult, ch: AlgoResult, graph: Graph, path: number[],
+  ): void {
+    for (const a of active) this.ui.setTime(a.algo, a.result.ms);
+    // The headline stat is always Dijkstra-vs-CH specifically (the site's
+    // core claim), independent of which optional racers also ran.
     this.ui.setHeadline(headlineText(dij.settledCount, ch.settledCount));
     const km = pathKm(graph, path);
-    this.ui.announce(formatAnnouncement(dij.settledCount, ch.settledCount, km));
+    this.ui.announce(
+      formatRosterAnnouncement(active.map((a) => ({ label: a.label, settled: a.result.settledCount })), km),
+    );
     // /how/'s closing echo reads this back — same numbers the scoreboard
     // just showed, so the two can never disagree. try/catch: private-mode
-    // browsers throw on localStorage access.
+    // browsers throw on localStorage access. Keys stay dj/ch only (not
+    // extended to the optional racers) — the echo's contract predates them.
     try {
       localStorage.setItem(
         "hth-last-race",

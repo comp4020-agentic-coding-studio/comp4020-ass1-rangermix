@@ -53,6 +53,8 @@ function boot(): void {
   const loadNote = document.getElementById("load-note");
   const raceRunBtn = document.querySelector<HTMLButtonElement>('[data-testid="race-run"]');
   const controls = document.querySelector(".controls");
+  const astarChip = document.querySelector<HTMLButtonElement>('[data-testid="algo-astar"]');
+  const bidiChip = document.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]');
 
   if (
     !(baseCanvas instanceof HTMLCanvasElement) ||
@@ -311,6 +313,31 @@ function boot(): void {
   raceRunBtn?.addEventListener("click", () => {
     if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
   });
+
+  // The two optional-racer chips (A*, Bidirectional) — default OFF, real
+  // aria-pressed toggle buttons (Dijkstra/CH have no equivalent chip: they
+  // race unconditionally, the disable-proof core comparison). Toggling
+  // updates the controller's participation state for every future race
+  // AND re-races the current pins right away, through the same
+  // cancel-first `scheduler.now()` every other direct trigger (Race
+  // button, presets, "R") already goes through — so a toggle mid-drag
+  // never leaves a stale debounced race to fire later and silently
+  // override it. The matching scoreboard row is shown/hidden here too
+  // (not left empty): "rows for inactive algos hidden entirely" is a
+  // scoreboard-shape contract, not something RaceUi (a per-RACE reporting
+  // interface) owns.
+  function wireAlgoToggle(chip: HTMLButtonElement | null, algo: "astar" | "bidi"): void {
+    chip?.addEventListener("click", () => {
+      const active = chip.getAttribute("aria-pressed") !== "true";
+      chip.setAttribute("aria-pressed", String(active));
+      controller?.setAlgoActive(algo, active);
+      const row = document.querySelector(`.board .row[data-algo="${algo}"]`);
+      if (row instanceof HTMLElement) row.hidden = !active;
+      if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB); // direct trigger: cancels any pending debounce
+    });
+  }
+  wireAlgoToggle(astarChip, "astar");
+  wireAlgoToggle(bidiChip, "bidi");
 
   // render.json and routing.json load independently — nothing orders one
   // before the other — so routingReady's rejection can land BEFORE
