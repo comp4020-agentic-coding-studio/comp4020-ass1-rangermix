@@ -5,7 +5,31 @@
 // built on: projection fit, delta decode, threshold filter, dot stride math.
 
 import { describe, expect, it } from "vitest";
-import { decodeLine, fitTransform, strideFor, visibleLines } from "./mapRenderer";
+import {
+  clampPan,
+  composeView,
+  decodeLine,
+  fitTransform,
+  projectPoint,
+  strideFor,
+  unprojectPoint,
+  visibleLines,
+  zoomAbout,
+  type ViewState,
+} from "./mapRenderer";
+
+// Deterministic PRNG (mulberry32) for the seeded property tests below --
+// reproducible failures without pulling in a test dependency for it.
+function mulberry32(seed: number): () => number {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 describe("fitTransform", () => {
   // The real Canberra bbox (public/data/render.json) — deliberately NOT
@@ -139,5 +163,114 @@ describe("strideFor", () => {
 
   it("len 0 -> stride still clamps to 1 (no divide-by-zero/stall landmine for callers)", () => {
     expect(strideFor(0, 4000)).toBe(1);
+  });
+});
+
+// The zoom/pan view-transform layer (build-review amendment §14.2): a user
+// ViewState composed ON TOP of the fitted transform. MapView's own
+// zoomAt/panBy/resetView are thin (untested here, same jsdom-has-no-canvas
+// rationale as the rest of the class) wrappers around the pure functions
+// below, which carry the actual math and are what these tests exercise.
+
+describe("composeView", () => {
+  it("the identity view leaves the fit transform unchanged", () => {
+    const fit = { scale: 2, ox: 10, oy: 20 };
+    expect(composeView(fit, { scale: 1, tx: 0, ty: 0 })).toEqual(fit);
+  });
+
+  it("multiplies scale and scales the fit's own offset before adding the pan", () => {
+    const fit = { scale: 2, ox: 10, oy: 20 };
+    const view: ViewState = { scale: 3, tx: 5, ty: -4 };
+    const t = composeView(fit, view);
+    expect(t).toEqual({ scale: 6, ox: 10 * 3 + 5, oy: 20 * 3 - 4 });
+  });
+});
+
+describe("zoomAbout (anchor-preserving zoom)", () => {
+  it("the anchor's screen position is unchanged by the zoom (property, 200 seeded random states/anchors/factors, scale kept off the MIN_VIEW_SCALE reset boundary)", () => {
+    const rand = mulberry32(20260815);
+    for (let i = 0; i < 200; i++) {
+      // scale kept strictly inside (1, 8) and factor kept close to 1 so the
+      // result never lands exactly on MIN_VIEW_SCALE -- that transition
+      // deliberately resets tx/ty (tested on its own below) and would
+      // break the invariant this test checks.
+      const view: ViewState = { scale: 1.2 + rand() * 6, tx: (rand() - 0.5) * 400, ty: (rand() - 0.5) * 400 };
+      const cx = rand() * 900;
+      const cy = rand() * 600;
+      const factor = 0.7 + rand() * 0.6; // [0.7, 1.3]
+      // The fit-space point currently sitting under the screen anchor
+      // (cx, cy) -- same "invert then reapply" relationship project/
+      // unproject have, just inlined for this property check.
+      const fitX = (cx - view.tx) / view.scale;
+      const fitY = (cy - view.ty) / view.scale;
+      const after = zoomAbout(view, cx, cy, factor);
+      const screenXAfter = fitX * after.scale + after.tx;
+      const screenYAfter = fitY * after.scale + after.ty;
+      expect(Math.abs(screenXAfter - cx)).toBeLessThan(1e-6);
+      expect(Math.abs(screenYAfter - cy)).toBeLessThan(1e-6);
+    }
+  });
+
+  it("clamps the resulting scale to [1, 8]", () => {
+    expect(zoomAbout({ scale: 1, tx: 0, ty: 0 }, 0, 0, 100).scale).toBe(8);
+    expect(zoomAbout({ scale: 8, tx: 0, ty: 0 }, 0, 0, 100).scale).toBe(8);
+    expect(zoomAbout({ scale: 5, tx: 0, ty: 0 }, 0, 0, 0.0001).scale).toBe(1);
+  });
+
+  it("resets tx/ty to exactly 0 when the clamped scale lands at the minimum (the one deliberate exception to anchor preservation)", () => {
+    const after = zoomAbout({ scale: 3, tx: 120, ty: -80 }, 400, 300, 0.01);
+    expect(after).toEqual({ scale: 1, tx: 0, ty: 0 });
+  });
+
+  it("does NOT reset when scale merely clamps at the MAXIMUM -- only the minimum is special", () => {
+    const after = zoomAbout({ scale: 4, tx: 50, ty: 30 }, 100, 100, 100); // requests 400, clamped to 8
+    const ratio = 8 / 4;
+    expect(after).toEqual({ scale: 8, tx: 100 - (100 - 50) * ratio, ty: 100 - (100 - 30) * ratio });
+  });
+});
+
+describe("clampPan", () => {
+  it("a wildly out-of-range pan clamps to the 25%-visible boundary on each axis", () => {
+    const clamped = clampPan({ scale: 1, tx: 1000, ty: -1000 }, 800, 600);
+    expect(clamped).toEqual({ scale: 1, tx: 0.75 * 800, ty: 0.25 * 600 - 600 });
+  });
+
+  it("leaves an already in-bounds pan untouched", () => {
+    const view: ViewState = { scale: 3, tx: 50, ty: -30 };
+    expect(clampPan(view, 800, 600)).toEqual(view);
+  });
+
+  it("never lets the content fully leave the viewport: overlap stays >= 25% of each axis (property, 200 seeded random scales/viewport sizes/pans)", () => {
+    const rand = mulberry32(7);
+    for (let i = 0; i < 200; i++) {
+      const scale = 1 + rand() * 7;
+      const w = 300 + rand() * 1600;
+      const h = 300 + rand() * 1600;
+      const tx = (rand() - 0.5) * 10000;
+      const ty = (rand() - 0.5) * 10000;
+      const clamped = clampPan({ scale, tx, ty }, w, h);
+      const overlapX = Math.min(w, clamped.tx + w * scale) - Math.max(0, clamped.tx);
+      const overlapY = Math.min(h, clamped.ty + h * scale) - Math.max(0, clamped.ty);
+      expect(overlapX).toBeGreaterThanOrEqual(0.25 * w - 1e-6);
+      expect(overlapY).toBeGreaterThanOrEqual(0.25 * h - 1e-6);
+    }
+  });
+});
+
+describe("project/unproject round trip through a composed (fit + view) transform", () => {
+  it("unprojectPoint(projectPoint(p)) recovers the original geo point at random seeded view states", () => {
+    const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const rand = mulberry32(424242);
+    for (let i = 0; i < 200; i++) {
+      const view: ViewState = { scale: 1 + rand() * 7, tx: (rand() - 0.5) * 500, ty: (rand() - 0.5) * 500 };
+      const t = composeView(fit, view);
+      const lon = bbox[0] + rand() * (bbox[2] - bbox[0]);
+      const lat = bbox[1] + rand() * (bbox[3] - bbox[1]);
+      const [x, y] = projectPoint(bbox, t, lon, lat);
+      const [lon2, lat2] = unprojectPoint(bbox, t, x, y);
+      expect(lon2).toBeCloseTo(lon, 9);
+      expect(lat2).toBeCloseTo(lat, 9);
+    }
   });
 });

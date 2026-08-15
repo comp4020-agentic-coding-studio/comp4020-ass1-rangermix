@@ -319,6 +319,19 @@ a {
   gap: 16px;
 }
 
+/* Wraps .map-stack (the role="img" canvas pair) AND the zoom buttons, so
+   the buttons can sit visually "in the map corner" while staying OUTSIDE
+   the role="img" element in the DOM — interactive controls nested inside
+   role="img" is an accessibility anti-pattern (a screen reader is told to
+   treat the whole subtree as one opaque image, which can hide or garble
+   focusable descendants). .map-frame contributes no box of its own beyond
+   its children's (no padding/margin, map-stack is its only in-flow child),
+   so it exactly matches map-stack's footprint and every other rule that
+   used to target .map-stack's own position:relative box still lines up. */
+.map-frame {
+  position: relative;
+}
+
 .map-stack {
   position: relative;
   min-height: 72vh;
@@ -334,8 +347,50 @@ a {
   display: block;
   width: 100%;
   height: 100%;
-  cursor: crosshair;
+  cursor: grab;
   touch-action: none;
+}
+
+/* Positioned relative to .map-frame (a sibling of .map-stack, not a
+   descendant — see .map-frame's own comment), bottom-right corner, above
+   the canvases in normal DOM stacking order (later sibling paints on top,
+   no z-index needed) and never clipped by .map-stack's own
+   `overflow: hidden` since it isn't nested inside that box. */
+.zoom-controls {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.zoom-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 1.3rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--ink) 20%, transparent);
+}
+
+.zoom-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.zoom-btn:hover:not(:disabled) {
+  border-color: var(--c-ch);
 }
 
 .hero-copy {
@@ -396,12 +451,6 @@ a {
    this file. */
 .controls .load-note[hidden] {
   display: none;
-}
-
-.controls .hint {
-  color: var(--muted);
-  cursor: default;
-  pointer-events: none;
 }
 
 /* Racers / Routes groups (build-review amendment §14.4): a subtle recessed

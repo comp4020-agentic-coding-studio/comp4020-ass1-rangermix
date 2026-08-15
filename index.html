@@ -25,9 +25,15 @@
     </header>
     <main class="race-layout">
       <section class="hero">
-        <div class="map-stack" data-testid="race-canvas" role="img" aria-label="Map of Canberra's road network, ready to race.">
-          <canvas id="map-base"></canvas>
-          <canvas id="map-overlay"></canvas>
+        <div class="map-frame">
+          <div class="map-stack" data-testid="race-canvas" role="img" aria-label="Map of Canberra's road network. Drag a pin to move it, drag empty map to pan, scroll or pinch to zoom. Ready to race.">
+            <canvas id="map-base"></canvas>
+            <canvas id="map-overlay"></canvas>
+          </div>
+          <div class="zoom-controls">
+            <button data-testid="zoom-in" type="button" class="zoom-btn" aria-label="Zoom in" disabled>+</button>
+            <button data-testid="zoom-out" type="button" class="zoom-btn" aria-label="Zoom out" disabled>−</button>
+          </div>
         </div>
         <div class="hero-copy">
           <h1>Highway to Hill</h1>

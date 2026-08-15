@@ -1,7 +1,8 @@
 // Theme-aware canvas map renderer over public/data/render.json's road-line
 // artifact. Split deliberately into two halves:
 //
-//   1. Pure geometry/data functions (fitTransform, decodeLine, visibleLines,
+//   1. Pure geometry/data functions (fitTransform, composeView, zoomAbout,
+//      clampPan, projectPoint/unprojectPoint, decodeLine, visibleLines,
 //      strideFor) — no DOM, no canvas, fully unit-tested in
 //      mapRenderer.test.ts.
 //   2. `MapView`, a thin class wrapping two stacked <canvas> elements (a
@@ -46,11 +47,31 @@ function cosMidLat(bbox: [number, number, number, number]): number {
   return Math.cos(midLat * DEG2RAD);
 }
 
-function projectPoint(
+/** Geo -> screen through an arbitrary Transform (the fitted transform
+ * alone, or a fit composed with a view state via composeView — this
+ * function doesn't care which, it just applies scale+offset). Exported so
+ * MapView.project and the round-trip tests in mapRenderer.test.ts share
+ * the exact same math. */
+export function projectPoint(
   bbox: [number, number, number, number], t: Transform, lon: number, lat: number,
 ): [number, number] {
   const cosMid = cosMidLat(bbox);
   return [(lon - bbox[0]) * cosMid * t.scale + t.ox, (bbox[3] - lat) * t.scale + t.oy];
+}
+
+/** Screen -> geo: the exact algebraic inverse of projectPoint against the
+ * same Transform. Kept as its own pure function (not inlined in
+ * MapView.unproject) for the same reason projectPoint is one: round-trip
+ * project/unproject becomes a unit-testable property once both halves are
+ * plain functions of (bbox, Transform, ...). */
+export function unprojectPoint(
+  bbox: [number, number, number, number], t: Transform, x: number, y: number,
+): [number, number] {
+  const [minLon, , , maxLat] = bbox;
+  const cosMid = cosMidLat(bbox);
+  const lon = minLon + (x - t.ox) / (t.scale * cosMid);
+  const lat = maxLat - (y - t.oy) / t.scale;
+  return [lon, lat];
 }
 
 /** Fits `bbox` inside a `w`x`h` viewport with `pad` px of margin on every
@@ -72,6 +93,99 @@ export function fitTransform(
   const ox = pad + (availW - mapW * scale) / 2;
   const oy = pad + (availH - mapH * scale) / 2;
   return { scale, ox, oy };
+}
+
+/** A user-driven view transform composed ON TOP of the fitted transform
+ * (see composeView): `scale` multiplies the fit's own scale (clamped to
+ * [1, 8]), `tx`/`ty` are an additional screen-space pan offset in CSS px,
+ * applied AFTER the fit's own scale (so panning by 10px always moves the
+ * view by 10 screen px regardless of zoom level). The identity view (no
+ * zoom, no pan) is `{ scale: 1, tx: 0, ty: 0 }` — what a freshly
+ * constructed or resetView()'d MapView starts at. */
+export interface ViewState {
+  scale: number;
+  tx: number;
+  ty: number;
+}
+
+const MIN_VIEW_SCALE = 1;
+const MAX_VIEW_SCALE = 8;
+
+function clampViewScale(s: number): number {
+  return Math.min(MAX_VIEW_SCALE, Math.max(MIN_VIEW_SCALE, s));
+}
+
+/** Composes the fitted (geo -> screen) transform with a user ViewState
+ * into one effective Transform, so project()/unproject() have exactly one
+ * transform to apply/invert — the caller never reasons about "fit then
+ * view" as two separate steps. View-space screen coords are fit-space
+ * screen coords scaled by `view.scale` then offset by `(view.tx,
+ * view.ty)`: `screenView = screenFit * view.scale + (tx, ty)`. Composing
+ * two transforms of this scale+offset shape yields another transform of
+ * the exact same shape, which is what makes reusing projectPoint/
+ * unprojectPoint unchanged (just fed a composed Transform) correct,
+ * rather than needing separate "apply the view on top" code paths. */
+export function composeView(fit: Transform, view: ViewState): Transform {
+  return {
+    scale: fit.scale * view.scale,
+    ox: fit.ox * view.scale + view.tx,
+    oy: fit.oy * view.scale + view.ty,
+  };
+}
+
+/** Anchor-preserving zoom: returns the ViewState after scaling `view` by
+ * `factor` (>1 zooms in, <1 zooms out) about the SCREEN point `(cx, cy)`
+ * in CSS px — whatever geo point currently renders at `(cx, cy)` renders
+ * at `(cx, cy)` again after the zoom (the invariant mapRenderer.test.ts
+ * checks directly). The resulting scale is clamped to [1, 8]; if the
+ * clamped scale lands exactly at the minimum (fully zoomed out), tx/ty
+ * reset to 0 instead of preserving the anchor through that transition —
+ * "zoomed all the way out" is the canonical home position regardless of
+ * where the anchor was, not wherever the anchor math would otherwise leave
+ * the pan. That reset is the one deliberate exception to anchor
+ * preservation; everywhere else — including when the top clamp at scale 8
+ * kicks in — the anchor math runs against whatever the actual post-clamp
+ * scale turns out to be, so the invariant still holds exactly. Deliberately
+ * does NOT also run clampPan's pan-bounds clamp here: doing so could move
+ * tx/ty away from the anchor-preserving values computed below, breaking
+ * the exact invariant this function exists to guarantee. Pan bounds are
+ * panBy's job, not zoomAt's (see clampPan's own comment). */
+export function zoomAbout(view: ViewState, cx: number, cy: number, factor: number): ViewState {
+  const newScale = clampViewScale(view.scale * factor);
+  if (newScale === MIN_VIEW_SCALE) return { scale: MIN_VIEW_SCALE, tx: 0, ty: 0 };
+  const ratio = newScale / view.scale;
+  return { scale: newScale, tx: cx - (cx - view.tx) * ratio, ty: cy - (cy - view.ty) * ratio };
+}
+
+// The design spec's pan-clamp contract: "the fitted content never fully
+// leaves the viewport — keep >= 25% visible each axis" (build-review
+// amendment §14.2). clampPan treats the viewport's own CSS px size as a
+// proxy for the fitted content's extent at scale 1 (the content the fit
+// transform actually produces is inset from the viewport by PAD on the
+// limiting axis and centered with slack on the other, so this slightly
+// overstates the true content box on the slack axis) — a deliberate
+// simplification in the same spirit as this file's other
+// close-enough-and-documented approximations (the equirectangular
+// projection, the DPR cap): it can never UNDER-clamp (let content fully
+// vanish), which is the hard requirement, and PAD (24px) is small relative
+// to any real viewport.
+const MIN_VISIBLE_FRACTION = 0.25;
+
+/** Clamps `view`'s pan so the fitted content can't slide fully out of a
+ * `viewportW` x `viewportH` viewport — see the MIN_VISIBLE_FRACTION
+ * comment above for the exact contract and its one approximation. Used by
+ * panBy (drag-pan, wheel-drag, pinch-pan); deliberately NOT applied inside
+ * zoomAt (see zoomAbout's own comment on why). Assumes `view.scale >=
+ * MIN_VIEW_SCALE` (1), so the content is always at least viewport-sized on
+ * both axes and a real clamp interval always exists. */
+export function clampPan(view: ViewState, viewportW: number, viewportH: number): ViewState {
+  const clampAxis = (t: number, size: number): number => {
+    const contentSize = size * view.scale;
+    const min = MIN_VISIBLE_FRACTION * size - contentSize;
+    const max = (1 - MIN_VISIBLE_FRACTION) * size;
+    return Math.min(max, Math.max(min, t));
+  };
+  return { scale: view.scale, tx: clampAxis(view.tx, viewportW), ty: clampAxis(view.ty, viewportH) };
 }
 
 /** Reverses render.json's per-line encoding: `line[0]` is `cls`, `line[1]`
@@ -141,7 +255,15 @@ export class MapView {
   private readonly baseCtx: CanvasRenderingContext2D;
   private readonly overlayCtx: CanvasRenderingContext2D;
   private render: RenderData;
+  // `fit` is the raw geo->screen fit (recomputed on every resize()); `view`
+  // is the user's zoom/pan state, composed on top of it into `transform`
+  // (see recompose()) — project()/unproject() only ever touch `transform`,
+  // never `fit`/`view` directly, so they stay correct whichever changed
+  // most recently (a resize, or a zoomAt/panBy/resetView call).
+  private fit: Transform = { scale: 1, ox: 0, oy: 0 };
+  private view: ViewState = { scale: 1, tx: 0, ty: 0 };
   private transform: Transform = { scale: 1, ox: 0, oy: 0 };
+  private readonly viewChangeListeners: (() => void)[] = [];
   private pctThreshold: number | null = null;
   private emphasize = false;
   private dpr = 1;
@@ -180,7 +302,8 @@ export class MapView {
     this.cssHeight = this.baseCanvas.height / dpr;
     this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.transform = fitTransform(this.render.bbox, this.cssWidth, this.cssHeight, PAD);
+    this.fit = fitTransform(this.render.bbox, this.cssWidth, this.cssHeight, PAD);
+    this.recompose();
     this.drawBase();
   }
 
@@ -196,16 +319,75 @@ export class MapView {
     this.drawBase();
   }
 
+  private recompose(): void {
+    this.transform = composeView(this.fit, this.view);
+  }
+
+  private fireViewChange(): void {
+    for (const cb of this.viewChangeListeners) cb();
+  }
+
+  /** Registers `cb` to run after every zoomAt/panBy/resetView call (the
+   * base layer has already been redrawn by then, at the new projection) —
+   * the caller's hook for re-rendering whatever it owns on the OVERLAY
+   * (pins, and — mid-race — the current settle-flood/route frame), since
+   * MapView itself only ever owns the base layer's redraw (see this
+   * class's own doc comment on why the overlay redraw is always the
+   * caller's job). Multiple listeners supported (array, same pattern as
+   * theme.ts's onThemeChange) though home.ts currently registers just one. */
+  onViewChange(cb: () => void): void {
+    this.viewChangeListeners.push(cb);
+  }
+
+  /** Zooms by `factor` anchored at the screen point `(cx, cy)` in CSS px
+   * (see zoomAbout for the anchor-preserving math, the [1,8] scale clamp,
+   * and the zoomed-all-the-way-out reset) — wheel, pinch, and the +/-
+   * buttons all funnel through this one method. Redraws the base layer at
+   * the new projection and notifies onViewChange listeners. */
+  zoomAt(cx: number, cy: number, factor: number): void {
+    this.view = zoomAbout(this.view, cx, cy, factor);
+    this.recompose();
+    this.drawBase();
+    this.fireViewChange();
+  }
+
+  /** Pans the view by `(dx, dy)` CSS px, clamped so the fitted content can
+   * never fully leave the viewport (see clampPan). Redraws the base layer
+   * and notifies onViewChange listeners, same as zoomAt. */
+  panBy(dx: number, dy: number): void {
+    this.view = clampPan(
+      { scale: this.view.scale, tx: this.view.tx + dx, ty: this.view.ty + dy },
+      this.cssWidth,
+      this.cssHeight,
+    );
+    this.recompose();
+    this.drawBase();
+    this.fireViewChange();
+  }
+
+  /** Returns to the identity view (no zoom, no pan) — the same state a
+   * freshly constructed MapView starts at. */
+  resetView(): void {
+    this.view = { scale: 1, tx: 0, ty: 0 };
+    this.recompose();
+    this.drawBase();
+    this.fireViewChange();
+  }
+
+  /** Geo -> screen, through the fit+view composed transform (fit alone
+   * when the view is at identity) — every draw call (drawBase, drawDots,
+   * drawRoute, drawPin) and every caller's own hit-testing (home.ts's
+   * pinNear) goes through this one method, so zoom/pan is correct
+   * everywhere for free once `transform` is right. */
   project(lon: number, lat: number): [number, number] {
     return projectPoint(this.render.bbox, this.transform, lon, lat);
   }
 
+  /** Screen -> geo, the exact inverse of project() against the same
+   * composed transform — home.ts uses this for pin-drag snapping and pan
+   * math correctly at any zoom level. */
   unproject(x: number, y: number): [number, number] {
-    const [minLon, , , maxLat] = this.render.bbox;
-    const cosMid = cosMidLat(this.render.bbox);
-    const lon = minLon + (x - this.transform.ox) / (this.transform.scale * cosMid);
-    const lat = maxLat - (y - this.transform.oy) / this.transform.scale;
-    return [lon, lat];
+    return unprojectPoint(this.render.bbox, this.transform, x, y);
   }
 
   /** Traces one render.json line into `ctx`'s current path (decode + project

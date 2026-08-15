@@ -153,6 +153,19 @@ describe("spec: home page (/) contracts", () => {
   });
 
   it(
+    "zoom-in [data-testid=zoom-in] and zoom-out [data-testid=zoom-out] map-zoom controls are real buttons (build-review amendment §14.2 — the keyboard/a11y zoom path)",
+    () => {
+      const doc = pageDoc("index.html");
+      for (const testid of ["zoom-in", "zoom-out"]) {
+        const btn = doc?.querySelector(`[data-testid="${testid}"]`);
+        expect(btn, testid).toBeTruthy();
+        expect(btn?.tagName, testid).toBe("BUTTON");
+        expect(btn?.getAttribute("aria-label")?.trim(), testid).toBeTruthy();
+      }
+    },
+  );
+
+  it(
     `default preset [data-testid=${CONTRACTS.testids.presetHill}] "Gungahlin → Capital Hill" exists`,
     () => {
       const doc = pageDoc("index.html");
