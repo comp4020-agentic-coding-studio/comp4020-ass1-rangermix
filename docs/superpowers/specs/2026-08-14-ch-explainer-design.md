@@ -484,6 +484,51 @@ becomes the §14.10 list; the preset contract text becomes
 "Gungahlin → Capital Hill"; new testids `view-toggle` and `how-cta`;
 toy testids keep their names (order on the page changes).
 
+## 16. Second build review (user, 2026-08-16 — binding; governs over §5/§14 where they collide)
+
+**Home layout:**
+1. Footer content constrained to the page measure (same width as the main
+   content), vertical padding tightened — no more full-width tall band.
+2. Slim viewports (≤ ~520px): the theme toggle compacts to an icon-style
+   button (full meaning in aria-label) so the 390px header never wraps.
+3. Dijkstra and CH visually read as ALWAYS-ON (no toggle affordance, full
+   presence); A\* and Bidirectional read as optional toggles (switch/chip
+   affordance, dimmed-when-off but visibly enable-able).
+4. The group is called **"Algorithms"**, not "Racers".
+5. Consolidated right panel: algorithm selection merges INTO the scoreboard
+   itself (every algorithm is a row; optional rows carry their toggle);
+   below the rows, stacked full-width: **View toggle**, then **▶ Race
+   again**, then **How is that possible? →**. Routes stay in the bottom
+   strip.
+
+**Home map:**
+6. Starting any race zooms the viewport to the A–B bounds with pleasant
+   padding (~15%).
+7. A new button above the zoom pair toggles A–B-bounds zoom ⇄ whole-map
+   fit (testid `zoom-fit`).
+8. Light mode gets a density effect equivalent to dark's additive glow:
+   overlapping dots deepen (multiply-style compositing) so search density
+   reads in both themes.
+9. BUG: the dot/route overlay lags one step behind the base map on
+   zoom/pan. Both layers must apply the SAME view state in the SAME frame.
+10. Performance: overlay view should be smooth; compare view currently
+    lags significantly. Interaction-time base-layer caching (blit the
+    cached bitmap during pan/zoom, re-stroke crisply on idle) and overlay
+    draw batching; target ≥ ~40 fps overlay and ≥ ~30 fps 4-panel compare
+    during interaction on this machine, measured honestly.
+11. Switching Overlay ⇄ Compare preserves the map's focus: the view state
+    becomes GEO-ANCHORED (centre + span), so different panel geometries
+    show the same place.
+
+**How page:**
+12. The toy graph moves to a Canberra area with a CLEAR road hierarchy
+    (an arterial with feeder locals — e.g. the Northbourne corridor);
+    same 40–80 node target, same sensors (incl. the shortcut-pair one).
+13. The query chapter becomes a LINKED TWO-VIEW demo: the computed
+    hierarchy (rank-lifted graph) on top and the mini street map below,
+    visitor picks A/B on the MAP, and the query's progress animates in
+    BOTH views simultaneously.
+
 ## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
