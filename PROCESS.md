@@ -10,7 +10,10 @@ numbers measured in your own browser. Page two explains where the speed
 comes from with five toys that run the same algorithm code as the race.
 Built design-first: spec and annotated mockup, then a task-by-task plan
 executed with fresh implementer subagents and a reviewer gate per task
-(ledger of every round in the commit trail).
+(ledger of every round in the commit trail). A second round folded the
+live build review back through the same spec-amend → plan → gate loop:
+drag-and-zoom maps, a per-algorithm compare view, and the explainer
+rebuilt intuition-first on a real ANU street subgraph.
 
 ![The race at 1920 dark: Dijkstra's flood vs CH's sparks](docs/evidence/race-final-1920-dark.png)
 
@@ -34,16 +37,16 @@ executed with fresh implementer subagents and a reviewer gate per task
    task closed.
    [`d82d677...60fae72`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/d82d677...60fae72)
 
-3. **The wall-time tile undersold the whole thesis — the fix was proven
-   byte-identical.** A cold run showed "3.6 ms vs 2.7 ms" beside "13,249 vs
-   238 settled": per-query allocation (~1.3 MB) was drowning CH's real cost
-   in GC noise. Persistent scratch buffers fixed it (CH 0.3–0.6 ms vs
-   Dijkstra 1.8–2.9 ms across five races, zero inversions) — and the
-   regenerated benchmark in `meta.json` came out byte-identical, proving
-   the refactor changed nothing semantically. Same commit, same standard:
-   the hierarchy slider's "top 2%" label turned out to retain 0.025% of
-   roads; it now computes percentiles from the loaded data every mount.
-   [`3844dc0`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/commit/3844dc0)
+3. **User feedback became spec before it became code.** The build review
+   ("mini-town is boring — use real ANU streets"; "I have no idea what
+   Race, To the Hill and Full diagonal means") went into the design spec
+   as twelve binding amendments (§14) with their own contract tests, then
+   through the same task/review loop as everything else. That loop earned
+   its keep twice: the "footer out of style" complaint root-caused to a
+   curly-quote `class=”site-foot”` typo a previous fix wave had shipped,
+   and the new pan-clamp's property tests caught the fixer's own first
+   attempt still being wrong (189/200 seeded failures) before it landed.
+   [`b078bfd...aa22fdb`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...aa22fdb)
 
 4. **Exactness over drama.** The final review measured a 153 km/h
    quantization artifact in the graph, which made A\*'s 100 km/h heuristic
