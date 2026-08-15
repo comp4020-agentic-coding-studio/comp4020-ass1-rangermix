@@ -21,6 +21,20 @@ import { MapView } from "../viz/mapRenderer";
 const KEEP_FRACS: (number | null)[] = [null, 0.35, 0.12, 0.02];
 const STEP_LABELS = ["every road", "top 35%", "top 12%", "top 2%"];
 
+// Round 4: the short STEP_LABELS above are the compact "roads shown: X"
+// inline label; these are the longer per-stop narration this task added —
+// same 4 steps, in order, AUGMENTING (not replacing) the short label via
+// their own caption element. The static "notice: the lake bridges
+// survive…" line lives in how/index.html, outside this toy, and stays as
+// written — these captions are the missing per-step context that made the
+// filtered steps read as fragments instead of a skeleton OF the city.
+const STEP_CAPTIONS = [
+  "every drivable street",
+  "suburbia fades; the arterial skeleton emerges",
+  "only the arterials and their junctions remain",
+  "the load-bearing heart: the lake crossings and the interchanges everything funnels through",
+];
+
 /** The byte-valued `pct` threshold (0-255) that keeps (at least) `keepFrac`
  * of `lines` under `visibleLines`'s `pct >= threshold` rule. Computed from
  * the ACTUAL loaded data every mount, not a guessed constant: an earlier
@@ -53,6 +67,7 @@ function skeletonMarkup(): string {
     `<canvas data-role="overlay"></canvas>` +
     `<p class="hier-loading" data-role="loading">loading the road network…</p>` +
     `</div>` +
+    `<p class="caption" data-role="caption">${STEP_CAPTIONS[0]}</p>` +
     `<div class="hier-controls">` +
     `<label for="hier-range">roads shown: <output data-role="output" for="hier-range">${STEP_LABELS[0]}</output></label>` +
     `<input type="range" id="hier-range" min="0" max="3" step="1" value="0" data-role="range" disabled />` +
@@ -68,6 +83,7 @@ export function mountHierarchy(root: HTMLElement): void {
   const overlayCanvas = root.querySelector<HTMLCanvasElement>('[data-role="overlay"]');
   const loading = root.querySelector<HTMLElement>('[data-role="loading"]');
   const output = root.querySelector<HTMLOutputElement>('[data-role="output"]');
+  const caption = root.querySelector<HTMLElement>('[data-role="caption"]');
   const range = root.querySelector<HTMLInputElement>('[data-role="range"]');
 
   if (!(baseCanvas instanceof HTMLCanvasElement) || !(overlayCanvas instanceof HTMLCanvasElement)) {
@@ -85,6 +101,7 @@ export function mountHierarchy(root: HTMLElement): void {
     const clamped = Math.min(pctSteps.length - 1, Math.max(0, step));
     const label = STEP_LABELS[clamped];
     if (output) output.textContent = label;
+    if (caption) caption.textContent = STEP_CAPTIONS[clamped];
     if (stack) {
       stack.setAttribute("aria-label", `Map of Canberra's road network, ${label} shown.`);
     }

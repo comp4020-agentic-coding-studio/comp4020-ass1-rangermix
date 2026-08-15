@@ -115,6 +115,15 @@ export function strideFor(len: number, cap = 4000): number {
 
 const PAD = 24; // px of margin fitTransform keeps around the fitted bbox
 
+// Ghost-underlay alpha for the hierarchy toy's filtered steps (round 4 fix):
+// once a pct threshold hides most of the network, the retained lines alone
+// read as fragments floating in a void — drawing the FULL network first, at
+// this near-invisible alpha, gives the eye the remembered shape of the
+// whole city to read the highlighted subset against. `--road`'s own alpha
+// (0.55, used for the unfiltered base layer) would still swamp the
+// emphasis; this sits an order of magnitude fainter, per spec (0.05-0.08).
+const GHOST_ALPHA = 0.07;
+
 /** Owns the two stacked canvases the home page's race (and /how/'s
  * hierarchy toy, which reuses the same data) paint into: `base` is the
  * static road network, redrawn only on resize/theme-change/threshold
@@ -199,11 +208,35 @@ export class MapView {
     return [lon, lat];
   }
 
-  /** Paints the static road network: ground fill, then every visible line
-   * (per the current pct threshold), class-weighted width/alpha, major
-   * roads (cls >= 2) in `roadMajor`, the rest in `road`. Called on
-   * construction, resize, threshold change, and automatically on every
-   * theme change (subscribed in the constructor). */
+  /** Traces one render.json line into `ctx`'s current path (decode + project
+   * + moveTo/lineTo) without touching stroke style — the caller sets
+   * strokeStyle/lineWidth/globalAlpha and calls `stroke()`. Returns false
+   * (nothing traced) for a degenerate single-point line, matching the old
+   * inline `if (pts.length < 2) continue`. Shared by drawBase's ghost pass
+   * and its retained-lines pass so the decode/project walk exists once. */
+  private tracePath(ctx: CanvasRenderingContext2D, line: number[]): boolean {
+    const pts = decodeLine(line, this.render.bbox);
+    if (pts.length < 2) return false;
+    ctx.beginPath();
+    const [x0, y0] = this.project(pts[0][0], pts[0][1]);
+    ctx.moveTo(x0, y0);
+    for (let i = 1; i < pts.length; i++) {
+      const [x, y] = this.project(pts[i][0], pts[i][1]);
+      ctx.lineTo(x, y);
+    }
+    return true;
+  }
+
+  /** Paints the static road network: ground fill, then (once a pct
+   * threshold is filtering the view — the hierarchy toy's "top k%" steps)
+   * an ultra-faint ghost pass of the FULL, unfiltered network so the
+   * retained lines read as a highlighted subset of the remembered whole
+   * city rather than fragments in a void, then every visible line (per the
+   * current pct threshold), class-weighted width/alpha, major roads
+   * (cls >= 2) in `roadMajor`, the rest in `road` (or the CH-blue emphasis
+   * family when `emphasize` is set). Called on construction, resize,
+   * threshold change, and automatically on every theme change (subscribed
+   * in the constructor). */
   drawBase(): void {
     const ctx = this.baseCtx;
     const colors = themeColors();
@@ -213,17 +246,17 @@ export class MapView {
     ctx.fillRect(0, 0, this.cssWidth, this.cssHeight);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    for (const line of visibleLines(this.render.lines, this.pctThreshold)) {
-      const pts = decodeLine(line, this.render.bbox);
-      if (pts.length < 2) continue;
-      const major = line[0] >= 2;
-      ctx.beginPath();
-      const [x0, y0] = this.project(pts[0][0], pts[0][1]);
-      ctx.moveTo(x0, y0);
-      for (let i = 1; i < pts.length; i++) {
-        const [x, y] = this.project(pts[i][0], pts[i][1]);
-        ctx.lineTo(x, y);
+    if (this.pctThreshold !== null) {
+      ctx.strokeStyle = colors.road;
+      ctx.globalAlpha = GHOST_ALPHA;
+      ctx.lineWidth = 1;
+      for (const line of this.render.lines) {
+        if (this.tracePath(ctx, line)) ctx.stroke();
       }
+    }
+    for (const line of visibleLines(this.render.lines, this.pctThreshold)) {
+      const major = line[0] >= 2;
+      if (!this.tracePath(ctx, line)) continue;
       ctx.strokeStyle = this.emphasize ? colors.ch : (major ? colors.roadMajor : colors.road);
       ctx.globalAlpha = major ? 0.9 : 0.55;
       ctx.lineWidth = (major ? 1.6 : 1) + (this.emphasize ? 0.6 : 0);
