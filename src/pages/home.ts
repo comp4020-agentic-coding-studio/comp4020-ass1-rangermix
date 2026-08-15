@@ -364,6 +364,15 @@ function boot(): void {
       controller = new RaceController(view, ui);
       if (loadNote) loadNote.hidden = true;
       if (raceRunBtn) raceRunBtn.disabled = false;
+      // Ship disabled (index.html) so a pre-load click can't flip
+      // aria-pressed / un-hide a scoreboard row that has nothing to show
+      // yet (unlike the preset buttons, which no-op silently on their own
+      // `if (!graph) return` guard, a chip's own click handler has a
+      // visible side effect — aria-pressed, row.hidden — before it ever
+      // checks whether `controller` exists, so disabling until ready is
+      // the honest fix here, not a redundant belt-and-braces one).
+      if (astarChip) astarChip.disabled = false;
+      if (bidiChip) bidiChip.disabled = false;
 
       // Pins pre-placed on the signature preset (design spec's "Ready /
       // idle" state) as soon as routing lets us snap them — independent of

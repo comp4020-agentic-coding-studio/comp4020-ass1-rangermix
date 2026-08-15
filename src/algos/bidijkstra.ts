@@ -61,7 +61,47 @@ function peekKey(h: MinHeap): number {
  * points chQuery.ts's `climb()` uses (at settle time and at relax time) —
  * mirrored here over the plain graph/gRev CSRs instead of CH's up/downRev,
  * so `parent` stores a NODE id (this algorithm needs no shortcut-unpacking
- * step the way CH does, so there's nothing an edge id would buy here). */
+ * step the way CH does, so there's nothing an edge id would buy here).
+ *
+ * PROOF NOTE — why requiring BOTH sides done (not just one, not just
+ * "touched") never misses the true optimum, given bidijkstra's own
+ * `topF + topB >= best` termination (see that function's doc):
+ *
+ * `best` is always an upper bound on the true distance d*: every value
+ * ever assigned to it is `distF(x) + distB(x)` for a node x already done
+ * on both sides — i.e. the length of a REAL from->x->to path — so
+ * `best >= d*` always (nothing shorter than shortest can exist).
+ *
+ * Let m be ANY node on SOME shortest from->to path, so
+ * `distF(m) + distB(m) = d*` exactly. Two cases, every time the
+ * termination check runs:
+ *   - m is already done on BOTH sides -> this function already caught it
+ *     (at m's own settle time, or the moment the second side relaxed an
+ *     edge into it) and set `best <= d*`. Combined with `best >= d*`
+ *     above, `best = d*` exactly from that point on.
+ *   - m is NOT yet done on both sides -> by Dijkstra's own settle-order
+ *     invariant (a side only ever pops nodes in non-decreasing true
+ *     distance), whichever side hasn't finished with m has
+ *     `trueDist(m) >= that side's current top`. So
+ *     `d* = distF(m) + distB(m) >= topF + topB`. Since `best >= d*` too,
+ *     this gives `topF + topB <= d* <= best` — so the moment `best` is
+ *     STILL strictly above `d*`, `topF + topB` is STILL strictly below
+ *     `best`, and the loop correctly keeps going instead of stopping short.
+ *
+ * Together: `topF + topB >= best` can only become true once `best` has
+ * already reached `d*` — termination is exact, not approximate, no
+ * post-hoc full-graph scan needed (unlike chQuery.ts's, which exists
+ * specifically to cover ITS sequential-not-interleaved shortcut).
+ *
+ * One more thing worth knowing, not load-bearing for the proof above but
+ * useful for reasoning about the common case: `from` becomes done on the
+ * forward side on the very FIRST outer-loop iteration (both heaps start
+ * at size 1, the size-tie-break in bidijkstra() below favours forward,
+ * and `from` is forward's only — and cheapest possible, key 0 — entry),
+ * and `to` becomes done on the backward side similarly early. So the
+ * simplest candidates (from or to itself lying on an optimal path) are
+ * typically found almost immediately, well before the tight bound above
+ * is the thing doing the work. */
 function step(
   csr: Csr, s: Scratch, other: Scratch, settled: number[],
   best: { d: number; meet: number }, counters: { relaxed: number },

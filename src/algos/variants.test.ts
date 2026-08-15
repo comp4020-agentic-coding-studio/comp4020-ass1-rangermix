@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { astar, MAX_SPEED_MPS } from "./astar";
+import { astar, MAX_SPEED_MPS, maxEdgeSpeedMps, VMAX_SAFETY_MARGIN } from "./astar";
 import { bidijkstra } from "./bidijkstra";
 import { dijkstra, dijkstraCsr } from "./dijkstra";
 import { chQuery } from "./chQuery";
@@ -53,13 +53,17 @@ function coordGraph(
   return { g, edges };
 }
 
-/** The haversine/MAX_SPEED_MPS heuristic astar's worker.ts caller builds,
- * bound to a fixed target — matches the interface binding exactly
- * (`h(v) = haversineMeters(v, to) / 27.7778`; see astar.ts's own doc on
- * MAX_SPEED_MPS for the precise constant and why 100 km/h stays safe on
- * the real shipped graph despite a few 110 km/h-tagged segments). */
-function haversineHeuristic(g: Graph, to: number): (v: number) => number {
-  return (v: number) => haversine(g.lon[v], g.lat[v], g.lon[to], g.lat[to]) / MAX_SPEED_MPS;
+/** The haversine/speed heuristic astar's worker.ts caller builds, bound to
+ * a fixed target — matches the interface binding's shape
+ * (`h(v) = haversineMeters(v, to) / speed`). `speed` defaults to the fixed
+ * `MAX_SPEED_MPS` for the synthetic/toy graphs above and below, which build
+ * their OWN weights from that same constant (admissible by construction,
+ * no real-world speed data involved). The real-graph section further down
+ * passes a per-graph `maxEdgeSpeedMps`-derived ceiling instead — see
+ * astar.ts's own doc on why a fixed constant measurably isn't safe enough
+ * there. */
+function haversineHeuristic(g: Graph, to: number, speed: number = MAX_SPEED_MPS): (v: number) => number {
+  return (v: number) => haversine(g.lon[v], g.lat[v], g.lon[to], g.lat[to]) / speed;
 }
 
 /**
@@ -222,14 +226,52 @@ describe.skipIf(!haveArtifacts)("astar on the shipped Canberra graph (real-graph
   // describe.skipIf still EXECUTES this callback body while vitest collects
   // tests (only the `it`s inside are skipped) — so the artifact read lives
   // in beforeAll, not a top-level statement, exactly like spec/data.test.ts.
+  let routing: RoutingArtifact;
   let graph: Graph;
   let ch: Ch;
+  let vMax: number;
 
   beforeAll(() => {
-    const routing: RoutingArtifact = JSON.parse(readFileSync(resolve(DATA, "routing.json"), "utf8"));
+    routing = JSON.parse(readFileSync(resolve(DATA, "routing.json"), "utf8"));
     graph = graphFromArtifact(routing);
     ch = chFromArtifact(routing);
+    vMax = maxEdgeSpeedMps(graph) * VMAX_SAFETY_MARGIN;
   });
+
+  it(
+    "the derived heuristic ceiling covers every real edge's true speed, " +
+      "independently re-checked straight against routing.json's raw arrays",
+    () => {
+      // A genuinely SEPARATE code path from maxEdgeSpeedMps's own CSR
+      // traversal — a plain scan over routing.json's raw from/to/w arrays,
+      // filtered to originals (childA < 0, same test graphFromArtifact
+      // itself uses) — so this catches a scan bug in EITHER direction
+      // (missed edges, double-counted ones), not just a rounding blip from
+      // reusing the same computation twice.
+      const [minLon, minLat] = routing.bbox;
+      const lon = routing.lon.map((v) => minLon + v / 1e5);
+      const lat = routing.lat.map((v) => minLat + v / 1e5);
+      let independentMax = 0;
+      for (let i = 0; i < routing.childA.length; i++) {
+        if (routing.childA[i] >= 0) continue; // CH shortcut, not an original edge — skip
+        const w = routing.w[i] / 10;
+        if (w <= 0) continue;
+        const u = routing.from[i];
+        const v = routing.to[i];
+        const speed = haversine(lon[u], lat[u], lon[v], lat[v]) / w;
+        if (speed > independentMax) independentMax = speed;
+      }
+
+      const rawMax = maxEdgeSpeedMps(graph);
+      expect(rawMax, "maxEdgeSpeedMps itself must already reach the independently-scanned max").toBeGreaterThanOrEqual(independentMax);
+      expect(vMax, "the margin-applied ceiling must clear the independently-scanned max too").toBeGreaterThanOrEqual(independentMax);
+      // Documents WHY this replaced a fixed constant: the real graph's
+      // true ceiling is measurably above the naive 100 km/h assumption
+      // (exhaustive scan found 66/59,961 original edges over it) — this
+      // isn't a vacuous check, the derived value is genuinely different.
+      expect(vMax, "the whole point of deriving this: it's above the old fixed 100 km/h assumption").toBeGreaterThan(MAX_SPEED_MPS);
+    },
+  );
 
   it(
     "astar, chQuery, and dijkstra agree on distance (decisecond rounding) " +
@@ -240,7 +282,7 @@ describe.skipIf(!haveArtifacts)("astar on the shipped Canberra graph (real-graph
         const from = Math.floor(rand() * graph.n);
         const to = Math.floor(rand() * graph.n);
         const label = `pair ${i} (${from}->${to})`;
-        const h = haversineHeuristic(graph, to);
+        const h = haversineHeuristic(graph, to, vMax);
         const dj = dijkstraCsr(graph.n, graph.fwd, from, to);
         const a = astar(graph, from, to, h);
         const c = chQuery(ch, from, to);

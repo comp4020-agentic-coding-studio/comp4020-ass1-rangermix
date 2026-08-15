@@ -27,7 +27,7 @@
 import { loadRouting } from "../data";
 import { dijkstraCsr } from "../algos/dijkstra";
 import { chQuery } from "../algos/chQuery";
-import { astar, MAX_SPEED_MPS } from "../algos/astar";
+import { astar, maxEdgeSpeedMps, VMAX_SAFETY_MARGIN } from "../algos/astar";
 import { bidijkstra } from "../algos/bidijkstra";
 import { transpose } from "../algos/graph";
 import { haversine } from "../snap";
@@ -91,6 +91,20 @@ function getGRev(graph: Graph): Csr {
   return gRev;
 }
 
+// astar's heuristic ceiling — derived from the graph's OWN data (see
+// astar.ts's `maxEdgeSpeedMps` doc for why a fixed constant measurably
+// isn't safe enough here), computed ONCE per graph and cached exactly like
+// `gRev` above, right next to it: a race that never toggles "astar" on
+// should never pay this O(edges) scan either. `* VMAX_SAFETY_MARGIN`
+// applied once, here, so both the worker and variants.test.ts's real-graph
+// check derive the identical ceiling from the identical two building
+// blocks (astar.ts exports both).
+let vMax: number | undefined;
+function getVMax(graph: Graph): number {
+  if (vMax === undefined) vMax = maxEdgeSpeedMps(graph) * VMAX_SAFETY_MARGIN;
+  return vMax;
+}
+
 /** Copies a SearchResult's settle log into a freshly-allocated, concretely
  * ArrayBuffer-backed typed array before exposing `.buffer`, and shapes the
  * rest into the wire AlgoResult — shared by dijkstra/astar/bidi below,
@@ -131,12 +145,13 @@ export async function handleRequest(
 
   if (req.algos.includes("astar")) {
     const to = req.to;
-    // 100 km/h ceiling heuristic (see astar.ts's MAX_SPEED_MPS doc for the
-    // exact constant and the admissibility caveat, checked against the
-    // real data, that justifies it) — built here, not inside astar.ts,
+    // Heuristic ceiling derived from THIS graph's own edges (getVMax,
+    // above), not a fixed constant — built here, not inside astar.ts,
     // since astar() takes `h` as a parameter and stays agnostic to how the
-    // caller derives it.
-    const h = (v: number) => haversine(graph.lon[v], graph.lat[v], graph.lon[to], graph.lat[to]) / MAX_SPEED_MPS;
+    // caller derives it. Excluded from the `ms` bracket below: it's a
+    // one-time (cached) scan, same reasoning as gRev's transpose.
+    const speed = getVMax(graph);
+    const h = (v: number) => haversine(graph.lon[v], graph.lat[v], graph.lon[to], graph.lat[to]) / speed;
     const t0 = performance.now();
     const r = astar(graph, req.from, req.to, h);
     const { result, buffer } = shapeResult(r, performance.now() - t0);
