@@ -201,6 +201,47 @@ const MIN_VISIBLE_FRACTION = 0.25;
  * (see zoomAbout's own comment on why). Assumes `view.scale >=
  * MIN_VIEW_SCALE` (1), so a real clamp interval always exists on both
  * axes (in fact `min <= max` holds for any non-negative size/contentSize). */
+/** A tiny observable holding ONE shared user view — the mechanism build-
+ * review amendment §14.3's Compare mode is built on: pan/zoom in ANY panel
+ * (or the overlay map) moves every panel, because every MapView sharing a
+ * store recomposes/redraws off the same `get()`/`subscribe()` pair rather
+ * than owning a private ViewState of its own. Deliberately minimal — no
+ * middleware, no selectors, `set()` always replaces the whole ViewState —
+ * because the only thing ever stored is a ViewState and the only consumer
+ * is MapView. `subscribe()` does NOT fire on registration, only on a LATER
+ * `set()` (matches theme.ts's onThemeChange: register-then-wait, not
+ * register-then-replay), and — unlike onThemeChange — returns a REAL
+ * unsubscribe function; MapView.dispose() depends on that (see its own
+ * comment for why: a Compare panel gets constructed and discarded
+ * repeatedly, which theme.ts's existing callers never did). */
+export interface ViewStore {
+  get(): ViewState;
+  set(view: ViewState): void;
+  subscribe(cb: (view: ViewState) => void): () => void;
+}
+
+/** Creates a ViewStore, defaulting to the identity view (no zoom, no pan —
+ * the same starting state a standalone MapView has always used). A MapView
+ * constructed with no explicit store creates its own private one via this
+ * same function, so single-instance callers (the /how/ toys) are unaffected
+ * — sharing a store is opt-in, by passing the SAME store instance to every
+ * MapView that should move together. */
+export function createViewStore(initial: ViewState = { scale: 1, tx: 0, ty: 0 }): ViewStore {
+  let state = initial;
+  const listeners = new Set<(view: ViewState) => void>();
+  return {
+    get: () => state,
+    set(next) {
+      state = next;
+      for (const cb of listeners) cb(state);
+    },
+    subscribe(cb) {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+  };
+}
+
 export function clampPan(
   view: ViewState, fit: Transform, viewportW: number, viewportH: number,
 ): ViewState {
@@ -279,20 +320,41 @@ const GHOST_ALPHA = 0.07;
  * — replay state lives in data") — so after a theme change flips the base
  * layer's colors automatically, the caller re-invokes clearOverlay/
  * drawDots/drawRoute/drawPin with whatever frame it was already showing;
- * those four methods ARE that redraw hook. */
+ * those four methods ARE that redraw hook.
+ *
+ * Build-review §14.3 (Compare mode): the user's pan/zoom `ViewState` now
+ * lives in an external `ViewStore` (see createViewStore above), not a
+ * private field — every MapView constructed against the SAME store
+ * recomposes/redraws whenever ANY of them (or a caller calling `store.set`
+ * directly) changes it, which is the entire mechanism behind "pan/zoom in
+ * one Compare panel moves every panel". A MapView constructed with no
+ * `store` argument creates its own private one (createViewStore's own
+ * default), so every pre-existing single-instance caller (the /how/ toys)
+ * is unaffected. Because Compare panels are constructed and discarded
+ * repeatedly (unlike every prior MapView caller, which built exactly one
+ * for the page's lifetime), call `dispose()` when discarding one — see
+ * that method's own comment for what it does and does not fully unhook. */
 export class MapView {
   private readonly baseCanvas: HTMLCanvasElement;
   private readonly overlayCanvas: HTMLCanvasElement;
   private readonly baseCtx: CanvasRenderingContext2D;
   private readonly overlayCtx: CanvasRenderingContext2D;
   private render: RenderData;
-  // `fit` is the raw geo->screen fit (recomputed on every resize()); `view`
-  // is the user's zoom/pan state, composed on top of it into `transform`
-  // (see recompose()) — project()/unproject() only ever touch `transform`,
-  // never `fit`/`view` directly, so they stay correct whichever changed
-  // most recently (a resize, or a zoomAt/panBy/resetView call).
+  // `fit` is the raw geo->screen fit (recomputed on every resize()); the
+  // user's pan/zoom state lives in `store` (shared, possibly with other
+  // MapView instances — see the class doc comment), composed with `fit` on
+  // top of it into `transform` (see recompose()) — project()/unproject()
+  // only ever touch `transform`, never `fit`/the store directly, so they
+  // stay correct whichever changed most recently (a resize, or a
+  // zoomAt/panBy/resetView call from THIS instance or a sibling sharing
+  // the same store).
   private fit: Transform = { scale: 1, ox: 0, oy: 0 };
-  private view: ViewState = { scale: 1, tx: 0, ty: 0 };
+  private readonly store: ViewStore;
+  private readonly unsubscribeStore: () => void;
+  // Guards the onThemeChange callback below post-dispose (see dispose()'s
+  // own comment: theme.ts's onThemeChange has no matching "off", so this
+  // flag is what actually stops the redraw cost on a disposed instance).
+  private disposed = false;
   private transform: Transform = { scale: 1, ox: 0, oy: 0 };
   private readonly viewChangeListeners: (() => void)[] = [];
   private pctThreshold: number | null = null;
@@ -301,7 +363,7 @@ export class MapView {
   private cssWidth = 0;
   private cssHeight = 0;
 
-  constructor(base: HTMLCanvasElement, overlay: HTMLCanvasElement, render: RenderData) {
+  constructor(base: HTMLCanvasElement, overlay: HTMLCanvasElement, render: RenderData, store?: ViewStore) {
     this.baseCanvas = base;
     this.overlayCanvas = overlay;
     this.render = render;
@@ -310,8 +372,52 @@ export class MapView {
     if (!baseCtx || !overlayCtx) throw new Error("MapView: 2D canvas context unavailable");
     this.baseCtx = baseCtx;
     this.overlayCtx = overlayCtx;
-    onThemeChange(() => this.drawBase());
+    this.store = store ?? createViewStore();
+    // Fires on every `store.set()` from ANY sharer of this store, this
+    // instance's own zoomAt/panBy/resetView included (they go through
+    // `store.set` too, see below) — so recompose+drawBase+fireViewChange
+    // has exactly one call site regardless of who originated the change.
+    this.unsubscribeStore = this.store.subscribe(() => {
+      if (this.disposed) return;
+      this.recompose();
+      this.drawBase();
+      this.fireViewChange();
+    });
+    // NOTE (ledger, carried from an earlier review): onThemeChange has no
+    // matching "off" — theme.ts's own listener array only ever grows, and
+    // that file is outside this task's edit scope — so this callback is
+    // guarded by `disposed` rather than truly unhooked; see dispose()'s
+    // own comment for the full story.
+    onThemeChange(() => {
+      if (!this.disposed) this.drawBase();
+    });
     this.resize();
+  }
+
+  /** Tears down this instance's subscriptions so a discarded MapView (a
+   * Compare-mode panel removed on a racer-set or view-mode change — see
+   * home.ts's syncPanels/destroyPanel) stops costing redraws for the rest
+   * of the page's life instead of leaking one on every future theme flip
+   * and every future shared-view change (the ledger note this fixes).
+   * Idempotent — safe to call more than once.
+   *
+   * The store half is a REAL removal: createViewStore's `subscribe()`
+   * returns an unsubscribe function, so `store.set()` from a still-live
+   * sibling panel never touches this instance again. The theme half is
+   * necessarily weaker: theme.ts's `onThemeChange` (out of this task's
+   * file scope) has no matching "off" at all, so `disposed` guards that
+   * callback's BODY instead of removing it from theme.ts's listener array.
+   * That still eliminates the actual cost the ledger note flagged —
+   * `drawBase()` never runs again on a disposed instance, on either a
+   * theme flip or a shared-view change — at the price of one harmless dead
+   * closure staying in theme.ts's array (and this instance, canvases
+   * included, not being garbage-collected) for the rest of the page's
+   * life. A complete fix needs a small theme.ts change (onThemeChange
+   * returning its own unsubscribe, same shape as the store's); that file
+   * isn't in this task's edit list. */
+  dispose(): void {
+    this.disposed = true;
+    this.unsubscribeStore();
   }
 
   /** Re-reads each canvas's CSS box size, re-allocates its backing store at
@@ -324,7 +430,18 @@ export class MapView {
    * constructed MapView is never left blank. Does NOT itself fire
    * onViewChange: the caller's ResizeObserver hook already re-syncs the
    * overlay right after calling resize() (see home.ts), same as it always
-   * has for the backing-store-reallocation-blanks-the-overlay case. */
+   * has for the backing-store-reallocation-blanks-the-overlay case.
+   *
+   * The re-clamp goes through `store.set` like every other view mutation
+   * (see the class doc comment), so on a SHARED store a resize of ANY one
+   * panel that actually moves the clamped view moves every sibling too —
+   * accepted as-is for Compare mode: panels in the same grid resize
+   * together in practice (a window resize or a panel-count change reflows
+   * all of them at once), so this settles rather than fights. If the clamp
+   * is a no-op (nothing to re-clamp), the store never fires, which is why
+   * `recompose()`/`drawBase()` are still called explicitly below — resize()
+   * must repaint at the new `fit` either way, not only when the store
+   * happens to change. */
   resize(): void {
     const dpr = Math.min(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
     this.dpr = dpr;
@@ -340,7 +457,7 @@ export class MapView {
     this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.fit = fitTransform(this.render.bbox, this.cssWidth, this.cssHeight, PAD);
-    this.view = clampPan(this.view, this.fit, this.cssWidth, this.cssHeight);
+    this.store.set(clampPan(this.store.get(), this.fit, this.cssWidth, this.cssHeight));
     this.recompose();
     this.drawBase();
   }
@@ -358,7 +475,7 @@ export class MapView {
   }
 
   private recompose(): void {
-    this.transform = composeView(this.fit, this.view);
+    this.transform = composeView(this.fit, this.store.get());
   }
 
   private fireViewChange(): void {
@@ -380,37 +497,31 @@ export class MapView {
   /** Zooms by `factor` anchored at the screen point `(cx, cy)` in CSS px
    * (see zoomAbout for the anchor-preserving math, the [1,8] scale clamp,
    * and the zoomed-all-the-way-out reset) — wheel, pinch, and the +/-
-   * buttons all funnel through this one method. Redraws the base layer at
-   * the new projection and notifies onViewChange listeners. */
+   * buttons all funnel through this one method. Writes the new view to the
+   * shared store; the store's own subscription (registered in the
+   * constructor) is what actually redraws the base layer and notifies
+   * onViewChange listeners — for THIS instance and, on a shared store,
+   * every sibling too (see the class doc comment: that fan-out IS Compare
+   * mode's pan/zoom sync). */
   zoomAt(cx: number, cy: number, factor: number): void {
-    this.view = zoomAbout(this.view, cx, cy, factor);
-    this.recompose();
-    this.drawBase();
-    this.fireViewChange();
+    this.store.set(zoomAbout(this.store.get(), cx, cy, factor));
   }
 
   /** Pans the view by `(dx, dy)` CSS px, clamped so the fitted content can
-   * never fully leave the viewport (see clampPan). Redraws the base layer
-   * and notifies onViewChange listeners, same as zoomAt. */
+   * never fully leave the viewport (see clampPan), then writes the result
+   * to the shared store — same fan-out as zoomAt above. */
   panBy(dx: number, dy: number): void {
-    this.view = clampPan(
-      { scale: this.view.scale, tx: this.view.tx + dx, ty: this.view.ty + dy },
-      this.fit,
-      this.cssWidth,
-      this.cssHeight,
+    const view = this.store.get();
+    this.store.set(
+      clampPan({ scale: view.scale, tx: view.tx + dx, ty: view.ty + dy }, this.fit, this.cssWidth, this.cssHeight),
     );
-    this.recompose();
-    this.drawBase();
-    this.fireViewChange();
   }
 
   /** Returns to the identity view (no zoom, no pan) — the same state a
-   * freshly constructed MapView starts at. */
+   * freshly constructed MapView starts at — via the shared store, same
+   * fan-out as zoomAt/panBy. */
   resetView(): void {
-    this.view = { scale: 1, tx: 0, ty: 0 };
-    this.recompose();
-    this.drawBase();
-    this.fireViewChange();
+    this.store.set({ scale: 1, tx: 0, ty: 0 });
   }
 
   /** Geo -> screen, through the fit+view composed transform (fit alone

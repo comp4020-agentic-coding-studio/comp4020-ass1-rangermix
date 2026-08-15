@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  activeRoster,
   dispatchResponse,
   formatAnnouncement,
   formatMs,
@@ -127,6 +128,32 @@ describe("pathKm (haversine hop-sum, hand-computed against the same R=6,371,000 
     g.lon[2] = 149;
     g.lat[2] = -33;
     expect(pathKm(g, [0, 1, 2])).toBeCloseTo(222.39, 1);
+  });
+});
+
+describe("activeRoster (ROSTER filtered to active racers — the one filter run() and getActiveRoster() both use, so they can never disagree on what's active)", () => {
+  it("with no optional racers active, only dijkstra and ch race, in ROSTER order", () => {
+    expect(activeRoster(new Set())).toEqual(["dijkstra", "ch"]);
+  });
+
+  it("astar active alone inserts at its ROSTER position (between dijkstra and ch), not appended at the end", () => {
+    expect(activeRoster(new Set<"astar" | "bidi">(["astar"]))).toEqual(["dijkstra", "astar", "ch"]);
+  });
+
+  it("bidi active alone inserts at its ROSTER position too", () => {
+    expect(activeRoster(new Set<"astar" | "bidi">(["bidi"]))).toEqual(["dijkstra", "bidi", "ch"]);
+  });
+
+  it("both optional racers active: the full four-racer roster, in ROSTER order regardless of the Set's own insertion order", () => {
+    expect(activeRoster(new Set<"astar" | "bidi">(["bidi", "astar"]))).toEqual([
+      "dijkstra", "astar", "bidi", "ch",
+    ]);
+  });
+
+  it("dijkstra and ch are never excludable — they race regardless of what's in the optional set", () => {
+    const roster = activeRoster(new Set<"astar" | "bidi">(["astar", "bidi"]));
+    expect(roster).toContain("dijkstra");
+    expect(roster).toContain("ch");
   });
 });
 

@@ -393,6 +393,109 @@ a {
   border-color: var(--c-ch);
 }
 
+/* Compare mode (build-review amendment §14.3): one panel per ACTIVE racer,
+   replacing .map-frame while active — a sibling in the DOM (see index.html),
+   toggled via [hidden] so exactly one of the two ever occupies the .hero
+   column's flex space. Desktop: an even, self-wrapping row/grid — panels
+   never shrink below 340px, so 2 sit side by side and 3-4 wrap onto a
+   second row rather than squeezing unreadably narrow. min-height matches
+   .map-stack's own desktop figure so the LOADING state (view mode restored
+   from localStorage before any panel exists yet) doesn't collapse to a
+   blank sliver the way a childless grid otherwise would. */
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+  min-height: 72vh;
+}
+
+.compare-grid[hidden] {
+  display: none;
+}
+
+.compare-panel {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--ground);
+}
+
+.compare-panel canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+/* The corner label chip: racer name + settled count once raced (JS fills
+   .panel-count from the same RaceUi.setRow call that fills the scoreboard
+   row — see home.ts). The hue lives on the dot, not the name text itself,
+   matching the scoreboard rows' own [data-algo] convention (.board .row
+   .name::before) rather than coloring the text directly — bidirectional's
+   validated hue fails AA contrast as small text on the light palette (§8),
+   so the readable label stays ink-colored and the dot carries the color
+   coding redundantly, same "relief rule" the scoreboard already satisfies. */
+.panel-chip {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: calc(100% - 16px);
+  padding: 4px 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.panel-chip::before {
+  content: "";
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.panel-chip[data-algo="dijkstra"]::before {
+  background: var(--c-dijkstra);
+}
+
+.panel-chip[data-algo="astar"]::before {
+  background: var(--c-astar);
+}
+
+.panel-chip[data-algo="bidi"]::before {
+  background: var(--c-bidi);
+}
+
+.panel-chip[data-algo="ch"]::before {
+  background: var(--c-ch);
+}
+
+.panel-chip .panel-name {
+  color: var(--ink);
+}
+
+.panel-chip .panel-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-chip .panel-count:not(:empty)::before {
+  content: "— ";
+}
+
 .hero-copy {
   position: absolute;
   top: 0;
@@ -405,6 +508,22 @@ a {
     color-mix(in srgb, var(--ground) 92%, transparent) 42%,
     transparent 100%
   );
+}
+
+/* .hero-copy is absolutely positioned over .hero's top-left corner —
+   exactly where .map-frame used to be the only thing under it. With
+   Compare active, that same top-left corner is now the FIRST panel, whose
+   own corner chip would otherwise collide with the hero text (found live:
+   both fighting for the same top-left px). Rather than reflow/reposition
+   either one, the title overlay steps aside while Compare is showing
+   panels — it's already duplicated by the nav bar's own "Highway to Hill"
+   link, so nothing is lost, only the redundant copy. Pure CSS (sibling
+   combinator off compare-grid's own [hidden] state), so overlay mode's
+   rendering is untouched either way. Placed after the base .hero-copy rule
+   (not next to .compare-grid) so this higher-specificity override stays in
+   ascending-specificity source order for the same element. */
+.compare-grid:not([hidden]) ~ .hero-copy {
+  display: none;
 }
 
 .hero-copy h1 {
@@ -694,6 +813,28 @@ a {
 
   .map-stack {
     min-height: 55vh;
+  }
+
+  /* Compare mode phone layout (build-review §14.3 asks explicitly for a
+     decision here, documented): at 390px, two columns from the desktop
+     auto-fit rule would land ~171px each — too cramped to read a flood
+     against a road network at any panel count. Decision: 2 racers (the
+     MVP floor — Dijkstra+CH are always both active) stack in ONE full-width
+     column instead, each panel getting the whole viewport width; 3-4
+     racers switch to a 2x2 grid at ~44vw per panel rather than ALSO
+     stacking to one column, because four full-width stacked panels would
+     push the map (and everything below it) several screens down on a
+     phone — a 2x2 grid keeps the whole comparison within about one
+     screenful. `.compare-grid-quad` is toggled by home.ts's syncPanels()
+     from the actual panel count, not guessed from CSS alone. */
+  .compare-grid {
+    grid-template-columns: 1fr;
+    min-height: 55vh;
+  }
+
+  .compare-grid.compare-grid-quad {
+    grid-template-columns: repeat(2, minmax(0, 44vw));
+    justify-content: center;
   }
 
   .hero-copy {

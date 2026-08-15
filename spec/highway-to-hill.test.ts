@@ -166,6 +166,19 @@ describe("spec: home page (/) contracts", () => {
   );
 
   it(
+    "view toggle [data-testid=view-toggle] is a real button, aria-pressed present (build-review amendment §14.3 — Overlay/Compare, aria-pressed reflects Compare)",
+    () => {
+      const doc = pageDoc("index.html");
+      const btn = doc?.querySelector('[data-testid="view-toggle"]');
+      expect(btn).toBeTruthy();
+      expect(btn?.tagName).toBe("BUTTON");
+      // Static shipped markup always starts in Overlay (JS decides Compare
+      // at runtime from localStorage) — pinned to the exact default value.
+      expect(btn?.getAttribute("aria-pressed")).toBe("false");
+    },
+  );
+
+  it(
     `default preset [data-testid=${CONTRACTS.testids.presetHill}] "Gungahlin → Capital Hill" exists`,
     () => {
       const doc = pageDoc("index.html");

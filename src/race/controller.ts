@@ -14,6 +14,16 @@ import { strideFor, type MapView } from "../viz/mapRenderer";
 import type { Graph } from "../algos/graph";
 import type { Algo, AlgoResult, RaceRequest, RaceResponse, WorkerResponse } from "./worker";
 
+/** One Compare-mode panel: the racer it's dedicated to, and the MapView that
+ * draws ONLY that racer's cloud (plus the shared pins/route — see renderAt).
+ * Built by home.ts's syncPanels() from RaceController.getActiveRoster() and
+ * handed to setComparePanels(); RaceController never constructs a MapView
+ * itself, here or anywhere else — panel lifecycle is entirely home.ts's. */
+export interface ComparePanel {
+  algo: Algo;
+  view: MapView;
+}
+
 const REPLAY_MS = 2500;
 const DOT_RADIUS = 1.8;
 const DRAW_CAP = 4000; // see mapRenderer.strideFor: visual sampling cap per frame
@@ -32,12 +42,27 @@ const ROSTER: Algo[] = ["dijkstra", "astar", "bidi", "ch"];
 // "Bidirectional", not "Bidirectional Dijkstra", both to keep the aria
 // sentence readable with four clauses and because the magenta row's label
 // IS this text (the accessibility "direct-label every row" obligation).
-const ALGO_LABEL: Record<Algo, string> = {
+// Exported so home.ts's Compare-mode panel chips (build-review §14.3) can
+// label each panel with the exact same word, rather than a second
+// hard-coded copy that could drift from the scoreboard's own wording.
+export const ALGO_LABEL: Record<Algo, string> = {
   dijkstra: "Dijkstra",
   astar: "A*",
   bidi: "Bidirectional",
   ch: "Contraction Hierarchies",
 };
+
+/** ROSTER filtered down to the racers that are actually active given
+ * `optional` (the currently-toggled-on optional racers — Dijkstra and CH
+ * need no entry here, they're unconditional). Pure and exported so this
+ * exact filter — the one both `run()` (what gets computed) and
+ * `getActiveRoster()` (what home.ts builds Compare panels for) need to
+ * agree on — is unit-testable without a real RaceController/Worker/MapView,
+ * and so the two call sites structurally cannot disagree (both call this,
+ * neither re-derives it). */
+export function activeRoster(optional: ReadonlySet<"astar" | "bidi">): Algo[] {
+  return ROSTER.filter((a) => a === "dijkstra" || a === "ch" || optional.has(a));
+}
 
 /** How many of `total` items should be visible at `elapsedMs` into a
  * `durationMs` replay: 0 before the replay starts, `total` once it's done,
@@ -196,6 +221,13 @@ export class RaceController {
   private nextId = 0;
   private raceToken = 0;
   private current: Frame | null = null;
+  // null = overlay mode (draw every racer's cloud onto `this.view`, the
+  // behavior this class has always had). Non-null = Compare mode (build-
+  // review §14.3): one panel per ACTIVE racer, each panel showing only its
+  // OWN racer's cloud — see renderAt. Set exclusively via
+  // setComparePanels(); home.ts owns panel lifecycle (creating/destroying
+  // MapViews), this class only owns WHERE frames get drawn.
+  private comparePanels: ComparePanel[] | null = null;
   // themeColors() reads ~14 CSS custom properties via getComputedStyle —
   // cheap once, wasteful at 60fps inside renderAt's per-frame hot path — so
   // it's cached here and refreshed only when it can actually have changed:
@@ -258,6 +290,31 @@ export class RaceController {
     else this.optionalActive.delete(algo);
   }
 
+  /** The racer algos that WOULD run in the next run() call, in ROSTER order
+   * — Dijkstra and CH always, plus whichever optional racers are currently
+   * toggled on (see setAlgoActive). home.ts's syncPanels() calls this to
+   * decide the Compare-mode panel set (build-review §14.3: "one panel per
+   * ACTIVE racer") without keeping its own separate copy of "which
+   * optional racers are on" that could drift from this class's own. */
+  getActiveRoster(): Algo[] {
+    return activeRoster(this.optionalActive);
+  }
+
+  /** Switches the render target between overlay (draw every racer's cloud
+   * onto ONE shared view — pass `null`, the default) and Compare (draw
+   * each racer's cloud onto its OWN panel view, pins+route on every panel
+   * — pass the panel set) — see renderAt for exactly how `comparePanels`
+   * changes what gets drawn where. Safe mid-race: replay state lives in
+   * `this.current` (state-as-data, same rule mid-race resize/theme-change
+   * already relies on), so switching modes just re-renders that SAME frame
+   * at its current elapsed time onto the new target(s) via redrawFrame() —
+   * never a new race. A no-op redraw before any race has run (redrawFrame's
+   * own no-op guard). */
+  setComparePanels(panels: ComparePanel[] | null): void {
+    this.comparePanels = panels;
+    this.redrawFrame();
+  }
+
   private request(req: RaceRequest): Promise<RaceResponse> {
     return new Promise((resolve, reject) => {
       this.pending.set(req.id, { resolve, reject });
@@ -285,25 +342,55 @@ export class RaceController {
     // entire visual point of the comparison. "Max among ACTIVE racers"
     // falls out for free here: c.layers only ever holds the racers THIS
     // race actually ran (see run()), so an inactive algo's total can never
-    // enter the max.
+    // enter the max. Unaffected by overlay vs Compare — the scoreboard is
+    // unchanged in both modes (build-review §14.3).
     const maxTotal = Math.max(...c.layers.map((l) => l.total));
 
-    this.view.clearOverlay();
+    // Render targets (build-review §14.3): overlay mode draws every
+    // racer's cloud onto the one shared `this.view`, exactly as before
+    // Compare mode existed — `comparePanels` is null until home.ts's first
+    // setComparePanels(panels) call, so every page that never enters
+    // Compare mode never touches this branch at all. Compare mode draws
+    // each racer's cloud onto ONLY its own panel, while pins+route (shared/
+    // identical regardless of racer) go on every panel — `targets` is
+    // "every view that gets cleared and gets pins+route", one element in
+    // overlay mode, one per active panel in Compare mode.
+    const targets: MapView[] = this.comparePanels ? this.comparePanels.map((p) => p.view) : [this.view];
+
+    for (const v of targets) v.clearOverlay();
     // ROSTER order (c.layers is built in that order in run()) — CH is
-    // always last in the roster, so its sparks land visually on top of
-    // every other active racer's dots, per the design contract.
+    // always last in the roster, so in OVERLAY mode its sparks land
+    // visually on top of every other active racer's dots, per the design
+    // contract (moot in Compare mode: each racer already has its own
+    // panel, nothing to layer on top of).
     for (const layer of c.layers) {
       const up = sliceForFrame(layer.total, elapsedMs, c.duration);
-      this.view.drawDots(
-        layer.order, up, c.graph.lon, c.graph.lat,
-        dark ? colors[`${layer.algo}Glow`] : colors[layer.algo],
-        { additive: dark, radius: DOT_RADIUS, stride: layer.stride },
-      );
+      const color = dark ? colors[`${layer.algo}Glow`] : colors[layer.algo];
+      // Which view(s) get THIS layer's dots: every target in overlay mode
+      // (the whole point of "overlay" — every cloud shares one canvas),
+      // but only the ONE panel whose algo matches in Compare mode.
+      // `.filter` rather than `.find` + a null-check: if a panel for this
+      // layer's algo doesn't exist yet (a racer toggled on since the last
+      // panel rebuild — see home.ts's syncPanels), this layer simply draws
+      // nowhere this frame instead of throwing; the next panel rebuild
+      // catches up.
+      const drawTo = this.comparePanels
+        ? this.comparePanels.filter((p) => p.algo === layer.algo).map((p) => p.view)
+        : targets;
+      for (const v of drawTo) {
+        v.drawDots(
+          layer.order, up, c.graph.lon, c.graph.lat, color,
+          { additive: dark, radius: DOT_RADIUS, stride: layer.stride },
+        );
+      }
       this.ui.setRow(layer.algo, up, maxTotal);
     }
-    if (elapsedMs >= c.duration && c.path.length >= 2) this.view.drawRoute(c.path, c.graph.lon, c.graph.lat);
-    this.view.drawPin(c.graph.lon[c.pinA], c.graph.lat[c.pinA], "A");
-    this.view.drawPin(c.graph.lon[c.pinB], c.graph.lat[c.pinB], "B");
+    const showRoute = elapsedMs >= c.duration && c.path.length >= 2;
+    for (const v of targets) {
+      if (showRoute) v.drawRoute(c.path, c.graph.lon, c.graph.lat);
+      v.drawPin(c.graph.lon[c.pinA], c.graph.lat[c.pinA], "A");
+      v.drawPin(c.graph.lon[c.pinB], c.graph.lat[c.pinB], "B");
+    }
   }
 
   private animate(token: number, duration: number): Promise<void> {
@@ -334,7 +421,9 @@ export class RaceController {
     // and CH unconditionally, A*/Bidirectional only if their chip is on.
     // This exact array is also what gets requested from the worker, so
     // "active this race" and "computed this race" can never disagree.
-    const algos: Algo[] = ROSTER.filter((a) => a === "dijkstra" || a === "ch" || this.optionalActive.has(a));
+    // Same call getActiveRoster() makes — see activeRoster's own comment
+    // for why the two are never allowed to independently re-derive this.
+    const algos: Algo[] = activeRoster(this.optionalActive);
     const [{ graph }, res] = await Promise.all([
       this.routingPromise,
       this.request({

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   clampPan,
   composeView,
+  createViewStore,
   decodeLine,
   fitTransform,
   projectPoint,
@@ -355,6 +356,100 @@ describe("clampPan (against the TRUE fitted content rect, not the viewport as a 
       expect(frac.x).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentW, viewportW) - 1e-6);
       expect(frac.y).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentH, viewportH) - 1e-6);
     }
+  });
+});
+
+// The shared pan/zoom store (build-review amendment §14.3, Compare mode):
+// ONE store, every panel's MapView (plus the overlay's own) subscribes to
+// it, so a pan/zoom gesture in any one of them moves all of them. MapView
+// itself is untested here (jsdom has no canvas, same rationale as the rest
+// of the class) but the store is plain data + callbacks — no DOM at all —
+// so its get/set/subscribe/unsubscribe contract is fully unit-testable on
+// its own, which matters more than usual here: MapView.dispose() (added
+// alongside this store) depends on subscribe() returning a REAL unsubscribe,
+// unlike theme.ts's onThemeChange, which has none — see mapRenderer.ts's own
+// comments on both for why that gap matters for a class that now gets
+// constructed and discarded repeatedly (Compare-mode panels), not just once
+// per page load.
+describe("createViewStore (the shared pan/zoom store)", () => {
+  it("get() returns the identity view by default", () => {
+    const store = createViewStore();
+    expect(store.get()).toEqual({ scale: 1, tx: 0, ty: 0 });
+  });
+
+  it("get() returns whatever initial state was passed", () => {
+    const initial: ViewState = { scale: 3, tx: 10, ty: -5 };
+    const store = createViewStore(initial);
+    expect(store.get()).toEqual(initial);
+  });
+
+  it("set() updates what get() returns", () => {
+    const store = createViewStore();
+    const next: ViewState = { scale: 2, tx: 4, ty: 6 };
+    store.set(next);
+    expect(store.get()).toEqual(next);
+  });
+
+  it("subscribe() does NOT fire immediately on registration (matches theme.ts's onThemeChange: register-then-wait, not register-then-replay)", () => {
+    const store = createViewStore();
+    let calls = 0;
+    store.subscribe(() => {
+      calls++;
+    });
+    expect(calls).toBe(0);
+  });
+
+  it("subscribe() fires with the new state on every set(), in order", () => {
+    const store = createViewStore();
+    const seen: ViewState[] = [];
+    store.subscribe((v) => seen.push(v));
+    const a: ViewState = { scale: 2, tx: 1, ty: 1 };
+    const b: ViewState = { scale: 4, tx: 2, ty: 2 };
+    store.set(a);
+    store.set(b);
+    expect(seen).toEqual([a, b]);
+  });
+
+  it("every subscriber is notified on the same set() — the mechanism one store driving N panels + the overlay relies on", () => {
+    const store = createViewStore();
+    let a = 0;
+    let b = 0;
+    let c = 0;
+    store.subscribe(() => {
+      a++;
+    });
+    store.subscribe(() => {
+      b++;
+    });
+    store.subscribe(() => {
+      c++;
+    });
+    store.set({ scale: 2, tx: 0, ty: 0 });
+    expect([a, b, c]).toEqual([1, 1, 1]);
+  });
+
+  it("subscribe() returns a REAL unsubscribe: that callback stops firing, other subscribers keep firing", () => {
+    const store = createViewStore();
+    let stopped = 0;
+    let kept = 0;
+    const unsub = store.subscribe(() => {
+      stopped++;
+    });
+    store.subscribe(() => {
+      kept++;
+    });
+    store.set({ scale: 2, tx: 0, ty: 0 });
+    unsub();
+    store.set({ scale: 3, tx: 0, ty: 0 });
+    expect(stopped).toBe(1);
+    expect(kept).toBe(2);
+  });
+
+  it("unsubscribing twice is a harmless no-op (MapView.dispose() must be safe to call more than once)", () => {
+    const store = createViewStore();
+    const unsub = store.subscribe(() => {});
+    unsub();
+    expect(() => unsub()).not.toThrow();
   });
 });
 

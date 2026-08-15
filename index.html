@@ -35,6 +35,7 @@
             <button data-testid="zoom-out" type="button" class="zoom-btn" aria-label="Zoom out" disabled>−</button>
           </div>
         </div>
+        <div class="compare-grid" data-testid="compare-panels" hidden></div>
         <div class="hero-copy">
           <h1>Highway to Hill</h1>
           <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
@@ -50,6 +51,7 @@
               <button data-testid="algo-bidi" data-algo="bidi" type="button" class="chip algo-toggle" aria-pressed="false" disabled>Bidirectional</button>
             </div>
           </div>
+          <button data-testid="view-toggle" type="button" class="chip" aria-pressed="false" disabled>View: overlay</button>
           <div class="control-group" role="group" aria-labelledby="routes-label">
             <p class="group-label" id="routes-label">Routes</p>
             <div class="group-chips">

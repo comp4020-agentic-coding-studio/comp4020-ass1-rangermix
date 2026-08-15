@@ -14,12 +14,13 @@
 
 import { initTheme } from "../theme";
 import { loadRender, loadRouting } from "../data";
-import { MapView } from "../viz/mapRenderer";
+import { createViewStore, MapView, type RenderData } from "../viz/mapRenderer";
 import { haversine, nearestNode } from "../snap";
 import { PRESETS } from "../presets";
-import { RaceController, type RaceUi, formatMs } from "../race/controller";
+import { ALGO_LABEL, RaceController, type ComparePanel, type RaceUi, formatMs } from "../race/controller";
 import { makeRaceScheduler } from "../race/scheduler";
 import type { Graph } from "../algos/graph";
+import type { Algo } from "../race/worker";
 
 const DEBOUNCE_MS = 250;
 const AUTO_RUN_MS = 1500;
@@ -46,18 +47,135 @@ export function autoRunPins(pinA: number | null, pinB: number | null): [number, 
   return pinA !== null && pinB !== null ? [pinA, pinB] : null;
 }
 
+export interface PanelDiff {
+  keep: Algo[];
+  add: Algo[];
+  remove: Algo[];
+}
+
+/** Diffs the CURRENT Compare-mode panel algos (in their existing order)
+ * against the NEXT desired active-racer set (RaceController.
+ * getActiveRoster(), already ROSTER-ordered) so a racer toggle or a
+ * view-mode switch only creates/destroys the panels that actually changed,
+ * instead of tearing down and rebuilding the whole grid every time (build-
+ * review §14.3). Pure (no DOM) so the add/keep/remove set logic is
+ * exhaustively unit-testable on its own — syncPanels() inside boot() is the
+ * thin, untested-here DOM consumer (same pure/DOM split every other piece
+ * of this file and this repo already uses). `keep`/`remove` preserve
+ * CURRENT's own order; `add` preserves NEXT's own order — a plain
+ * set-membership diff, not a re-sort. */
+export function diffPanels(current: Algo[], next: Algo[]): PanelDiff {
+  const nextSet = new Set(next);
+  const currentSet = new Set(current);
+  return {
+    keep: current.filter((a) => nextSet.has(a)),
+    add: next.filter((a) => !currentSet.has(a)),
+    remove: current.filter((a) => !nextSet.has(a)),
+  };
+}
+
+interface PanelEntry {
+  algo: Algo;
+  el: HTMLElement;
+  view: MapView;
+}
+
+interface PanelDom {
+  el: HTMLElement;
+  base: HTMLCanvasElement;
+  overlay: HTMLCanvasElement;
+  zoomIn: HTMLButtonElement;
+  zoomOut: HTMLButtonElement;
+}
+
+/** Builds one Compare-mode panel's DOM (build-review §14.3): a base+overlay
+ * canvas pair (a MapView subscribing to the shared store draws into these —
+ * wired up by syncPanels, not here; this function is pure DOM construction,
+ * no listeners), a corner label chip (racer name + a dot in its chart hue
+ * token, same [data-algo] convention the scoreboard rows already use — kept
+ * as a dot rather than coloring the name text itself so bidirectional's hue,
+ * which the design spec's own palette notes fails AA contrast as small text
+ * on light surfaces, never carries the label alone; the settled-count span
+ * starts empty and is filled by RaceUi.setRow once a race completes, same
+ * single code path that fills the scoreboard row), and its own zoom in/out
+ * buttons — F2's interactions must work identically inside every panel,
+ * zoom buttons included, so every panel gets a real, independently
+ * labelled pair rather than sharing the single map's buttons. */
+function buildPanelDom(algo: Algo): PanelDom {
+  const el = document.createElement("div");
+  el.className = "compare-panel";
+  el.dataset.algo = algo;
+
+  const base = document.createElement("canvas");
+  const overlay = document.createElement("canvas");
+  el.append(base, overlay);
+
+  const chip = document.createElement("div");
+  chip.className = "panel-chip";
+  chip.dataset.algo = algo;
+  const name = document.createElement("span");
+  name.className = "panel-name";
+  name.textContent = ALGO_LABEL[algo];
+  const count = document.createElement("span");
+  count.className = "panel-count";
+  chip.append(name, count);
+  el.append(chip);
+
+  const zoomWrap = document.createElement("div");
+  zoomWrap.className = "zoom-controls";
+  const zoomIn = document.createElement("button");
+  zoomIn.type = "button";
+  zoomIn.className = "zoom-btn";
+  zoomIn.textContent = "+";
+  zoomIn.setAttribute("aria-label", `Zoom in (${ALGO_LABEL[algo]})`);
+  const zoomOut = document.createElement("button");
+  zoomOut.type = "button";
+  zoomOut.className = "zoom-btn";
+  zoomOut.textContent = "−";
+  zoomOut.setAttribute("aria-label", `Zoom out (${ALGO_LABEL[algo]})`);
+  zoomWrap.append(zoomIn, zoomOut);
+  el.append(zoomWrap);
+
+  return { el, base, overlay, zoomIn, zoomOut };
+}
+
+// Compare-mode persistence (build-review §14.3) — same guarded try/catch
+// pattern as theme.ts's own safeGetItem/safeSetItem (private-mode/storage-
+// disabled browsers throw on ANY localStorage access): view-mode cycling
+// still works in-memory even when persistence can't happen.
+const VIEW_KEY = "hth-view";
+
+function loadViewMode(): "overlay" | "compare" {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "compare" ? "compare" : "overlay";
+  } catch {
+    return "overlay";
+  }
+}
+
+function saveViewMode(mode: "overlay" | "compare"): void {
+  try {
+    localStorage.setItem(VIEW_KEY, mode);
+  } catch {
+    /* storage unavailable — cycling still works in-memory */
+  }
+}
+
 function boot(): void {
   initTheme();
 
   const baseCanvas = document.getElementById("map-base");
   const overlayCanvas = document.getElementById("map-overlay");
   const stack = document.querySelector('[data-testid="race-canvas"]');
+  const mapFrame = document.querySelector<HTMLElement>(".map-frame");
+  const compareGrid = document.querySelector<HTMLElement>('[data-testid="compare-panels"]');
   const loadNote = document.getElementById("load-note");
   const raceRunBtn = document.querySelector<HTMLButtonElement>('[data-testid="race-run"]');
   const astarChip = document.querySelector<HTMLButtonElement>('[data-testid="algo-astar"]');
   const bidiChip = document.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]');
   const zoomInBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-in"]');
   const zoomOutBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-out"]');
+  const viewToggleBtn = document.querySelector<HTMLButtonElement>('[data-testid="view-toggle"]');
 
   if (
     !(baseCanvas instanceof HTMLCanvasElement) ||
@@ -66,11 +184,20 @@ function boot(): void {
     return;
   }
 
+  // ONE store for the whole page (build-review §14.3): the overlay's own
+  // MapView and every Compare panel's MapView are constructed against this
+  // SAME store, so a pan/zoom gesture from any one of them moves all of
+  // them — see mapRenderer.ts's ViewStore/MapView doc comments for the
+  // mechanism.
+  const viewStore = createViewStore();
   let view: MapView | undefined;
   let controller: RaceController | undefined;
   let graph: Graph | undefined;
+  let renderData: RenderData | undefined;
   let pinA: number | null = null;
   let pinB: number | null = null;
+  let viewMode: "overlay" | "compare" = loadViewMode();
+  let panels: PanelEntry[] = [];
 
   // A race's own promise rejecting means the WORKER told us it failed (see
   // worker.ts's onmessage catch + controller.ts's dispatchResponse) — the
@@ -100,32 +227,57 @@ function boot(): void {
     scheduler.schedule(pinA, pinB);
   }
 
-  function drawPinsOnly(): void {
-    if (!view || !graph) return;
-    view.clearOverlay();
-    if (pinA !== null) view.drawPin(graph.lon[pinA], graph.lat[pinA], "A");
-    if (pinB !== null) view.drawPin(graph.lon[pinB], graph.lat[pinB], "B");
+  // Which views a caller should draw pins/frames onto right now: the single
+  // overlay `view` in overlay mode, or every active Compare panel's own
+  // view in Compare mode — the one place "which views are live" is decided,
+  // so drawAllPinsOnly/syncAllOverlays/syncPanels can't disagree about it.
+  function activeViews(): MapView[] {
+    if (viewMode === "compare") return panels.map((p) => p.view);
+    return view ? [view] : [];
   }
 
-  // Redraws whatever the overlay canvas should currently show: the full
-  // race frame (settle-flood dots + route + pins) if a race has ever
-  // completed or is in flight, else just the pins alone. `redrawFrame()`
-  // is a documented no-op before the first race, so calling both in this
-  // order is always correct and never double-draws anything visible: when
-  // there IS a current frame, its own `clearOverlay()` wipes the plain
-  // pins `drawPinsOnly()` just drew and repaints dots+route+pins together;
-  // when there isn't, drawPinsOnly()'s output is exactly what should show.
-  // Shared by the resize hook (which already needed this — a resize before
-  // any race blanks the overlay canvas as a side effect of reallocating
-  // its backing store) and the new view-change hook below, so panning or
-  // zooming the empty pre-race map never blanks the pre-placed pins either.
-  function syncOverlay(): void {
-    drawPinsOnly();
+  // Redraws pins-only on every currently active view — the pre-race (or
+  // between-races) state. Generalizes the old single-map drawPinsOnly to
+  // "however many views are live right now" (1 in overlay mode, 2-4 panels
+  // in Compare).
+  function drawAllPinsOnly(): void {
+    if (!graph) return;
+    for (const v of activeViews()) {
+      v.clearOverlay();
+      if (pinA !== null) v.drawPin(graph.lon[pinA], graph.lat[pinA], "A");
+      if (pinB !== null) v.drawPin(graph.lon[pinB], graph.lat[pinB], "B");
+    }
+  }
+
+  // Redraws whatever every active view's overlay canvas should currently
+  // show: the full race frame (settle-flood dots + route + pins) if a race
+  // has ever completed or is in flight, else just the pins alone.
+  // `controller.redrawFrame()` already knows which views to target — it
+  // reads its own `comparePanels` field (set via setComparePanels, kept in
+  // sync with `panels` below) — so this function only owns the pins-only
+  // half; `redrawFrame()` is a documented no-op before the first race, so
+  // calling both in this order is always correct and never double-draws
+  // anything visible.
+  function syncAllOverlays(): void {
+    drawAllPinsOnly();
     controller?.redrawFrame();
   }
 
+  // ONE subscription drives every view's overlay resync regardless of how
+  // many MapViews currently share viewStore (1 in overlay mode, 2-4 panels
+  // in Compare) — deliberately a store-level subscription, not one
+  // registered via each MapView's own onViewChange: each MapView's
+  // onViewChange still fires per-instance for its OWN base-layer
+  // bookkeeping (see mapRenderer.ts), but wiring syncAllOverlays to every
+  // one of those too would re-run a full pins+frame redraw across every
+  // panel once PER PANEL per change — O(panels^2) work for one pan/zoom
+  // tick instead of O(panels). Safe to register before `view`/`panels`
+  // exist: activeViews() and controller?.redrawFrame() both handle "not
+  // ready yet" gracefully.
+  viewStore.subscribe(() => syncAllOverlays());
+
   // ------------------------------------------------------------------
-  // Pointer interaction (build-review amendments §14.1-2): pins move by
+  // Pointer interaction (build-review amendments §14.1-3): pins move by
   // DRAG only, tap-to-place is gone entirely. pointerdown within
   // DRAG_HIT_PX of an existing pin drags that pin (live snap-on-move,
   // re-races via the debounced scheduler on release); pointerdown
@@ -135,197 +287,201 @@ function boot(): void {
   // by the midpoint's own movement); pointers are tracked by id in
   // `pointers` so lifting one finger of a pinch cleanly resumes as a
   // single-pointer pan on whichever pointer remains down, with no jump.
-  // Wheel zooms about the cursor; the +/- buttons (below) zoom about the
-  // viewport centre and are the keyboard/a11y path — presets remain the
-  // keyboard PIN path (arrow-key pin-nudging is out of scope for this
-  // round; see the F2 report). `.map-stack canvas` already carries
-  // `touch-action: none` (styles.css) so the browser never fights these
-  // handlers with its own scroll/pinch gestures.
-  // ------------------------------------------------------------------
-  let dragPin: "A" | "B" | null = null;
-  let dragPinOrigin: number | null = null; // the node dragPin sat on before THIS drag began -- see the mid-drag-abort restore below
-  let panActive = false;
-  let panX = 0;
-  let panY = 0;
-  const pointers = new Map<number, { x: number; y: number }>();
-  let pinchDist = 0;
-  let pinchMidX = 0;
-  let pinchMidY = 0;
+  // Wheel zooms about the cursor; the +/- buttons zoom about the viewport
+  // centre and are the keyboard/a11y path — presets remain the keyboard PIN
+  // path (arrow-key pin-nudging is out of scope for this round).
+  //
+  // Factored into its own function (Compare mode, §14.3) so the identical
+  // wiring binds to EVERY panel's own canvas/zoom-button pair, not just the
+  // single overlay map: `canvas`/`getView`/`zoomInBtn`/`zoomOutBtn` are this
+  // target's own; `pinA`/`pinB`/`graph`/`scheduleRace`/`drawAllPinsOnly`
+  // stay closed over from the OUTER boot() scope, shared by every call —
+  // which is exactly what makes "pin drag from ANY panel updates the
+  // shared pins" true for free, with no extra plumbing. Each call gets its
+  // own local gesture state (dragPin, panActive, pointers, pinch geometry)
+  // so a drag/pinch tracked on one canvas can never be confused with
+  // another's — the browser's own pointer-capture (setPointerCapture below)
+  // guarantees a gesture's move/up events keep routing to the canvas that
+  // started it even if the pointer physically leaves its bounds.
+  function wireMapInteraction(
+    canvas: HTMLCanvasElement,
+    getView: () => MapView | undefined,
+    zoomInBtn: HTMLButtonElement | null,
+    zoomOutBtn: HTMLButtonElement | null,
+  ): void {
+    let dragPin: "A" | "B" | null = null;
+    let dragPinOrigin: number | null = null; // the node dragPin sat on before THIS drag began -- see the mid-drag-abort restore below
+    let panActive = false;
+    let panX = 0;
+    let panY = 0;
+    const pointers = new Map<number, { x: number; y: number }>();
+    let pinchDist = 0;
+    let pinchMidX = 0;
+    let pinchMidY = 0;
 
-  // An arrow expression assigned to a const (not a `function` declaration):
-  // TypeScript only carries the `instanceof HTMLCanvasElement` narrowing of
-  // `overlayCanvas` (a const, narrowed by the early-return above) into
-  // closures defined as expressions after that point — a hoisted function
-  // declaration is conservatively treated as reachable "before" the
-  // narrowing, so it loses it. Takes a plain MouseEvent (not PointerEvent)
-  // so wheel events — WheelEvent extends MouseEvent, same as PointerEvent
-  // does — can reuse it too.
-  const canvasXY = (e: MouseEvent): [number, number] => {
-    const rect = overlayCanvas.getBoundingClientRect();
-    return [e.clientX - rect.left, e.clientY - rect.top];
-  };
-
-  function pinNear(x: number, y: number): "A" | "B" | null {
-    if (!view || !graph) return null;
-    const candidates: ["A" | "B", number | null][] = [
-      ["A", pinA],
-      ["B", pinB],
-    ];
-    for (const [label, node] of candidates) {
-      if (node === null) continue;
-      const [px, py] = view.project(graph.lon[node], graph.lat[node]);
-      if (Math.hypot(px - x, py - y) <= DRAG_HIT_PX) return label;
+    function canvasXY(e: MouseEvent): [number, number] {
+      const rect = canvas.getBoundingClientRect();
+      return [e.clientX - rect.left, e.clientY - rect.top];
     }
-    return null;
-  }
 
-  /** The two currently-tracked pointers' on-screen distance apart and
-   * midpoint — `undefined` unless exactly-or-more than two are down (a
-   * third simultaneous touch is tracked in `pointers` for correct
-   * up-bookkeeping but doesn't change the gesture; the pinch just keeps
-   * using the first two encountered by Map iteration order). */
-  function pinchGeometry(): { dist: number; midX: number; midY: number } | undefined {
-    const pts = [...pointers.values()];
-    if (pts.length < 2) return undefined;
-    const [p0, p1] = pts;
-    return { dist: Math.hypot(p1.x - p0.x, p1.y - p0.y), midX: (p0.x + p1.x) / 2, midY: (p0.y + p1.y) / 2 };
-  }
-
-  overlayCanvas.addEventListener("pointerdown", (e) => {
-    const [x, y] = canvasXY(e);
-    pointers.set(e.pointerId, { x, y });
-    overlayCanvas.setPointerCapture(e.pointerId);
-
-    if (pointers.size >= 2) {
-      // A second pointer landing turns any single-pointer gesture into a
-      // pinch — two fingers down is never "drag one pin" or "pan with one
-      // finger" — with a fresh baseline so there's no jump. If a pin drag
-      // was in progress, this ABORTS it: the pin is restored to its
-      // pre-drag node (build-review fix) rather than left wherever it had
-      // moved to when the second finger landed, and no race is scheduled
-      // for that in-flight position. Policy: a second touch mid-drag is
-      // read as "the user is starting a pinch", not "confirm the pin
-      // here" — restoring keeps the pin's node and the scoreboard's last
-      // completed race in sync (the alternative, committing + racing the
-      // in-flight position, would fire a race for a spot the user never
-      // deliberately released a drag on). See the F2 fix report.
-      if (dragPin) {
-        if (dragPin === "A") pinA = dragPinOrigin;
-        else pinB = dragPinOrigin;
-        drawPinsOnly();
+    function pinNear(x: number, y: number): "A" | "B" | null {
+      const activeView = getView();
+      if (!activeView || !graph) return null;
+      const candidates: ["A" | "B", number | null][] = [
+        ["A", pinA],
+        ["B", pinB],
+      ];
+      for (const [label, node] of candidates) {
+        if (node === null) continue;
+        const [px, py] = activeView.project(graph.lon[node], graph.lat[node]);
+        if (Math.hypot(px - x, py - y) <= DRAG_HIT_PX) return label;
       }
+      return null;
+    }
+
+    /** The two currently-tracked pointers' on-screen distance apart and
+     * midpoint — `undefined` unless exactly-or-more than two are down (a
+     * third simultaneous touch is tracked in `pointers` for correct
+     * up-bookkeeping but doesn't change the gesture; the pinch just keeps
+     * using the first two encountered by Map iteration order). */
+    function pinchGeometry(): { dist: number; midX: number; midY: number } | undefined {
+      const pts = [...pointers.values()];
+      if (pts.length < 2) return undefined;
+      const [p0, p1] = pts;
+      return { dist: Math.hypot(p1.x - p0.x, p1.y - p0.y), midX: (p0.x + p1.x) / 2, midY: (p0.y + p1.y) / 2 };
+    }
+
+    canvas.addEventListener("pointerdown", (e) => {
+      const [x, y] = canvasXY(e);
+      pointers.set(e.pointerId, { x, y });
+      canvas.setPointerCapture(e.pointerId);
+
+      if (pointers.size >= 2) {
+        // A second pointer landing turns any single-pointer gesture into a
+        // pinch. If a pin drag was in progress, this ABORTS it: the pin is
+        // restored to its pre-drag node (build-review fix) rather than
+        // left wherever it had moved to when the second finger landed, and
+        // no race is scheduled for that in-flight position.
+        if (dragPin) {
+          if (dragPin === "A") pinA = dragPinOrigin;
+          else pinB = dragPinOrigin;
+          drawAllPinsOnly();
+        }
+        dragPin = null;
+        panActive = false;
+        const geo = pinchGeometry();
+        if (geo) {
+          pinchDist = geo.dist;
+          pinchMidX = geo.midX;
+          pinchMidY = geo.midY;
+        }
+        return;
+      }
+
+      const near = pinNear(x, y);
+      if (near) {
+        dragPin = near;
+        dragPinOrigin = near === "A" ? pinA : pinB;
+      } else {
+        panActive = true;
+        panX = x;
+        panY = y;
+      }
+    });
+
+    canvas.addEventListener("pointermove", (e) => {
+      if (!pointers.has(e.pointerId)) return; // hover / no button down
+      const [x, y] = canvasXY(e);
+      pointers.set(e.pointerId, { x, y });
+      const activeView = getView();
+
+      if (pointers.size >= 2) {
+        const geo = pinchGeometry();
+        if (!geo || !activeView) return;
+        if (pinchDist > 0) activeView.zoomAt(geo.midX, geo.midY, geo.dist / pinchDist);
+        activeView.panBy(geo.midX - pinchMidX, geo.midY - pinchMidY);
+        pinchDist = geo.dist;
+        pinchMidX = geo.midX;
+        pinchMidY = geo.midY;
+        return;
+      }
+
+      if (dragPin && activeView && graph) {
+        const [lon, lat] = activeView.unproject(x, y);
+        const node = nearestNode(lon, lat, graph.lon, graph.lat);
+        if (dragPin === "A") pinA = node;
+        else pinB = node;
+        drawAllPinsOnly();
+      } else if (panActive && activeView) {
+        activeView.panBy(x - panX, y - panY);
+        panX = x;
+        panY = y;
+      }
+    });
+
+    const endPointer = (e: PointerEvent): void => {
+      const wasDragging = dragPin !== null;
+      pointers.delete(e.pointerId);
+      if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+
+      if (pointers.size >= 2) {
+        // Still a pinch with the remaining pointers: recapture a fresh
+        // baseline so the gesture continues without a jump.
+        const geo = pinchGeometry();
+        if (geo) {
+          pinchDist = geo.dist;
+          pinchMidX = geo.midX;
+          pinchMidY = geo.midY;
+        }
+        return;
+      }
+      if (pointers.size === 1) {
+        // A pinch ending with one finger still down resumes as a
+        // single-pointer pan from THAT finger's current position.
+        const [remaining] = [...pointers.values()];
+        dragPin = null;
+        panActive = true;
+        panX = remaining.x;
+        panY = remaining.y;
+        return;
+      }
+
       dragPin = null;
       panActive = false;
-      const geo = pinchGeometry();
-      if (geo) {
-        pinchDist = geo.dist;
-        pinchMidX = geo.midX;
-        pinchMidY = geo.midY;
-      }
-      return;
+      if (wasDragging) scheduleRace();
+    };
+    canvas.addEventListener("pointerup", endPointer);
+    canvas.addEventListener("pointercancel", endPointer);
+
+    // Wheel zooms about the cursor. `{ passive: false }` + preventDefault so
+    // the page doesn't ALSO scroll while the map zooms under the cursor.
+    canvas.addEventListener(
+      "wheel",
+      (e) => {
+        const activeView = getView();
+        if (!activeView) return;
+        e.preventDefault();
+        const [x, y] = canvasXY(e);
+        activeView.zoomAt(x, y, Math.pow(WHEEL_ZOOM_BASE, -e.deltaY));
+      },
+      { passive: false },
+    );
+
+    // The +/- buttons: the a11y zoom path (real buttons, native
+    // Enter/Space activation, no extra keyboard wiring needed) — zoom
+    // about the viewport centre rather than a cursor position, since a
+    // keyboard/switch user has no cursor to anchor on.
+    function zoomAtCentre(factor: number): void {
+      const activeView = getView();
+      if (!activeView) return;
+      const rect = canvas.getBoundingClientRect();
+      activeView.zoomAt(rect.width / 2, rect.height / 2, factor);
     }
+    zoomInBtn?.addEventListener("click", () => zoomAtCentre(BUTTON_ZOOM_FACTOR));
+    zoomOutBtn?.addEventListener("click", () => zoomAtCentre(1 / BUTTON_ZOOM_FACTOR));
+  }
 
-    const near = pinNear(x, y);
-    if (near) {
-      dragPin = near;
-      dragPinOrigin = near === "A" ? pinA : pinB;
-    } else {
-      panActive = true;
-      panX = x;
-      panY = y;
-    }
-  });
-
-  overlayCanvas.addEventListener("pointermove", (e) => {
-    if (!pointers.has(e.pointerId)) return; // hover / no button down
-    const [x, y] = canvasXY(e);
-    pointers.set(e.pointerId, { x, y });
-
-    if (pointers.size >= 2) {
-      const geo = pinchGeometry();
-      if (!geo || !view) return;
-      if (pinchDist > 0) view.zoomAt(geo.midX, geo.midY, geo.dist / pinchDist);
-      view.panBy(geo.midX - pinchMidX, geo.midY - pinchMidY);
-      pinchDist = geo.dist;
-      pinchMidX = geo.midX;
-      pinchMidY = geo.midY;
-      return;
-    }
-
-    if (dragPin && view && graph) {
-      const [lon, lat] = view.unproject(x, y);
-      const node = nearestNode(lon, lat, graph.lon, graph.lat);
-      if (dragPin === "A") pinA = node;
-      else pinB = node;
-      drawPinsOnly();
-    } else if (panActive && view) {
-      view.panBy(x - panX, y - panY);
-      panX = x;
-      panY = y;
-    }
-  });
-
-  const endPointer = (e: PointerEvent): void => {
-    const wasDragging = dragPin !== null;
-    pointers.delete(e.pointerId);
-    if (overlayCanvas.hasPointerCapture(e.pointerId)) overlayCanvas.releasePointerCapture(e.pointerId);
-
-    if (pointers.size >= 2) {
-      // Still a pinch with the remaining pointers: recapture a fresh
-      // baseline so the gesture continues without a jump.
-      const geo = pinchGeometry();
-      if (geo) {
-        pinchDist = geo.dist;
-        pinchMidX = geo.midX;
-        pinchMidY = geo.midY;
-      }
-      return;
-    }
-    if (pointers.size === 1) {
-      // A pinch ending with one finger still down resumes as a
-      // single-pointer pan from THAT finger's current position, so the
-      // view keeps moving with it instead of freezing until re-pressed.
-      const [remaining] = [...pointers.values()];
-      dragPin = null;
-      panActive = true;
-      panX = remaining.x;
-      panY = remaining.y;
-      return;
-    }
-
-    dragPin = null;
-    panActive = false;
-    if (wasDragging) scheduleRace();
-  };
-  overlayCanvas.addEventListener("pointerup", endPointer);
-  overlayCanvas.addEventListener("pointercancel", endPointer);
-
-  // Wheel zooms about the cursor. `{ passive: false }` + preventDefault so
-  // the page doesn't ALSO scroll while the map zooms under the cursor.
-  overlayCanvas.addEventListener(
-    "wheel",
-    (e) => {
-      if (!view) return;
-      e.preventDefault();
-      const [x, y] = canvasXY(e);
-      view.zoomAt(x, y, Math.pow(WHEEL_ZOOM_BASE, -e.deltaY));
-    },
-    { passive: false },
-  );
-
-  // The +/- buttons in the map corner: the a11y zoom path (real buttons,
-  // native Enter/Space activation, no extra keyboard wiring needed) —
-  // zoom about the viewport centre rather than a cursor position, since a
-  // keyboard/switch user has no cursor to anchor on. A const arrow
-  // function, not a `function` declaration — see canvasXY's own comment
-  // above on why a hoisted declaration would lose overlayCanvas's narrowing.
-  const zoomAtCentre = (factor: number): void => {
-    if (!view) return;
-    const rect = overlayCanvas.getBoundingClientRect();
-    view.zoomAt(rect.width / 2, rect.height / 2, factor);
-  };
-  zoomInBtn?.addEventListener("click", () => zoomAtCentre(BUTTON_ZOOM_FACTOR));
-  zoomOutBtn?.addEventListener("click", () => zoomAtCentre(1 / BUTTON_ZOOM_FACTOR));
+  wireMapInteraction(overlayCanvas, () => view, zoomInBtn, zoomOutBtn);
 
   // "R"/"r" re-runs the current pair (ignore browser-refresh chords). A
   // direct trigger, so it goes through scheduler.now() — cancels any
@@ -338,16 +494,32 @@ function boot(): void {
 
   // The two stacked canvases fill the race-canvas wrapper; watch IT resize
   // (not window) so DPR/layout changes from any cause — viewport resize,
-  // font load reflow, orientation change — repaint at the right size. DPR
-  // itself is handled inside MapView.resize(); syncOverlay() re-renders
-  // whatever the overlay should show (race frame, or just pins pre-race).
+  // font load reflow, orientation change, or the overlay map being
+  // un-hidden after a Compare -> Overlay mode switch — repaint at the right
+  // size. DPR itself is handled inside MapView.resize(); syncAllOverlays()
+  // re-renders whatever every active view should show.
   if (stack instanceof HTMLElement && typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => {
       view?.resize();
-      syncOverlay();
+      syncAllOverlays();
     });
     ro.observe(stack);
   }
+
+  // Same idea, one ResizeObserver instance watching every Compare panel's
+  // own container (panels can differ in size from each other — the "quad"
+  // phone layout especially — so each is measured independently rather
+  // than inferring sizes from the grid as a whole).
+  const panelResizeObserver =
+    typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const panel = panels.find((p) => p.el === entry.target);
+            panel?.view.resize();
+          }
+          syncAllOverlays();
+        })
+      : undefined;
 
   const ui: RaceUi = {
     setRow(algo, settled, total) {
@@ -356,6 +528,12 @@ function boot(): void {
       const fill = row?.querySelector<HTMLElement>(".fill");
       if (val) val.textContent = settled.toLocaleString("en-AU");
       if (fill) fill.style.width = `${total > 0 ? (settled / total) * 100 : 0}%`;
+      // Compare-mode panel chips mirror the same count, same single code
+      // path — a no-op query when overlay mode is active (no panels exist)
+      // or when this algo doesn't currently have a panel (racer toggled on
+      // since the last panel rebuild; the rebuild catches up next race).
+      const panelCount = document.querySelector(`[data-testid="compare-panels"] [data-algo="${algo}"] .panel-count`);
+      if (panelCount) panelCount.textContent = settled.toLocaleString("en-AU");
     },
     setTime(algo, ms) {
       const row = document.querySelector(`.board .row[data-algo="${algo}"]`);
@@ -375,17 +553,14 @@ function boot(): void {
       // emphasis (design spec §14.7) — setHeadline fires exactly once per
       // race, only after results are in (see controller.ts's
       // reportResults), so this can't fire early or repeat mid-replay.
-      // classList.add on an already-present class is a no-op, which is
-      // exactly what keeps the CSS pulse (styles.css's .is-hot) a ONE-TIME
-      // animation across repeat races rather than replaying it every time.
       document.querySelector('[data-testid="how-cta"]')?.classList.add("is-hot");
     },
     announce(text) {
       // Same text, two sinks: the aria-live region (screen readers hear it
-      // immediately) and the canvas wrapper's aria-label (the summary a
-      // screen reader gets if it tabs to the — otherwise fairly opaque,
-      // role="img" — race canvas itself). Both update ONCE per race, never
-      // per frame, because this is only ever called after replay completes.
+      // immediately) and the canvas wrapper's aria-label. Both stay keyed
+      // to the SINGLE overlay race-canvas element regardless of view mode
+      // (scoreboard/aria unchanged in both modes, build-review §14.3) —
+      // Compare panels carry no aria surface of their own.
       const live = document.querySelector('[data-testid="race-live"]');
       if (live) live.textContent = text;
       const canvas = document.querySelector('[data-testid="race-canvas"]');
@@ -408,11 +583,12 @@ function boot(): void {
       pinB = nearestNode(preset.b[0], preset.b[1], graph.lon, graph.lat);
       // Presets are the keyboard/a11y pin path now that pins move by drag
       // only — resetView() so a pin placed while the map is zoomed/panned
-      // somewhere else is always immediately visible, not silently placed
-      // off-screen with no feedback (the one case where staying zoomed in
-      // would defeat the point of a keyboard-reachable pin path).
-      view?.resetView();
-      drawPinsOnly();
+      // somewhere else is always immediately visible. Goes through
+      // viewStore directly (not a specific view's resetView()) since it
+      // must reset EVERY view sharing the store, including every active
+      // Compare panel, not just one.
+      viewStore.set({ scale: 1, tx: 0, ty: 0 });
+      drawAllPinsOnly();
       scheduler.now(pinA, pinB); // direct trigger: cancels any pending debounce
     });
   }
@@ -434,8 +610,8 @@ function boot(): void {
     const [a, b] = surprisePair(graph);
     pinA = a;
     pinB = b;
-    view?.resetView(); // see the preset handler above for why
-    drawPinsOnly();
+    viewStore.set({ scale: 1, tx: 0, ty: 0 }); // see the preset handler above for why
+    drawAllPinsOnly();
     scheduler.now(a, b); // direct trigger: cancels any pending debounce
   });
 
@@ -443,18 +619,109 @@ function boot(): void {
     if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
   });
 
+  // ------------------------------------------------------------------
+  // Compare-mode panel lifecycle (build-review §14.3).
+  // ------------------------------------------------------------------
+
+  function destroyPanel(p: PanelEntry): void {
+    panelResizeObserver?.unobserve(p.el);
+    p.view.dispose(); // unhooks the shared store + guards the theme callback — see MapView.dispose()
+    p.el.remove();
+  }
+
+  /** Rebuilds the panel set to match the currently active racer roster:
+   * diffPanels() decides what to add/keep/remove, only the changed panels
+   * are constructed/torn down, the result is re-assembled and re-appended
+   * in ROSTER order (moving already-DOM-attached elements, not cloning —
+   * `Element.append` on a node already in the document relocates it), the
+   * controller's render target is kept in sync (setComparePanels — safe
+   * mid-race, see that method's own comment), and every panel is
+   * (re-)sized before the pins/current frame are redrawn onto it. A no-op
+   * before the data + controller this needs exist (guarded below) — the
+   * initial pre-load call to applyViewMode() relies on that. */
+  function syncPanels(): void {
+    if (!compareGrid || !renderData || !graph || !controller) return;
+    const render = renderData;
+    const next = controller.getActiveRoster();
+    const { add, remove } = diffPanels(panels.map((p) => p.algo), next);
+
+    for (const algo of remove) {
+      const idx = panels.findIndex((p) => p.algo === algo);
+      if (idx >= 0) {
+        destroyPanel(panels[idx]);
+        panels.splice(idx, 1);
+      }
+    }
+
+    const byAlgo = new Map(panels.map((p) => [p.algo, p] as const));
+    for (const algo of add) {
+      const dom = buildPanelDom(algo);
+      compareGrid.append(dom.el);
+      const panelView = new MapView(dom.base, dom.overlay, render, viewStore);
+      wireMapInteraction(dom.overlay, () => panelView, dom.zoomIn, dom.zoomOut);
+      panelResizeObserver?.observe(dom.el);
+      byAlgo.set(algo, { algo, el: dom.el, view: panelView });
+    }
+
+    panels = next.map((algo) => byAlgo.get(algo)).filter((p): p is PanelEntry => p !== undefined);
+    for (const p of panels) compareGrid.append(p.el); // re-append in `next`'s order (relocates existing nodes too)
+    // Phone layout (§14.3): 2 racers stack in one full-width column (two
+    // ~171px columns at 390px are too cramped); 3-4 racers use a 2x2 grid
+    // at ~44vw per panel instead of also stacking — four full-width
+    // stacked panels would push the map far below the fold on a phone.
+    // See styles.css's own comment on this rule for the desktop side.
+    compareGrid.classList.toggle("compare-grid-quad", panels.length >= 3);
+
+    controller.setComparePanels(panels.map((p): ComparePanel => ({ algo: p.algo, view: p.view })));
+    for (const p of panels) p.view.resize();
+    drawAllPinsOnly();
+  }
+
+  /** Applies `viewMode` to the DOM (map-frame vs. compare-grid visibility,
+   * the toggle button's label/aria-pressed) and to the panel set. Called
+   * once immediately (before data exists — syncPanels() no-ops safely, see
+   * its own guard) so the static layout is never wrong even during the
+   * loading state, again once data/controller are ready (this time
+   * syncPanels() actually builds panels if the persisted mode is
+   * "compare"), and on every view-toggle click. */
+  function applyViewMode(): void {
+    const compare = viewMode === "compare";
+    if (mapFrame) mapFrame.hidden = compare;
+    if (compareGrid) compareGrid.hidden = !compare;
+    if (viewToggleBtn) {
+      viewToggleBtn.setAttribute("aria-pressed", String(compare));
+      viewToggleBtn.textContent = `View: ${viewMode}`;
+    }
+    if (compare) {
+      syncPanels();
+    } else {
+      for (const p of panels) destroyPanel(p);
+      panels = [];
+      controller?.setComparePanels(null); // back to overlay target; redraws the current frame there (safe mid-race)
+      view?.resize(); // the overlay map was hidden (0-size) while Compare was active; measure it fresh now it's shown
+      drawAllPinsOnly();
+    }
+  }
+
+  applyViewMode();
+
+  viewToggleBtn?.addEventListener("click", () => {
+    viewMode = viewMode === "overlay" ? "compare" : "overlay";
+    saveViewMode(viewMode);
+    applyViewMode();
+  });
+
   // The two optional-racer chips (A*, Bidirectional) — default OFF, real
   // aria-pressed toggle buttons (Dijkstra/CH have no equivalent chip: they
   // race unconditionally, the disable-proof core comparison). Toggling
-  // updates the controller's participation state for every future race
-  // AND re-races the current pins right away, through the same
-  // cancel-first `scheduler.now()` every other direct trigger (Race
-  // button, presets, "R") already goes through — so a toggle mid-drag
-  // never leaves a stale debounced race to fire later and silently
-  // override it. The matching scoreboard row is shown/hidden here too
-  // (not left empty): "rows for inactive algos hidden entirely" is a
-  // scoreboard-shape contract, not something RaceUi (a per-RACE reporting
-  // interface) owns.
+  // updates the controller's participation state for every future race,
+  // rebuilds the Compare panel set if Compare mode is active (a racer
+  // toggle changes which panels SHOULD exist), AND re-races the current
+  // pins right away, through the same cancel-first `scheduler.now()` every
+  // other direct trigger already goes through. The matching scoreboard row
+  // is shown/hidden here too (not left empty): "rows for inactive algos
+  // hidden entirely" is a scoreboard-shape contract, not something RaceUi
+  // (a per-RACE reporting interface) owns.
   function wireAlgoToggle(chip: HTMLButtonElement | null, algo: "astar" | "bidi"): void {
     chip?.addEventListener("click", () => {
       const active = chip.getAttribute("aria-pressed") !== "true";
@@ -462,6 +729,7 @@ function boot(): void {
       controller?.setAlgoActive(algo, active);
       const row = document.querySelector(`.board .row[data-algo="${algo}"]`);
       if (row instanceof HTMLElement) row.hidden = !active;
+      if (viewMode === "compare") syncPanels();
       if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB); // direct trigger: cancels any pending debounce
     });
   }
@@ -478,13 +746,9 @@ function boot(): void {
   let loadFailed = false;
 
   const renderReady = loadRender().then((render) => {
-    view = new MapView(baseCanvas, overlayCanvas, render);
+    renderData = render;
+    view = new MapView(baseCanvas, overlayCanvas, render, viewStore);
     view.drawBase(); // explicit repaint; harmless right after construction
-    // Every zoomAt/panBy/resetView call redraws the base layer itself
-    // (MapView's own job); this hook is how the OVERLAY — pins, and
-    // mid-race the current settle-flood/route frame — stays in sync with
-    // it, without a new race ever being triggered by a pan or zoom.
-    view.onViewChange(syncOverlay);
     if (loadNote && !loadFailed) loadNote.textContent = "warming up the route engine…";
   });
 
@@ -509,11 +773,12 @@ function boot(): void {
       if (bidiChip) bidiChip.disabled = false;
       if (zoomInBtn) zoomInBtn.disabled = false;
       if (zoomOutBtn) zoomOutBtn.disabled = false;
+      if (viewToggleBtn) viewToggleBtn.disabled = false;
 
       // Pins pre-placed on the signature preset (design spec's "Ready /
       // idle" state) as soon as routing lets us snap them — independent of
       // whether the auto-run below actually fires. The view is already at
-      // its identity (nothing has zoomed/panned yet), so no resetView()
+      // its identity (nothing has zoomed/panned yet), so no explicit reset
       // is needed here the way the preset/surprise handlers need one.
       const hill = PRESETS.find((p) => p.id === "hill");
       if (hill) {
@@ -521,7 +786,10 @@ function boot(): void {
         pinB = nearestNode(hill.b[0], hill.b[1], graph.lon, graph.lat);
       }
 
-      drawPinsOnly();
+      // Re-applies the (possibly persisted-as-"compare") view mode now
+      // that data + controller exist: builds the real panel set if needed,
+      // and either way draws the just-placed pins onto whatever is active.
+      applyViewMode();
 
       // Auto-run on desktop only (design spec §5.1)
       if (matchMedia("(min-width: 940px)").matches) {
@@ -539,8 +807,8 @@ function boot(): void {
 }
 
 // Guarded (not a bare call) so this module is safely importable from a
-// plain Node test environment (no `document`) to reach `autoRunPins` alone
-// — same "don't assume a browser global exists" idiom this file already
-// uses for `typeof ResizeObserver !== "undefined"` above. Always true, so
-// always runs, on any real page load.
+// plain Node test environment (no `document`) to reach the pure exports
+// (`autoRunPins`, `diffPanels`) alone — same "don't assume a browser global
+// exists" idiom this file already uses for `typeof ResizeObserver !==
+// "undefined"` above. Always true, so always runs, on any real page load.
 if (typeof document !== "undefined") boot();
