@@ -1,6 +1,10 @@
 # Highway to Hill — design spec
 
-**Status: v2, APPROVED with amendments (user review, 2026-08-14).**
+**Status: v3 — v2 shipped; §14 folds in the user's build review
+(2026-08-15) as binding amendments to §5. Where §14 contradicts older
+text, §14 governs.**
+
+**Status history: v2, APPROVED with amendments (user review, 2026-08-14).**
 Amendments folded in below: title is *Highway to Hill*; the site ships
 **both light and dark themes**; racer set and the turn-restriction
 simplification approved as proposed. Implementation plan:
@@ -416,7 +420,71 @@ config, theory proofs, tile maps, turn restrictions.
    two map recipes; §11 moves the toggle into MVP.
 5. Turn restrictions ignored with a disclosed footnote — **approved**.
 
-## 14. References
+## 14. Build review amendments (user review, 2026-08-15 — binding)
+
+The user reviewed the shipped v2 build. Verdict: landing page good, how
+page too text-heavy. These amendments govern over §5 where they collide.
+
+**Home (`/`):**
+
+1. **Pins reposition by drag only** — tap-to-place is removed (with its
+   hint chip). Dragging an empty patch of map pans; dragging a pin (24 px
+   grab radius) moves it. Keyboard users route via presets (disclosed
+   a11y trade).
+2. **Map zoom** — wheel (desktop) + pinch (touch) + visible +/− buttons,
+   clamped ~1×–8×, panning included; pin dragging and race rendering work
+   at any zoom, including mid-race redraws.
+3. **Compare mode** — a view toggle (Overlay ⇄ Compare). Compare renders
+   one map panel per ACTIVE racer, view-synchronized (same pan/zoom),
+   each replaying its own settle cloud, route, and pins under its own
+   hue; desktop side by side (2–4 panels), phone 2-up grid/stack.
+   Scoreboard unchanged.
+4. **Control regrouping** — racer toggles and route presets are separate,
+   visibly labelled groups ("Racers", "Routes"); the run control is a
+   distinct primary button ("▶ Race again"), never visually a preset.
+5. **Presets named as place → place** — labels a stranger understands:
+   "Gungahlin → Capital Hill" (default; replaces "To the Hill"),
+   "ANU → Airport", "Belconnen → Tuggeranong" (replaces "Full diagonal"),
+   plus new "Dickson → Woden" and "Kingston → Belconnen"; "Surprise me"
+   stays. ("Race"-the-button being mistaken for a preset is what item 4
+   fixes.)
+6. **Footer restyle** — the attribution block joins the design system:
+   panel treatment, mono meta voice, same measure as the page, no
+   afterthought paragraph.
+7. **A real CTA to /how/** — an obvious, inviting button (not a fineprint
+   link), emphasized once a race finishes: "How is that possible? →".
+
+**How page (`/how/`):**
+
+8. **Real streets replace the mini-town** — all toys run on an ANU-area
+   drivable subgraph cut from the same OSM extract (target ≈ 40–80 nodes
+   after chain contraction, largest SCC, real geometry), emitted by the
+   offline pipeline as a committed artifact. The climb toy draws only the
+   nodes its query touches (rank-lifted), ghosting the rest.
+9. **Less text** — every chapter's prose tightens to 2–3 sentences plus
+   the one-line "what to notice" caption.
+10. **New chapter order (intuition → use → construction):**
+    1. "What Dijkstra actually does" — simplified copy; demo auto-starts
+       on scroll; visitor can pick start/end by clicking nodes.
+    2. "The hierarchy, revealed" — CH intuition first. Auto-loops through
+       the level stops (~2.5 s each), pauses when the visitor selects a
+       level, resumable.
+    3. "The query: only ever climb" — auto-starts on scroll; visitor can
+       pick endpoints.
+    4. "Shortcuts: the price of forgetting" — a plain explanation of what
+       a shortcut IS (tiny static A—B—C diagram: remove B, keep the
+       distance) followed by the interactive contraction toy.
+    5. "Order is everything" — the ordering heuristic + order game; "your
+       turn" compares your shortcuts-so-far against the heuristic's first
+       k contractions (no need to finish all nodes on a real graph).
+    Auto-start behaviors respect reduced-motion (final states, no loops).
+
+Contract updates carried by these amendments: `CONTRACTS.chapterHeadings`
+becomes the §14.10 list; the preset contract text becomes
+"Gungahlin → Capital Hill"; new testids `view-toggle` and `how-cta`;
+toy testids keep their names (order on the page changes).
+
+## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
   and Simpler Hierarchical Routing in Road Networks*, WEA 2008.
