@@ -1,21 +1,26 @@
 // Pure-function tests only. jsdom has no canvas 2D context, so MapView's
 // actual canvas calls (drawBase/drawDots/drawRoute/drawPin/clearOverlay) are
-// thin, untested here, and verified by eye once Task 7 wires MapView into a
-// real page. What's exercised here is the geometry/data logic MapView is
-// built on: projection fit, delta decode, threshold filter, dot stride math.
+// thin, untested here, and verified by eye once wired into a real page. What's
+// exercised here is the geometry/data logic MapView is built on: projection
+// fit, delta decode, threshold filter, dot stride math, and (§16.11) the
+// geo-anchored view-state layer: deriveTransform, zoomAbout, panGeo,
+// clampGeoView, zoomToBounds, createViewStore.
 
 import { describe, expect, it } from "vitest";
 import {
-  clampPan,
-  composeView,
+  clampGeoView,
   createViewStore,
   decodeLine,
+  deriveTransform,
   fitTransform,
+  panGeo,
   projectPoint,
   strideFor,
   unprojectPoint,
   visibleLines,
+  wholeMapView,
   zoomAbout,
+  zoomToBounds,
   type Transform,
   type ViewState,
 } from "./mapRenderer";
@@ -34,39 +39,41 @@ function mulberry32(seed: number): () => number {
 }
 
 /** The fraction of the TRUE fitted content rect's own width/height that
- * overlaps the viewport, per axis, after a `clampPan` call — what the
+ * overlaps the viewport, per axis, after a `clampGeoView` call — what the
  * design spec's ">= 25% visible each axis" contract (build-review amendment
- * §14.2) actually means. Computed independently of clampPan's own
- * internals — straight from `fit.ox`/`fit.oy` and the `contentSize =
- * viewportSize - 2*off` identity (see clampPan's own comment for the
- * derivation) — so this helper can't share a bug with the code it checks.
- * Also returns the content size itself (px, per axis) — callers deep enough
- * into zoom territory need it to compute `minRequiredFraction` below rather
- * than compare against a flat 0.25 (see that function's comment for why). */
+ * §14.2, re-derived in geo terms by §16.11) actually means. Computed by
+ * projecting the bbox's own NW/SE corners through deriveTransform +
+ * projectPoint (the PUBLIC api), never by reaching into clampGeoView's own
+ * offset-clamping internals, so this helper can't share a bug with the code
+ * it checks. Also returns the content size itself (px, per axis) — callers
+ * deep enough into zoom territory need it to compute `minRequiredFraction`
+ * below rather than compare against a flat 0.25 (see that function's
+ * comment for why). */
 function contentVisibleFraction(
-  view: ViewState, fit: Transform, viewportW: number, viewportH: number,
+  view: ViewState, bbox: [number, number, number, number], fit: Transform, viewportW: number, viewportH: number,
 ): { x: number; y: number; contentW: number; contentH: number } {
-  const contentW = (viewportW - 2 * fit.ox) * view.scale;
-  const contentH = (viewportH - 2 * fit.oy) * view.scale;
-  const x0 = fit.ox * view.scale + view.tx;
-  const y0 = fit.oy * view.scale + view.ty;
-  const overlapX = Math.min(viewportW, x0 + contentW) - Math.max(0, x0);
-  const overlapY = Math.min(viewportH, y0 + contentH) - Math.max(0, y0);
+  const t = deriveTransform(view, bbox, fit, viewportW, viewportH);
+  const [x0, y0] = projectPoint(bbox, t, bbox[0], bbox[3]); // NW corner (minLon, maxLat)
+  const [x1, y1] = projectPoint(bbox, t, bbox[2], bbox[1]); // SE corner (maxLon, minLat)
+  const contentW = x1 - x0;
+  const contentH = y1 - y0;
+  const overlapX = Math.min(viewportW, x1) - Math.max(0, x0);
+  const overlapY = Math.min(viewportH, y1) - Math.max(0, y0);
   return { x: overlapX / contentW, y: overlapY / contentH, contentW, contentH };
 }
 
 /** The visible-fraction floor the design spec's own 25% target degrades to
  * once the content is more than 4x the viewport on an axis — reachable at
- * any view.scale above 4 (well inside [MIN_VIEW_SCALE, MAX_VIEW_SCALE] =
- * [1, 8]) even with zero fit slack, since content size scales linearly with
- * view.scale while the viewport doesn't. Past that point, showing 25% of
- * the content would need more px than the viewport HAS at all — no pan
- * position can do it — so the best (and correct) achievable is filling the
- * viewport completely (overlap == viewportSize, a smaller fraction of the
- * content than 25% but the true physical maximum, not a clamp bug). Proven
- * algebraically in the fix's own report: clampAxis's `min`/`max` both
- * evaluate to exactly this floor in that regime, not just the plain 25%
- * target. */
+ * any span below 1/4 (well inside [MIN_SPAN, MAX_SPAN] = [1/8, 1]) even with
+ * zero fit slack, since content size scales linearly with 1/span while the
+ * viewport doesn't. Past that point, showing 25% of the content would need
+ * more px than the viewport HAS at all — no pan position can do it — so the
+ * best (and correct) achievable is filling the viewport completely (overlap
+ * == viewportSize, a smaller fraction of the content than 25% but the true
+ * physical maximum, not a clamp bug). Same floor the pre-geo-anchor
+ * clampPan's own property test used; the algebra is unchanged by the
+ * geo-anchor refactor (see clampGeoView's own comment: clamping the offset
+ * and clamping the center are the same operation viewed from two sides). */
 function minRequiredFraction(contentSize: number, viewportSize: number): number {
   return Math.min(0.25, viewportSize / contentSize);
 }
@@ -206,84 +213,235 @@ describe("strideFor", () => {
   });
 });
 
-// The zoom/pan view-transform layer (build-review amendment §14.2): a user
-// ViewState composed ON TOP of the fitted transform. MapView's own
-// zoomAt/panBy/resetView are thin (untested here, same jsdom-has-no-canvas
-// rationale as the rest of the class) wrappers around the pure functions
-// below, which carry the actual math and are what these tests exercise.
+// The geo-anchored view-transform layer (§16.11, replacing the old
+// pixel-space `{scale, tx, ty}` ViewState): MapView's own zoomAt/panBy/
+// resetView are thin (untested here, same jsdom-has-no-canvas rationale as
+// the rest of the class) wrappers around the pure functions below, which
+// carry the actual math and are what these tests exercise.
 
-describe("composeView", () => {
-  it("the identity view leaves the fit transform unchanged", () => {
-    const fit = { scale: 2, ox: 10, oy: 20 };
-    expect(composeView(fit, { scale: 1, tx: 0, ty: 0 })).toEqual(fit);
-  });
-
-  it("multiplies scale and scales the fit's own offset before adding the pan", () => {
-    const fit = { scale: 2, ox: 10, oy: 20 };
-    const view: ViewState = { scale: 3, tx: 5, ty: -4 };
-    const t = composeView(fit, view);
-    expect(t).toEqual({ scale: 6, ox: 10 * 3 + 5, oy: 20 * 3 - 4 });
+describe("wholeMapView", () => {
+  it("centers on the bbox's own midpoint at span 1 (whole map)", () => {
+    const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+    const view = wholeMapView(bbox);
+    expect(view.cLon).toBeCloseTo(149.1, 9);
+    expect(view.cLat).toBeCloseTo(-35.325, 9);
+    expect(view.span).toBe(1);
   });
 });
 
-describe("zoomAbout (anchor-preserving zoom)", () => {
-  it("the anchor's screen position is unchanged by the zoom (property, 200 seeded random states/anchors/factors, scale kept off the MIN_VIEW_SCALE reset boundary)", () => {
-    const rand = mulberry32(20260815);
+describe("deriveTransform", () => {
+  const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+
+  it("at span 1 (wholeMapView), reproduces fitTransform's own output exactly for the SAME w/h -- span 1 is defined as \"the fit's own extent\"", () => {
+    const w = 900, h = 600, pad = 20;
+    const fit = fitTransform(bbox, w, h, pad);
+    const t = deriveTransform(wholeMapView(bbox), bbox, fit, w, h);
+    expect(t.scale).toBeCloseTo(fit.scale, 9);
+    expect(t.ox).toBeCloseTo(fit.ox, 6);
+    expect(t.oy).toBeCloseTo(fit.oy, 6);
+  });
+
+  it("scale is fit.scale / span", () => {
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const t = deriveTransform({ cLon: 149.1, cLat: -35.3, span: 0.25 }, bbox, fit, 900, 600);
+    expect(t.scale).toBeCloseTo(fit.scale / 0.25, 9);
+  });
+
+  it("the view's own (cLon, cLat) always projects to the viewport's exact center, for ANY panel size (property, 200 seeded random states/sizes) -- the mechanism that lets differently-shaped panels stay centered on the same geo point (§16.11)", () => {
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const rand = mulberry32(160816);
     for (let i = 0; i < 200; i++) {
-      // scale kept strictly inside (1, 8) and factor kept close to 1 so the
-      // result never lands exactly on MIN_VIEW_SCALE -- that transition
-      // deliberately resets tx/ty (tested on its own below) and would
-      // break the invariant this test checks.
-      const view: ViewState = { scale: 1.2 + rand() * 6, tx: (rand() - 0.5) * 400, ty: (rand() - 0.5) * 400 };
+      const view: ViewState = {
+        cLon: bbox[0] + rand() * (bbox[2] - bbox[0]),
+        cLat: bbox[1] + rand() * (bbox[3] - bbox[1]),
+        span: 1 / 8 + rand() * (1 - 1 / 8),
+      };
+      const w = 200 + rand() * 1500;
+      const h = 200 + rand() * 1500;
+      const t = deriveTransform(view, bbox, fit, w, h);
+      const [x, y] = projectPoint(bbox, t, view.cLon, view.cLat);
+      expect(x).toBeCloseTo(w / 2, 6);
+      expect(y).toBeCloseTo(h / 2, 6);
+    }
+  });
+});
+
+describe("zoomAbout (anchor-preserving zoom, geo-anchored)", () => {
+  const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+  const fit = fitTransform(bbox, 900, 600, 20);
+
+  it("the anchor's screen position is unchanged by the zoom (property, 200 seeded random states/anchors/factors, span kept off the MAX_SPAN reset boundary)", () => {
+    const rand = mulberry32(20260816);
+    for (let i = 0; i < 200; i++) {
+      // span kept strictly inside (MIN_SPAN, MAX_SPAN) and factor kept
+      // close to 1 so span/factor never lands exactly on MAX_SPAN -- that
+      // transition deliberately resets to wholeMapView (tested on its own
+      // below) and would break the invariant this test checks.
+      const view: ViewState = {
+        cLon: bbox[0] + rand() * (bbox[2] - bbox[0]),
+        cLat: bbox[1] + rand() * (bbox[3] - bbox[1]),
+        span: 0.2 + rand() * 0.5, // [0.2, 0.7]
+      };
       const cx = rand() * 900;
       const cy = rand() * 600;
-      const factor = 0.7 + rand() * 0.6; // [0.7, 1.3]
-      // The fit-space point currently sitting under the screen anchor
-      // (cx, cy) -- same "invert then reapply" relationship project/
-      // unproject have, just inlined for this property check.
-      const fitX = (cx - view.tx) / view.scale;
-      const fitY = (cy - view.ty) / view.scale;
-      const after = zoomAbout(view, cx, cy, factor);
-      const screenXAfter = fitX * after.scale + after.tx;
-      const screenYAfter = fitY * after.scale + after.ty;
-      expect(Math.abs(screenXAfter - cx)).toBeLessThan(1e-6);
-      expect(Math.abs(screenYAfter - cy)).toBeLessThan(1e-6);
+      const factor = 0.8 + rand() * 0.4; // [0.8, 1.2] -> span/factor in ~[0.167, 0.875], both clear of [1/8, 1]'s ends
+      const before = deriveTransform(view, bbox, fit, 900, 600);
+      const anchor = unprojectPoint(bbox, before, cx, cy);
+      const after = zoomAbout(view, bbox, fit, 900, 600, cx, cy, factor);
+      const afterT = deriveTransform(after, bbox, fit, 900, 600);
+      const [xAfter, yAfter] = projectPoint(bbox, afterT, anchor[0], anchor[1]);
+      expect(Math.abs(xAfter - cx)).toBeLessThan(1e-6);
+      expect(Math.abs(yAfter - cy)).toBeLessThan(1e-6);
     }
   });
 
-  it("clamps the resulting scale to [1, 8]", () => {
-    expect(zoomAbout({ scale: 1, tx: 0, ty: 0 }, 0, 0, 100).scale).toBe(8);
-    expect(zoomAbout({ scale: 8, tx: 0, ty: 0 }, 0, 0, 100).scale).toBe(8);
-    expect(zoomAbout({ scale: 5, tx: 0, ty: 0 }, 0, 0, 0.0001).scale).toBe(1);
+  // Regression (live-verify catch, G2): a MapView calls zoomAbout only from
+  // a real pointer/wheel gesture, which can't reach a hidden panel -- but a
+  // degenerate `fit.scale === 0` is nonetheless a real value MapView.resize()
+  // can produce (see clampGeoView's own regression test below for the exact
+  // scenario: a `display:none` canvas floors to a 1x1 css size, starving
+  // fitTransform's availW/availH to 0). zoomAbout must not propagate that
+  // into Infinity/NaN.
+  it("regression: fit.scale === 0 (degenerate/hidden panel) returns view UNCHANGED instead of dividing by zero", () => {
+    const degenerateFit: Transform = { scale: 0, ox: 24, oy: 24 };
+    const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
+    expect(zoomAbout(view, bbox, degenerateFit, 1, 1, 0.5, 0.5, 2)).toEqual(view);
   });
 
-  it("resets tx/ty to exactly 0 when the clamped scale lands at the minimum (the one deliberate exception to anchor preservation)", () => {
-    const after = zoomAbout({ scale: 3, tx: 120, ty: -80 }, 400, 300, 0.01);
-    expect(after).toEqual({ scale: 1, tx: 0, ty: 0 });
+  it("clamps the resulting span to [1/8, 1]", () => {
+    expect(zoomAbout(wholeMapView(bbox), bbox, fit, 900, 600, 0, 0, 100).span).toBe(1 / 8);
+    expect(zoomAbout({ cLon: 149.1, cLat: -35.3, span: 1 / 8 }, bbox, fit, 900, 600, 0, 0, 100).span).toBe(1 / 8);
+    expect(zoomAbout({ cLon: 149.1, cLat: -35.3, span: 0.5 }, bbox, fit, 900, 600, 0, 0, 0.0001).span).toBe(1);
   });
 
-  it("does NOT reset when scale merely clamps at the MAXIMUM -- only the minimum is special", () => {
-    const after = zoomAbout({ scale: 4, tx: 50, ty: 30 }, 100, 100, 100); // requests 400, clamped to 8
-    const ratio = 8 / 4;
-    expect(after).toEqual({ scale: 8, tx: 100 - (100 - 50) * ratio, ty: 100 - (100 - 30) * ratio });
+  it("resets to wholeMapView(bbox) when the clamped span lands at MAX_SPAN (the one deliberate exception to anchor preservation)", () => {
+    const after = zoomAbout({ cLon: 149.2, cLat: -35.1, span: 0.3 }, bbox, fit, 900, 600, 400, 300, 0.01);
+    expect(after).toEqual(wholeMapView(bbox));
+  });
+
+  it("does NOT reset when span merely clamps at MIN_SPAN -- only the whole-map (MAX_SPAN) boundary is special; anchor preservation still holds exactly at MIN_SPAN", () => {
+    const view: ViewState = { cLon: 149.15, cLat: -35.2, span: 0.4 };
+    const cx = 100, cy = 100;
+    const before = deriveTransform(view, bbox, fit, 900, 600);
+    const anchor = unprojectPoint(bbox, before, cx, cy);
+    const after = zoomAbout(view, bbox, fit, 900, 600, cx, cy, 100); // requests span 0.004, clamped to 1/8
+    expect(after.span).toBe(1 / 8);
+    const afterT = deriveTransform(after, bbox, fit, 900, 600);
+    const [x, y] = projectPoint(bbox, afterT, anchor[0], anchor[1]);
+    expect(Math.abs(x - cx)).toBeLessThan(1e-6);
+    expect(Math.abs(y - cy)).toBeLessThan(1e-6);
   });
 });
 
-describe("clampPan (against the TRUE fitted content rect, not the viewport as a stand-in)", () => {
-  // A fit with NO slack on either axis (content exactly fills the viewport
-  // at scale 1, ox=oy=0) -- the one case where the true content rect and
-  // "the whole viewport" coincide, so the simplest boundary math is exact
-  // and hand-checkable.
-  const flushFit: Transform = { scale: 1, ox: 0, oy: 0 };
+describe("panGeo", () => {
+  const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+  const fit = fitTransform(bbox, 900, 600, 20);
 
-  it("a wildly out-of-range pan clamps to the 25%-visible boundary on each axis (flush fit, no slack)", () => {
-    const clamped = clampPan({ scale: 1, tx: 1000, ty: -1000 }, flushFit, 800, 600);
-    expect(clamped).toEqual({ scale: 1, tx: 0.75 * 800, ty: 0.25 * 600 - 600 });
+  it("shifts EVERY point's screen projection by exactly (dx, dy) -- panning is a uniform screen-space translation at fixed scale, independent of which point you check (property, 200 seeded random states/deltas/points)", () => {
+    const rand = mulberry32(424243);
+    for (let i = 0; i < 200; i++) {
+      const view: ViewState = {
+        cLon: bbox[0] + rand() * (bbox[2] - bbox[0]),
+        cLat: bbox[1] + rand() * (bbox[3] - bbox[1]),
+        span: 1 / 8 + rand() * (1 - 1 / 8),
+      };
+      const dx = (rand() - 0.5) * 300;
+      const dy = (rand() - 0.5) * 300;
+      const shifted = panGeo(view, bbox, fit, 900, 600, dx, dy);
+      expect(shifted.span).toBe(view.span); // pan never touches zoom
+      const tOld = deriveTransform(view, bbox, fit, 900, 600);
+      const tNew = deriveTransform(shifted, bbox, fit, 900, 600);
+      const lon = bbox[0] + rand() * (bbox[2] - bbox[0]);
+      const lat = bbox[1] + rand() * (bbox[3] - bbox[1]);
+      const [x0, y0] = projectPoint(bbox, tOld, lon, lat);
+      const [x1, y1] = projectPoint(bbox, tNew, lon, lat);
+      expect(x1 - x0).toBeCloseTo(dx, 6);
+      expect(y1 - y0).toBeCloseTo(dy, 6);
+    }
   });
 
-  it("leaves an already in-bounds pan untouched (flush fit)", () => {
-    const view: ViewState = { scale: 3, tx: 50, ty: -30 };
-    expect(clampPan(view, flushFit, 800, 600)).toEqual(view);
+  it("dx=dy=0 is a no-op", () => {
+    const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
+    expect(panGeo(view, bbox, fit, 900, 600, 0, 0)).toEqual(view);
+  });
+
+  // Regression (live-verify catch, G2) — see clampGeoView's own regression
+  // test for the concrete scenario (a hidden panel's resize() producing
+  // fit.scale === 0); panGeo isn't on THAT call path today, but guards the
+  // same input for the same reason zoomAbout does: a nonzero (dx, dy)
+  // against scale 0 would divide by zero.
+  it("regression: fit.scale === 0 returns view UNCHANGED instead of dividing by zero", () => {
+    const degenerateFit: Transform = { scale: 0, ox: 24, oy: 24 };
+    const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
+    expect(panGeo(view, bbox, degenerateFit, 1, 1, 40, -15)).toEqual(view);
+  });
+});
+
+describe("clampGeoView (against the TRUE fitted content rect, not the viewport as a stand-in)", () => {
+  it("an extreme pan (east) clamps cLon to exactly the 25%-visible boundary (flush fit, no slack, hand-checked)", () => {
+    // midLat 0 -> cosMid exactly 1, so this bbox/fit pair is hand-checkable:
+    // mapW = mapH = 1 (map units), fit.scale 800 with zero pad -> content
+    // exactly fills an 800x800 viewport at span 1 (the "flushFit" case the
+    // old pixel-space clampPan test suite used, re-expressed in geo terms).
+    const bbox: [number, number, number, number] = [0, -0.5, 1, 0.5];
+    const fit: Transform = fitTransform(bbox, 800, 800, 0);
+    expect(fit).toEqual({ scale: 800, ox: 0, oy: 0 }); // sanity: genuinely zero slack
+    const clamped = clampGeoView({ cLon: 1000, cLat: 0, span: 1 }, bbox, fit, 800, 800);
+    // Hand-derived: ox = 400 - 1000*800 (huge negative) clamps to
+    // max = 800 - 0.25*800 = 600 -> cLon = 0 + (400-600)/800 = -0.25... see
+    // below for the OTHER direction; this axis's clamp pushes content's
+    // LEFT edge in from the right, landing cLon at 1.25 (just east of the
+    // bbox's own east edge, so only its western sliver still shows).
+    expect(clamped.cLon).toBeCloseTo(1.25, 9);
+    expect(clamped.cLat).toBeCloseTo(0, 9); // already centered/in-bounds, untouched
+    expect(clamped.span).toBe(1);
+    const frac = contentVisibleFraction(clamped, bbox, fit, 800, 800);
+    expect(frac.x).toBeCloseTo(0.25, 6);
+  });
+
+  it("an extreme pan (west) clamps symmetrically", () => {
+    const bbox: [number, number, number, number] = [0, -0.5, 1, 0.5];
+    const fit: Transform = fitTransform(bbox, 800, 800, 0);
+    const clamped = clampGeoView({ cLon: -1000, cLat: 0, span: 1 }, bbox, fit, 800, 800);
+    expect(clamped.cLon).toBeCloseTo(-0.25, 9);
+    const frac = contentVisibleFraction(clamped, bbox, fit, 800, 800);
+    expect(frac.x).toBeCloseTo(0.25, 6);
+  });
+
+  it("leaves an already in-bounds view untouched (flush fit)", () => {
+    const bbox: [number, number, number, number] = [0, -0.5, 1, 0.5];
+    const fit: Transform = fitTransform(bbox, 800, 800, 0);
+    const view: ViewState = { cLon: 0.4, cLat: 0.05, span: 0.5 };
+    const clamped = clampGeoView(view, bbox, fit, 800, 800);
+    expect(clamped.cLon).toBeCloseTo(view.cLon, 9);
+    expect(clamped.cLat).toBeCloseTo(view.cLat, 9);
+  });
+
+  // Regression (live-verify catch, G2) — the actual bug: MapView.resize()
+  // calls clampGeoView UNCONDITIONALLY, including for a panel whose canvas
+  // is currently `display:none` (found live: the overlay map, constructed
+  // while a PERSISTED localStorage preference already has Compare mode
+  // active, so the overlay's `.map-frame` starts `hidden` before the
+  // overlay's own MapView is ever constructed). A hidden element's
+  // `getBoundingClientRect()` is zero, MapView.resize() floors that to a
+  // 1x1 css size, and fitTransform(bbox, 1, 1, PAD=24) then has
+  // availW=availH=0 (viewport smaller than 2*PAD) -> fit.scale === 0
+  // exactly — reproduced here directly against fitTransform's own output,
+  // not a hand-typed Transform, so this test would catch a regression in
+  // EITHER function. Before the fix, this produced NaN (0/0) in cLon/cLat,
+  // written into the SHARED store — corrupting every panel sharing it, not
+  // just the hidden one (confirmed live: switching to Compare mode after
+  // this showed `null`/`null` for every panel's center once the value round-
+  // tripped through JSON, i.e. NaN).
+  it("regression: a hidden panel's degenerate fit (scale === 0, from a real fitTransform call) returns view UNCHANGED, never NaN", () => {
+    const bbox: [number, number, number, number] = [148.9179634, -35.6505443, 149.3332927, -35.0450695];
+    const hiddenFit = fitTransform(bbox, 1, 1, 24); // MapView.resize()'s own floor for a display:none canvas
+    expect(hiddenFit.scale).toBe(0); // sanity: genuinely the degenerate case, not almost-zero
+    const view: ViewState = wholeMapView(bbox);
+    const result = clampGeoView(view, bbox, hiddenFit, 1, 1);
+    expect(result).toEqual(view);
+    expect(Number.isFinite(result.cLon)).toBe(true);
+    expect(Number.isFinite(result.cLat)).toBe(true);
   });
 
   // The real committed bbox (public/data/render.json) fitted into a
@@ -292,9 +450,9 @@ describe("clampPan (against the TRUE fitted content rect, not the viewport as a 
   // wide in map units (mapH/mapW ~= 1.8 after cos(midLat) x-correction --
   // see the fitTransform describe block above), so THIS viewport is
   // height-constrained: the fitted content is far NARROWER than the
-  // viewport, centered with wide slack on the x-axis. `fit.ox` (that slack)
-  // is exactly what the old `contentSize = viewportSize * scale` code
-  // silently treated as if it were content -- the bug this block pins.
+  // viewport, centered with wide slack on the x-axis — exactly the
+  // asymmetric-slack case the F2 fix (now re-derived in geo terms here) was
+  // written to cover.
   const bbox: [number, number, number, number] = [
     148.9179634, -35.6505443, 149.3332927, -35.0450695,
   ];
@@ -305,93 +463,166 @@ describe("clampPan (against the TRUE fitted content rect, not the viewport as a 
     expect(fit.ox).toBeGreaterThan(pad + 50);
   });
 
-  it("one ordinary drag (well under the map's own ~1016px width, not an extreme fling) never drops below 25% visible on either axis", () => {
-    // A single continuous drag from near one side of the map toward the
-    // other -- NOT an adversarial/extreme value (both axes stay well
-    // inside the viewport's own size). Verified (see the fix report) that
-    // the OLD viewport-as-content clamp let a drag exactly this size pan
-    // the true content to ~3% visible on the x-axis -- the true-content-
-    // rect clamp must not.
-    const dragged = clampPan({ scale: 1, tx: -700, ty: -700 }, fit, viewportW, viewportH);
-    const frac = contentVisibleFraction(dragged, fit, viewportW, viewportH);
+  it("one ordinary drag-sized pan (well under the viewport's own ~1016px width, not an extreme fling) never drops below 25% visible on either axis", () => {
+    const wide = wholeMapView(bbox);
+    // panGeo by a realistic single-drag-sized delta, then clamp -- mirrors
+    // how MapView.panBy actually composes the two.
+    const dragged = clampGeoView(
+      panGeo(wide, bbox, fit, viewportW, viewportH, -700, -700), bbox, fit, viewportW, viewportH,
+    );
+    const frac = contentVisibleFraction(dragged, bbox, fit, viewportW, viewportH);
     expect(frac.x).toBeGreaterThanOrEqual(0.25 - 1e-6);
     expect(frac.y).toBeGreaterThanOrEqual(0.25 - 1e-6);
   });
 
-  it("an extreme pan clamps to exactly 25% visible on the TRUE content rect, both axes", () => {
-    const clamped = clampPan({ scale: 1, tx: -100000, ty: 100000 }, fit, viewportW, viewportH);
-    const frac = contentVisibleFraction(clamped, fit, viewportW, viewportH);
-    expect(frac.x).toBeCloseTo(0.25, 5);
-    expect(frac.y).toBeCloseTo(0.25, 5);
-  });
-
-  it("resize()'s job: reclamping a pan that was valid at one viewport size against a NEW (much smaller) size still satisfies the 25% bound", () => {
+  it("resize()'s job: reclamping a view that was valid at one viewport size against a NEW (much smaller) size still satisfies the 25% bound", () => {
     const bigW = 1200, bigH = 900;
     const bigFit = fitTransform(bbox, bigW, bigH, pad);
-    const view = clampPan({ scale: 5, tx: -900, ty: 700 }, bigFit, bigW, bigH);
+    const view = clampGeoView(
+      panGeo(wholeMapView(bbox), bbox, bigFit, bigW, bigH, -2000, 1800), bbox, bigFit, bigW, bigH,
+    );
 
     // The viewport then shrinks a lot (phone rotation, drastic desktop
-    // resize) without the view itself changing -- MapView.resize() must
-    // now re-run clampPan against the new fit/size for exactly this reason
-    // (a resize used to leave the view untouched, stranding content
-    // off-screen); simulating that re-clamp here must still land within
-    // the 25% bound at the NEW size, not the stale bounds of a viewport
-    // that no longer exists.
+    // resize) without the geo view itself changing -- MapView.resize() must
+    // now re-run clampGeoView against the new fit/size for exactly this
+    // reason (a resize used to leave the view untouched, stranding content
+    // off-screen); simulating that re-clamp here must still land within the
+    // 25% bound at the NEW size, not the stale bounds of a viewport that no
+    // longer exists.
     const smallW = 380, smallH = 700;
     const smallFit = fitTransform(bbox, smallW, smallH, pad);
-    const reclamped = clampPan(view, smallFit, smallW, smallH);
-    const frac = contentVisibleFraction(reclamped, smallFit, smallW, smallH);
+    const reclamped = clampGeoView(view, bbox, smallFit, smallW, smallH);
+    const frac = contentVisibleFraction(reclamped, bbox, smallFit, smallW, smallH);
     expect(frac.x).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentW, smallW) - 1e-6);
     expect(frac.y).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentH, smallH) - 1e-6);
   });
 
-  it("never lets the content fully leave the viewport: visible fraction of the CONTENT rect >= 25% (or the viewport-filling floor once zoom makes 25% physically unreachable — see minRequiredFraction) per axis, incl. at max zoom and after extreme pans (property, 200 seeded random scales/pans against the realistic asymmetric fit)", () => {
+  it("never lets the content fully leave the viewport: visible fraction of the CONTENT rect >= 25% (or the viewport-filling floor once zoom makes 25% physically unreachable — see minRequiredFraction) per axis, incl. at max zoom and after extreme pans (property, 200 seeded random spans/centers against the realistic asymmetric fit)", () => {
     const rand = mulberry32(7);
     for (let i = 0; i < 200; i++) {
-      const scale = 1 + rand() * 7; // full [MIN_VIEW_SCALE, MAX_VIEW_SCALE] = [1, 8] range
-      const tx = (rand() - 0.5) * 20000; // deliberately far beyond any real drag
-      const ty = (rand() - 0.5) * 20000;
-      const clamped = clampPan({ scale, tx, ty }, fit, viewportW, viewportH);
-      const frac = contentVisibleFraction(clamped, fit, viewportW, viewportH);
+      const span = 1 / 8 + rand() * (1 - 1 / 8); // full [MIN_SPAN, MAX_SPAN] range
+      // Deliberately far beyond any real drag — random geo centers well
+      // outside the bbox itself, exercising the clamp's own boundary math
+      // rather than only ever-in-bounds values.
+      const cLon = bbox[0] + (rand() - 0.5) * 40;
+      const cLat = bbox[1] + (rand() - 0.5) * 40;
+      const clamped = clampGeoView({ cLon, cLat, span }, bbox, fit, viewportW, viewportH);
+      const frac = contentVisibleFraction(clamped, bbox, fit, viewportW, viewportH);
       expect(frac.x).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentW, viewportW) - 1e-6);
       expect(frac.y).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentH, viewportH) - 1e-6);
     }
   });
 });
 
-// The shared pan/zoom store (build-review amendment §14.3, Compare mode):
-// ONE store, every panel's MapView (plus the overlay's own) subscribes to
-// it, so a pan/zoom gesture in any one of them moves all of them. MapView
-// itself is untested here (jsdom has no canvas, same rationale as the rest
-// of the class) but the store is plain data + callbacks — no DOM at all —
-// so its get/set/subscribe/unsubscribe contract is fully unit-testable on
-// its own, which matters more than usual here: MapView.dispose() (added
-// alongside this store) depends on subscribe() returning a REAL unsubscribe,
-// unlike theme.ts's onThemeChange, which has none — see mapRenderer.ts's own
-// comments on both for why that gap matters for a class that now gets
-// constructed and discarded repeatedly (Compare-mode panels), not just once
-// per page load.
-describe("createViewStore (the shared pan/zoom store)", () => {
-  it("get() returns the identity view by default", () => {
-    const store = createViewStore();
-    expect(store.get()).toEqual({ scale: 1, tx: 0, ty: 0 });
+// §16.6: starting any race zooms the viewport to the A-B bounds with ~15%
+// padding — the geo-anchored model makes this ONE call, independent of any
+// specific panel's own pixel size (see zoomToBounds's own comment).
+describe("zoomToBounds", () => {
+  it("frames a pair with EXACTLY the requested padding on the limiting axis (hand-checked: bbox/pair/viewport chosen so cosMid=1 and the fit has zero aspect slack)", () => {
+    // bbox centered at lat 0 (cosMid exactly 1), square in map units
+    // (mapW = mapH = 2) so a square, zero-pad, aspect-matched viewport has
+    // NO slack on either axis — the cleanest possible hand-check.
+    const bbox: [number, number, number, number] = [-1, -1, 1, 1];
+    const w = 1000, h = 1000;
+    const fit = fitTransform(bbox, w, h, 0);
+    // A and B both sit on the bbox's own horizontal center line, spanning
+    // the middle half of its width (lon -0.5 to 0.5) — the wider of the
+    // two spreads (lonSpread=1 of mapW=2 => frac 0.5; latSpread=0), so lon
+    // is the limiting axis this pair's framing is matched to.
+    const view = zoomToBounds(bbox, -0.5, 0, 0.5, 0, 0.15);
+    expect(view.cLon).toBeCloseTo(0, 9);
+    expect(view.cLat).toBeCloseTo(0, 9);
+    // span = frac / (1 - 2*pad) = 0.5 / 0.7
+    expect(view.span).toBeCloseTo(0.5 / 0.7, 9);
+
+    const t = deriveTransform(view, bbox, fit, w, h);
+    const [xA] = projectPoint(bbox, t, -0.5, 0);
+    const [xB] = projectPoint(bbox, t, 0.5, 0);
+    expect(xA).toBeCloseTo(150, 6); // 15% of 1000px in from the left
+    expect(xB).toBeCloseTo(850, 6); // 15% of 1000px in from the right
+    // Both points strictly inside the viewport (the property the design
+    // task asks to pin, verified here to the exact pixel as well).
+    expect(xA).toBeGreaterThan(0);
+    expect(xB).toBeLessThan(w);
   });
 
+  it("both points land strictly inside the resulting view, for random bboxes/pairs/aspect-matched viewports (property, 200 seeded)", () => {
+    const rand = mulberry32(918);
+    for (let i = 0; i < 200; i++) {
+      const minLon = 148 + rand() * 2;
+      const minLat = -36 + rand() * 2;
+      const bbox: [number, number, number, number] = [minLon, minLat, minLon + 0.2 + rand() * 0.4, minLat + 0.2 + rand() * 0.4];
+      const lonA = bbox[0] + rand() * (bbox[2] - bbox[0]);
+      const latA = bbox[1] + rand() * (bbox[3] - bbox[1]);
+      const lonB = bbox[0] + rand() * (bbox[2] - bbox[0]);
+      const latB = bbox[1] + rand() * (bbox[3] - bbox[1]);
+      // Aspect-matched, zero-pad viewport (mirrors the hand-checked case
+      // above) so BOTH axes are simultaneously limiting — the strongest
+      // version of the "inside the view" property, not weakened by
+      // whichever axis happens to have fit slack.
+      const cosMid = Math.cos(((bbox[1] + bbox[3]) / 2) * (Math.PI / 180));
+      const mapW = Math.max(1e-9, (bbox[2] - bbox[0]) * cosMid);
+      const mapH = Math.max(1e-9, bbox[3] - bbox[1]);
+      const w = 1000;
+      const h = (1000 * mapH) / mapW;
+      const fit = fitTransform(bbox, w, h, 0);
+      const view = zoomToBounds(bbox, lonA, latA, lonB, latB, 0.15);
+      expect(view.span).toBeGreaterThanOrEqual(1 / 8 - 1e-9);
+      expect(view.span).toBeLessThanOrEqual(1 + 1e-9);
+      expect(Number.isFinite(view.cLon)).toBe(true);
+      expect(Number.isFinite(view.cLat)).toBe(true);
+      const t = deriveTransform(view, bbox, fit, w, h);
+      for (const [lon, lat] of [[lonA, latA], [lonB, latB]] as const) {
+        const [x, y] = projectPoint(bbox, t, lon, lat);
+        expect(x).toBeGreaterThanOrEqual(-1e-6);
+        expect(x).toBeLessThanOrEqual(w + 1e-6);
+        expect(y).toBeGreaterThanOrEqual(-1e-6);
+        expect(y).toBeLessThanOrEqual(h + 1e-6);
+      }
+    }
+  });
+
+  it("a degenerate same-point pair has no extent to frame -- clamps to MIN_SPAN (max zoom), no NaN/crash, centered exactly on the point", () => {
+    const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+    const view = zoomToBounds(bbox, 149.1, -35.3, 149.1, -35.3, 0.15);
+    expect(view).toEqual({ cLon: 149.1, cLat: -35.3, span: 1 / 8 });
+  });
+
+  it("a pair spanning (most of) the whole bbox clamps to MAX_SPAN (whole map) rather than requesting an impossible zoom-out", () => {
+    const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+    const view = zoomToBounds(bbox, bbox[0], bbox[1], bbox[2], bbox[3], 0.15);
+    expect(view.span).toBe(1);
+  });
+
+  it("default pad is 0.15", () => {
+    const bbox: [number, number, number, number] = [-1, -1, 1, 1];
+    expect(zoomToBounds(bbox, -0.5, 0, 0.5, 0)).toEqual(zoomToBounds(bbox, -0.5, 0, 0.5, 0, 0.15));
+  });
+});
+
+// The shared pan/zoom store (build-review amendment §14.3, Compare mode; §16.11
+// geo-anchored): ONE store, every panel's MapView (plus the overlay's own)
+// subscribes to it, so a pan/zoom gesture in any one of them moves all of
+// them. MapView itself is untested here (jsdom has no canvas, same rationale
+// as the rest of the class) but the store is plain data + callbacks — no DOM
+// at all — so its get/set/subscribe/unsubscribe contract is fully
+// unit-testable on its own.
+describe("createViewStore (the shared pan/zoom store)", () => {
   it("get() returns whatever initial state was passed", () => {
-    const initial: ViewState = { scale: 3, tx: 10, ty: -5 };
+    const initial: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
     const store = createViewStore(initial);
     expect(store.get()).toEqual(initial);
   });
 
   it("set() updates what get() returns", () => {
-    const store = createViewStore();
-    const next: ViewState = { scale: 2, tx: 4, ty: 6 };
+    const store = createViewStore({ cLon: 0, cLat: 0, span: 1 });
+    const next: ViewState = { cLon: 1, cLat: 2, span: 0.25 };
     store.set(next);
     expect(store.get()).toEqual(next);
   });
 
   it("subscribe() does NOT fire immediately on registration (matches theme.ts's onThemeChange: register-then-wait, not register-then-replay)", () => {
-    const store = createViewStore();
+    const store = createViewStore({ cLon: 0, cLat: 0, span: 1 });
     let calls = 0;
     store.subscribe(() => {
       calls++;
@@ -400,18 +631,18 @@ describe("createViewStore (the shared pan/zoom store)", () => {
   });
 
   it("subscribe() fires with the new state on every set(), in order", () => {
-    const store = createViewStore();
+    const store = createViewStore({ cLon: 0, cLat: 0, span: 1 });
     const seen: ViewState[] = [];
     store.subscribe((v) => seen.push(v));
-    const a: ViewState = { scale: 2, tx: 1, ty: 1 };
-    const b: ViewState = { scale: 4, tx: 2, ty: 2 };
+    const a: ViewState = { cLon: 1, cLat: 1, span: 0.5 };
+    const b: ViewState = { cLon: 2, cLat: 2, span: 0.25 };
     store.set(a);
     store.set(b);
     expect(seen).toEqual([a, b]);
   });
 
   it("every subscriber is notified on the same set() — the mechanism one store driving N panels + the overlay relies on", () => {
-    const store = createViewStore();
+    const store = createViewStore({ cLon: 0, cLat: 0, span: 1 });
     let a = 0;
     let b = 0;
     let c = 0;
@@ -424,33 +655,33 @@ describe("createViewStore (the shared pan/zoom store)", () => {
     store.subscribe(() => {
       c++;
     });
-    store.set({ scale: 2, tx: 0, ty: 0 });
+    store.set({ cLon: 1, cLat: 1, span: 0.5 });
     expect([a, b, c]).toEqual([1, 1, 1]);
   });
 
   it("set() with a value field-equal to the current state is a no-op: no notify, no re-render fan-out (build-review fix — a resize's no-op re-clamp used to still notify every sharer of the store)", () => {
-    const store = createViewStore({ scale: 2, tx: 5, ty: -3 });
+    const store = createViewStore({ cLon: 149.1, cLat: -35.3, span: 0.5 });
     let calls = 0;
     store.subscribe(() => {
       calls++;
     });
-    store.set({ scale: 2, tx: 5, ty: -3 }); // same values, deliberately a NEW object (not the same reference)
+    store.set({ cLon: 149.1, cLat: -35.3, span: 0.5 }); // same values, deliberately a NEW object (not the same reference)
     expect(calls).toBe(0);
-    expect(store.get()).toEqual({ scale: 2, tx: 5, ty: -3 });
+    expect(store.get()).toEqual({ cLon: 149.1, cLat: -35.3, span: 0.5 });
   });
 
   it("set() still notifies when only ONE field actually changes (the guard is a full field compare, not a truthy/reference shortcut)", () => {
-    const store = createViewStore({ scale: 2, tx: 5, ty: -3 });
+    const store = createViewStore({ cLon: 149.1, cLat: -35.3, span: 0.5 });
     let calls = 0;
     store.subscribe(() => {
       calls++;
     });
-    store.set({ scale: 2, tx: 5, ty: -3.0001 });
+    store.set({ cLon: 149.1, cLat: -35.3, span: 0.5001 });
     expect(calls).toBe(1);
   });
 
   it("subscribe() returns a REAL unsubscribe: that callback stops firing, other subscribers keep firing", () => {
-    const store = createViewStore();
+    const store = createViewStore({ cLon: 0, cLat: 0, span: 1 });
     let stopped = 0;
     let kept = 0;
     const unsub = store.subscribe(() => {
@@ -459,29 +690,63 @@ describe("createViewStore (the shared pan/zoom store)", () => {
     store.subscribe(() => {
       kept++;
     });
-    store.set({ scale: 2, tx: 0, ty: 0 });
+    store.set({ cLon: 1, cLat: 1, span: 0.5 });
     unsub();
-    store.set({ scale: 3, tx: 0, ty: 0 });
+    store.set({ cLon: 2, cLat: 2, span: 0.25 });
     expect(stopped).toBe(1);
     expect(kept).toBe(2);
   });
 
   it("unsubscribing twice is a harmless no-op (MapView.dispose() must be safe to call more than once)", () => {
-    const store = createViewStore();
+    const store = createViewStore({ cLon: 0, cLat: 0, span: 1 });
     const unsub = store.subscribe(() => {});
     unsub();
     expect(() => unsub()).not.toThrow();
   });
+
+  // §16.9 REGRESSION — the overlay-lag bug's actual root cause and the
+  // property that makes MapView's fix (no cached transform; every consumer
+  // derives one fresh from store.get(), see mapRenderer.ts's MapView class
+  // comment) immune to it. The bug was NOT in this store: `state = next`
+  // already ran before the listener loop, so get() answering with the NEW
+  // value inside every subscriber was already true. The bug was that
+  // MapView cached a Transform inside ITS OWN subscription callback, and a
+  // DIFFERENT, earlier-registered subscriber (home.ts's page-level overlay
+  // redraw) read that stale cache before MapView's callback had a chance to
+  // refresh it. This test pins the guarantee the fix now leans on instead:
+  // two independent subscribers, registered in the SAME order the historical
+  // bug had (page-level "early" one first, MapView-style "late" one second),
+  // deriving a Transform from store.get() on every notification, must always
+  // derive the IDENTICAL Transform — proving there is no window, at any
+  // point in the listener order, where one subscriber's derivation could see
+  // different data than another's.
+  it("regression (§16.9 overlay-lag bug): two subscribers registered in either order derive the IDENTICAL Transform from store.get() on every update — nothing left for subscription order to make stale", () => {
+    const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+    const fit = fitTransform(bbox, 900, 600, 24);
+    const store = createViewStore(wholeMapView(bbox));
+    const seenEarly: Transform[] = []; // mirrors home.ts's page-level subscription (historically registered FIRST)
+    const seenLate: Transform[] = []; // mirrors a MapView's own subscription (historically registered SECOND, once render data arrived)
+    store.subscribe(() => seenEarly.push(deriveTransform(store.get(), bbox, fit, 900, 600)));
+    store.subscribe(() => seenLate.push(deriveTransform(store.get(), bbox, fit, 900, 600)));
+    store.set(zoomAbout(store.get(), bbox, fit, 900, 600, 450, 300, 2));
+    store.set(panGeo(store.get(), bbox, fit, 900, 600, 40, -15));
+    store.set(zoomToBounds(bbox, 149.0, -35.4, 149.2, -35.2));
+    expect(seenEarly).toEqual(seenLate);
+  });
 });
 
-describe("project/unproject round trip through a composed (fit + view) transform", () => {
-  it("unprojectPoint(projectPoint(p)) recovers the original geo point at random seeded view states", () => {
+describe("project/unproject round trip through a derived (geo view) transform", () => {
+  it("unprojectPoint(projectPoint(p)) recovers the original geo point at random seeded geo view states", () => {
     const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
     const fit = fitTransform(bbox, 900, 600, 20);
     const rand = mulberry32(424242);
     for (let i = 0; i < 200; i++) {
-      const view: ViewState = { scale: 1 + rand() * 7, tx: (rand() - 0.5) * 500, ty: (rand() - 0.5) * 500 };
-      const t = composeView(fit, view);
+      const view: ViewState = {
+        cLon: bbox[0] + rand() * (bbox[2] - bbox[0]),
+        cLat: bbox[1] + rand() * (bbox[3] - bbox[1]),
+        span: 1 / 8 + rand() * (1 - 1 / 8),
+      };
+      const t = deriveTransform(view, bbox, fit, 900, 600);
       const lon = bbox[0] + rand() * (bbox[2] - bbox[0]);
       const lat = bbox[1] + rand() * (bbox[3] - bbox[1]);
       const [x, y] = projectPoint(bbox, t, lon, lat);

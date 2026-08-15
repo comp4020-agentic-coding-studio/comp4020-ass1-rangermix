@@ -1,9 +1,9 @@
 // Theme-aware canvas map renderer over public/data/render.json's road-line
 // artifact. Split deliberately into two halves:
 //
-//   1. Pure geometry/data functions (fitTransform, composeView, zoomAbout,
-//      clampPan, projectPoint/unprojectPoint, decodeLine, visibleLines,
-//      strideFor) — no DOM, no canvas, fully unit-tested in
+//   1. Pure geometry/data functions (fitTransform, deriveTransform,
+//      zoomAbout, clampGeoView, projectPoint/unprojectPoint, decodeLine,
+//      visibleLines, strideFor) — no DOM, no canvas, fully unit-tested in
 //      mapRenderer.test.ts.
 //   2. `MapView`, a thin class wrapping two stacked <canvas> elements (a
 //      static "base" layer for the road network, a dynamic "overlay" layer
@@ -48,7 +48,7 @@ function cosMidLat(bbox: [number, number, number, number]): number {
 }
 
 /** Geo -> screen through an arbitrary Transform (the fitted transform
- * alone, or a fit composed with a view state via composeView — this
+ * alone, or a fit+view derived transform via deriveTransform — this
  * function doesn't care which, it just applies scale+offset). Exported so
  * MapView.project and the round-trip tests in mapRenderer.test.ts share
  * the exact same math. */
@@ -95,66 +95,135 @@ export function fitTransform(
   return { scale, ox, oy };
 }
 
-/** A user-driven view transform composed ON TOP of the fitted transform
- * (see composeView): `scale` multiplies the fit's own scale (clamped to
- * [1, 8]), `tx`/`ty` are an additional screen-space pan offset in CSS px,
- * applied AFTER the fit's own scale (so panning by 10px always moves the
- * view by 10 screen px regardless of zoom level). The identity view (no
- * zoom, no pan) is `{ scale: 1, tx: 0, ty: 0 }` — what a freshly
- * constructed or resetView()'d MapView starts at. */
+/** GEO-ANCHORED view state (§16.11 — replaces the old pixel-space `{scale,
+ * tx, ty}`): `cLon`/`cLat` is the geo point rendered at the CENTER of
+ * whichever panel's own viewport is showing this state; `span` is the
+ * fraction of the whole bbox's own fitted extent currently visible (`1` =
+ * the whole map, matching the old identity view; the old 8x max zoom is
+ * `span === MIN_SPAN` = 1/8). Deliberately dimensionless in the pixel
+ * sense — nothing here is a screen-px offset — which is the whole point:
+ * two MapViews with DIFFERENT css sizes (the overlay map vs. a Compare
+ * panel, or two differently-shaped Compare panels) showing the SAME
+ * ViewState both center on the SAME geo point (see deriveTransform), so
+ * switching between them preserves what the visitor was looking at instead
+ * of carrying over a pixel pan that meant something different in the old
+ * panel's geometry. The identity view (whole map, centered) is
+ * `wholeMapView(bbox)` — what a freshly constructed or resetView()'d
+ * MapView starts at. */
 export interface ViewState {
-  scale: number;
-  tx: number;
-  ty: number;
+  cLon: number;
+  cLat: number;
+  span: number;
 }
 
-const MIN_VIEW_SCALE = 1;
-const MAX_VIEW_SCALE = 8;
+const MIN_SPAN = 1 / 8; // most zoomed in — matches the old MAX_VIEW_SCALE (8x)
+const MAX_SPAN = 1; // whole map — matches the old MIN_VIEW_SCALE (1x, identity)
 
-function clampViewScale(s: number): number {
-  return Math.min(MAX_VIEW_SCALE, Math.max(MIN_VIEW_SCALE, s));
+function clampSpan(span: number): number {
+  return Math.min(MAX_SPAN, Math.max(MIN_SPAN, span));
 }
 
-/** Composes the fitted (geo -> screen) transform with a user ViewState
- * into one effective Transform, so project()/unproject() have exactly one
- * transform to apply/invert — the caller never reasons about "fit then
- * view" as two separate steps. View-space screen coords are fit-space
- * screen coords scaled by `view.scale` then offset by `(view.tx,
- * view.ty)`: `screenView = screenFit * view.scale + (tx, ty)`. Composing
- * two transforms of this scale+offset shape yields another transform of
- * the exact same shape, which is what makes reusing projectPoint/
- * unprojectPoint unchanged (just fed a composed Transform) correct,
- * rather than needing separate "apply the view on top" code paths. */
-export function composeView(fit: Transform, view: ViewState): Transform {
+/** The identity view: whole bbox, centered — `span: 1` shows exactly the
+ * fitted extent fitTransform itself computes, regardless of which panel's
+ * own `fit` ends up applying it (see deriveTransform), so this is
+ * panel-shape-agnostic on purpose. Used as the default starting state and
+ * as the fit-toggle button's "whole map" target (§16.7). */
+export function wholeMapView(bbox: [number, number, number, number]): ViewState {
+  return { cLon: (bbox[0] + bbox[2]) / 2, cLat: (bbox[1] + bbox[3]) / 2, span: MAX_SPAN };
+}
+
+/** Derives ONE effective Transform from a geo ViewState for a SPECIFIC
+ * panel's own `fit` and `w`x`h` css size — the per-frame, per-panel step
+ * §16.11 asks for ("each MapView derives its pixel transform per-frame from
+ * geo state × its OWN fitTransform × its css size"). `span` scales the
+ * fit's own scale (`scale = fit.scale / span` — smaller span = more zoomed
+ * in); `cLon`/`cLat` is placed at the viewport's own center `(w/2, h/2)` by
+ * solving projectPoint's own `screen = (geo - bbox0) * cosMid * scale +
+ * offset` for the offset directly, rather than reusing `fit.ox`/`fit.oy`
+ * (which only describe span-1-AND-bbox-centered — this replaces that
+ * whole-map-only centering with an arbitrary one). Callers never cache the
+ * result across a store update — see MapView's class comment for why that
+ * used to be exactly the overlay-lag bug (§16.9). */
+export function deriveTransform(view: ViewState, bbox: [number, number, number, number], fit: Transform, w: number, h: number): Transform {
+  const cosMid = cosMidLat(bbox);
+  const scale = fit.scale / view.span;
   return {
-    scale: fit.scale * view.scale,
-    ox: fit.ox * view.scale + view.tx,
-    oy: fit.oy * view.scale + view.ty,
+    scale,
+    ox: w / 2 - (view.cLon - bbox[0]) * cosMid * scale,
+    oy: h / 2 - (bbox[3] - view.cLat) * scale,
   };
 }
 
-/** Anchor-preserving zoom: returns the ViewState after scaling `view` by
- * `factor` (>1 zooms in, <1 zooms out) about the SCREEN point `(cx, cy)`
- * in CSS px — whatever geo point currently renders at `(cx, cy)` renders
- * at `(cx, cy)` again after the zoom (the invariant mapRenderer.test.ts
- * checks directly). The resulting scale is clamped to [1, 8]; if the
- * clamped scale lands exactly at the minimum (fully zoomed out), tx/ty
- * reset to 0 instead of preserving the anchor through that transition —
- * "zoomed all the way out" is the canonical home position regardless of
- * where the anchor was, not wherever the anchor math would otherwise leave
- * the pan. That reset is the one deliberate exception to anchor
- * preservation; everywhere else — including when the top clamp at scale 8
- * kicks in — the anchor math runs against whatever the actual post-clamp
- * scale turns out to be, so the invariant still holds exactly. Deliberately
- * does NOT also run clampPan's pan-bounds clamp here: doing so could move
- * tx/ty away from the anchor-preserving values computed below, breaking
- * the exact invariant this function exists to guarantee. Pan bounds are
- * panBy's job, not zoomAt's (see clampPan's own comment). */
-export function zoomAbout(view: ViewState, cx: number, cy: number, factor: number): ViewState {
-  const newScale = clampViewScale(view.scale * factor);
-  if (newScale === MIN_VIEW_SCALE) return { scale: MIN_VIEW_SCALE, tx: 0, ty: 0 };
-  const ratio = newScale / view.scale;
-  return { scale: newScale, tx: cx - (cx - view.tx) * ratio, ty: cy - (cy - view.ty) * ratio };
+/** Anchor-preserving zoom, geo-anchored equivalent of the old pixel-space
+ * zoomAbout: returns the ViewState after scaling by `factor` (>1 zooms in,
+ * <1 zooms out) about the SCREEN point `(cx, cy)` in CSS px, WITHIN the
+ * panel described by `bbox`/`fit`/`w`/`h` — whatever geo point currently
+ * renders at `(cx, cy)` in THAT panel renders at `(cx, cy)` again after the
+ * zoom (the invariant mapRenderer.test.ts checks directly): unproject the
+ * anchor under the CURRENT transform, then solve for the new center that
+ * puts that same geo point back at `(cx, cy)` under the NEW span's
+ * transform. `span` is clamped to `[MIN_SPAN, MAX_SPAN]`; if it clamps
+ * exactly at `MAX_SPAN` (fully zoomed out), the result resets to
+ * `wholeMapView(bbox)` instead of preserving the anchor through that
+ * transition — "zoomed all the way out" is the canonical home position
+ * regardless of where the anchor was, the one deliberate exception to
+ * anchor preservation carried over unchanged from the old zoomAbout (only
+ * MIN_SPAN, the old scale-8 boundary, is NOT special — anchor preservation
+ * holds right up to and at that clamp too). Deliberately does NOT also run
+ * clampGeoView's pan-bounds clamp here, same reason as before: that could
+ * move the center away from the anchor-preserving value computed below.
+ * Pan bounds are panBy's job (see clampGeoView's own comment).
+ *
+ * Guards `fit.scale <= 0` by returning `view` unchanged: a MapView calls
+ * this from a real pointer/wheel gesture only, which can't reach a panel
+ * with no real on-screen size — but `fit` is caller-supplied data, not
+ * something this function controls, so it defends itself anyway rather
+ * than trusting every future caller to only ever pass a live fit (see
+ * clampGeoView's own comment for the concrete scenario this class of bug
+ * came from — a resize() firing against a `display:none` canvas). Without
+ * this, `scaleNew` below would be 0 and the anchor math would divide by
+ * it, producing Infinity/NaN. */
+export function zoomAbout(
+  view: ViewState, bbox: [number, number, number, number], fit: Transform, w: number, h: number,
+  cx: number, cy: number, factor: number,
+): ViewState {
+  if (!(fit.scale > 0)) return view;
+  const spanNew = clampSpan(view.span / factor);
+  if (spanNew === MAX_SPAN) return wholeMapView(bbox);
+  const t0 = deriveTransform(view, bbox, fit, w, h);
+  const [anchorLon, anchorLat] = unprojectPoint(bbox, t0, cx, cy);
+  const cosMid = cosMidLat(bbox);
+  const scaleNew = fit.scale / spanNew;
+  return {
+    cLon: anchorLon - (cx - w / 2) / (cosMid * scaleNew),
+    cLat: anchorLat + (cy - h / 2) / scaleNew,
+    span: spanNew,
+  };
+}
+
+/** Shifts `view`'s geo center by a screen-space `(dx, dy)` CSS-px delta,
+ * within the panel described by `bbox`/`fit`/`w`/`h` — the geo-anchored
+ * equivalent of the old pixel-space `panBy`'s plain `tx + dx`. Dragging the
+ * pointer by `(dx, dy)` moves the MAP by `(dx, dy)` (content follows the
+ * finger/mouse), which is the same as moving the viewport's CENTER by
+ * `(-dx, -dy)` screen px — converted to geo via the current scale (and
+ * `cosMid` on the lon axis, matching every other geo<->screen conversion in
+ * this module). Unclamped on purpose (mirrors the old panBy/clampPan split):
+ * MapView.panBy composes this with clampGeoView; kept separate so the pure
+ * shift math is independently testable.
+ *
+ * Guards `fit.scale <= 0` by returning `view` unchanged — same defensive
+ * reasoning as zoomAbout's own comment: without it, `scale` below would be
+ * 0 and dividing by it would produce Infinity/NaN for any nonzero
+ * (dx, dy). */
+export function panGeo(
+  view: ViewState, bbox: [number, number, number, number], fit: Transform, w: number, h: number,
+  dx: number, dy: number,
+): ViewState {
+  if (!(fit.scale > 0)) return view;
+  const cosMid = cosMidLat(bbox);
+  const scale = fit.scale / view.span;
+  return { cLon: view.cLon - dx / (cosMid * scale), cLat: view.cLat + dy / scale, span: view.span };
 }
 
 // The design spec's pan-clamp contract: "the fitted content never fully
@@ -164,87 +233,68 @@ export function zoomAbout(view: ViewState, cx: number, cy: number, factor: numbe
 // viewport size directly, which silently counted a fit's own ox/oy slack —
 // often the majority of the viewport on the non-limiting axis for a bbox as
 // tall/narrow as Canberra's — as if it were content, letting one ordinary
-// drag pan the network to ~0% visible; see clampPan's own comment for the
-// fix and mapRenderer.test.ts's realistic-fit cases for the regression
+// drag pan the network to ~0% visible; see clampGeoView's own comment for
+// the fix and mapRenderer.test.ts's realistic-fit cases for the regression
 // coverage).
 const MIN_VISIBLE_FRACTION = 0.25;
 
-/** Clamps `view`'s pan so the fitted content can't slide fully out of a
- * `viewportW` x `viewportH` viewport — see the MIN_VISIBLE_FRACTION comment
- * above for the exact contract: at least `MIN_VISIBLE_FRACTION` of the
- * CONTENT rect's own size (not the viewport's) stays inside the viewport,
- * per axis. `fit` locates the TRUE fitted content rect: at view-scale 1 it
- * spans `[fit.ox, fit.ox + contentSize]` in screen space on each axis,
- * where `contentSize` is recovered from `fit.ox`/`fit.oy` alone via the
- * identity `contentSize = viewportSize - 2*off` — algebraically exact from
- * fitTransform's own centering (`ox = pad + (availW - mapW*scale) / 2`
- * implies `w - 2*ox = mapW*scale`, the true fitted content width; same
- * derivation for oy/height), so there's no need to separately thread
- * fitTransform's internal mapW/mapH through this function. That content
- * rect is then transformed by `view` exactly as composeView does (`screen =
- * fitSpace * view.scale + (tx, ty)`), giving the content's view-space edge
- * `contentStart = off*view.scale + t`. The valid range for `contentStart`
- * is content-size-relative, NOT viewport-size-relative — solving
- * `overlap(contentStart) >= MIN_VISIBLE_FRACTION * contentSize` for each
- * sliding-off-one-side case gives `min = -(1 - MIN_VISIBLE_FRACTION) *
- * contentSize` (content sliding off the start edge) and `max = viewportSize
- * - MIN_VISIBLE_FRACTION * contentSize` (content sliding off the end edge);
- * these only reduce to the viewport-relative-looking `[0.25*size -
- * contentSize, 0.75*size]` shape when `contentSize === size` (no fit slack,
- * no zoom) — a prior version used that reduced shape unconditionally, which
- * over-clamps when content is narrower than the viewport (fit slack, e.g.
- * Canberra's tall/narrow bbox in a wide viewport) and under-clamps when
- * content is wider (any real zoom), so it's wrong on both sides of scale 1
- * once `fit`'s true slack is accounted for at all. Used by panBy (drag-pan,
- * wheel-drag, pinch-pan) and resize (re-clamping a pan that a
- * viewport-size change left stale); deliberately NOT applied inside zoomAt
- * (see zoomAbout's own comment on why). Assumes `view.scale >=
- * MIN_VIEW_SCALE` (1), so a real clamp interval always exists on both
- * axes (in fact `min <= max` holds for any non-negative size/contentSize). */
-/** A tiny observable holding ONE shared user view — the mechanism build-
- * review amendment §14.3's Compare mode is built on: pan/zoom in ANY panel
- * (or the overlay map) moves every panel, because every MapView sharing a
- * store recomposes/redraws off the same `get()`/`subscribe()` pair rather
- * than owning a private ViewState of its own. Deliberately minimal — no
- * middleware, no selectors, `set()` always replaces the whole ViewState —
- * because the only thing ever stored is a ViewState and the only consumer
- * is MapView. `subscribe()` does NOT fire on registration, only on a LATER
- * `set()` (matches theme.ts's onThemeChange: register-then-wait, not
- * register-then-replay) whose value actually differs from the current one —
- * `set()` field-compares against the current state and no-ops otherwise
- * (build-review fix: a resize's re-clamp calls set() unconditionally, and
- * without this guard a no-op clamp would still fan out to every sharer of
- * the store) — and, unlike onThemeChange, returns a REAL unsubscribe
- * function; MapView.dispose() depends on that (see its own comment for why:
- * a Compare panel gets constructed and discarded repeatedly, which
- * theme.ts's existing callers never did). */
+/** A tiny observable holding ONE shared geo ViewState — the mechanism
+ * build-review amendment §14.3's Compare mode is built on: pan/zoom in ANY
+ * panel (or the overlay map) moves every panel, because every MapView
+ * sharing a store derives its own transform off the same `get()`/
+ * `subscribe()` pair rather than owning a private ViewState of its own
+ * (§16.11 additionally makes that shared state geo-anchored, so panels of
+ * DIFFERENT shapes stay centered on the same place too — see the ViewState
+ * doc comment). Deliberately minimal — no middleware, no selectors, `set()`
+ * always replaces the whole ViewState — because the only thing ever stored
+ * is a ViewState and the only consumer is MapView. `subscribe()` does NOT
+ * fire on registration, only on a LATER `set()` (matches theme.ts's
+ * onThemeChange: register-then-wait, not register-then-replay) whose value
+ * actually differs from the current one — `set()` field-compares against
+ * the current state and no-ops otherwise (build-review fix: a resize's
+ * re-clamp calls set() unconditionally, and without this guard a no-op
+ * clamp would still fan out to every sharer of the store) — and, unlike
+ * onThemeChange, returns a REAL unsubscribe function; MapView.dispose()
+ * depends on that (see its own comment for why: a Compare panel gets
+ * constructed and discarded repeatedly, which theme.ts's existing callers
+ * never did). Critically for §16.9's overlay-lag fix: `state` is updated
+ * BEFORE the listener loop runs, so `get()` already answers with the NEW
+ * state inside EVERY subscriber's callback, regardless of which order they
+ * were registered in or which one runs first — see MapView's class comment
+ * for why that specific guarantee is what makes deriving a transform fresh
+ * (rather than caching one inside a subscription callback) immune to
+ * subscription-order bugs. */
 export interface ViewStore {
   get(): ViewState;
   set(view: ViewState): void;
   subscribe(cb: (view: ViewState) => void): () => void;
 }
 
-/** Creates a ViewStore, defaulting to the identity view (no zoom, no pan —
- * the same starting state a standalone MapView has always used). A MapView
- * constructed with no explicit store creates its own private one via this
- * same function, so single-instance callers (the /how/ toys) are unaffected
- * — sharing a store is opt-in, by passing the SAME store instance to every
- * MapView that should move together. */
-export function createViewStore(initial: ViewState = { scale: 1, tx: 0, ty: 0 }): ViewStore {
+/** Creates a ViewStore. `initial` is required (unlike the old pixel-space
+ * store's dimensionless `{scale:1,tx:0,ty:0}` default) because a
+ * geo-anchored identity genuinely needs a bbox to mean anything — every
+ * real caller in this codebase has one in hand at construction time and
+ * passes `wholeMapView(render.bbox)` explicitly (see MapView's constructor
+ * default below, and home.ts's page-level store, created once render.json
+ * resolves). A MapView constructed with no explicit `store` creates its own
+ * private one this same way, so single-instance callers (the /how/ toys)
+ * are unaffected — sharing a store is opt-in, by passing the SAME store
+ * instance to every MapView that should move together. */
+export function createViewStore(initial: ViewState): ViewStore {
   let state = initial;
   const listeners = new Set<(view: ViewState) => void>();
   return {
     get: () => state,
     set(next) {
       // Equality guard (build-review fix): resize()'s re-clamp calls set()
-      // unconditionally even when clampPan is a no-op, which on a SHARED
-      // store would otherwise fan a genuinely unchanged view out to every
-      // sibling panel (and home.ts's page-level overlay-resync
+      // unconditionally even when clampGeoView is a no-op, which on a
+      // SHARED store would otherwise fan a genuinely unchanged view out to
+      // every sibling panel (and home.ts's page-level overlay-resync
       // subscription) — O(panels) wasted work per panel resizing, i.e.
       // O(panels^2) for one grid reflow, for zero visual change. Field
       // compare, not reference: every caller passes a freshly computed
       // object, so `===` per field is a true value check.
-      if (next.scale === state.scale && next.tx === state.tx && next.ty === state.ty) return;
+      if (next.cLon === state.cLon && next.cLat === state.cLat && next.span === state.span) return;
       state = next;
       for (const cb of listeners) cb(state);
     },
@@ -255,22 +305,108 @@ export function createViewStore(initial: ViewState = { scale: 1, tx: 0, ty: 0 })
   };
 }
 
-export function clampPan(
-  view: ViewState, fit: Transform, viewportW: number, viewportH: number,
+/** Clamps `view`'s center so the fitted content can't slide fully out of a
+ * `viewportW` x `viewportH` viewport — the geo-anchored re-derivation of
+ * the F2 pan-clamp contract (see MIN_VISIBLE_FRACTION above): at least
+ * `MIN_VISIBLE_FRACTION` of the CONTENT rect's own size (not the
+ * viewport's) stays inside the viewport, per axis. Works by computing the
+ * screen-space offset (`ox`/`oy`, exactly what deriveTransform itself would
+ * produce for this `view`) that the geo center implies, clamping THAT to
+ * the same `[min, max]` interval the old pixel-space clampPan derived
+ * (`min = -(1 - MIN_VISIBLE_FRACTION) * contentSize`, `max = viewportSize -
+ * MIN_VISIBLE_FRACTION * contentSize`, where `contentSize = mapW-or-H *
+ * scale` is the TRUE fitted content's own px size at the current span —
+ * see git history for the full inequality derivation, unchanged here), then
+ * solving deriveTransform's own `ox`/`oy` formula backwards for the geo
+ * center that produces the clamped offset. Algebraically exact (clamping
+ * the offset and clamping the center it implies are the same operation
+ * viewed from two sides — deriveTransform's `ox`/`oy` formula is a strictly
+ * monotonic function of `cLon`/`cLat`), so this is the same clamp the old
+ * clampPan enforced, just expressed in geo terms so it composes with the
+ * geo-anchored store. Used by panBy (drag-pan, wheel-drag, pinch-pan) and
+ * resize (re-clamping a view that a viewport-size change left stale);
+ * deliberately NOT applied inside zoomAt (see zoomAbout's own comment on
+ * why). Assumes `view.span <= MAX_SPAN` (1), so a real clamp interval
+ * always exists on both axes (in fact `min <= max` holds for any
+ * non-negative size/contentSize).
+ *
+ * Guards `fit.scale <= 0` by returning `view` unchanged — the concrete bug
+ * this fixes: MapView.resize() calls this UNCONDITIONALLY, including for a
+ * panel whose canvas is currently `display:none` (e.g. the overlay map,
+ * constructed while Compare is the active view mode — a persisted
+ * localStorage preference means this can be true from the very first
+ * resize(), not just after a later mode switch). A hidden canvas's
+ * `getBoundingClientRect()` is zero, which floors to a 1x1 css size (see
+ * resize()'s own `Math.max(1, ...)`), which starves `fitTransform`'s own
+ * `availW`/`availH` to 0 (viewport smaller than 2x PAD), which makes
+ * `fit.scale` exactly 0. Every other div-by-`scale` in this module
+ * (deriveTransform's own math never divides by it, only multiplies — see
+ * that function's comment) is fine at scale 0, but this function's
+ * offset<->center round-trip does divide by it (`cosMid * scale`), so
+ * `fit.scale === 0` here would put `NaN` (0/0) or `Infinity` (n/0) into
+ * `cLon`/`cLat` and, since this is the SHARED store, corrupt every panel
+ * sharing it — not just the hidden one. Returning `view` unchanged leaves
+ * the store exactly as it was; the panel's NEXT resize() (once it actually
+ * has a real size — a mode switch back, or the ResizeObserver firing once
+ * it's un-hidden) re-clamps for real. */
+export function clampGeoView(
+  view: ViewState, bbox: [number, number, number, number], fit: Transform, viewportW: number, viewportH: number,
 ): ViewState {
-  const clampAxis = (t: number, off: number, size: number): number => {
-    const contentSize = (size - 2 * off) * view.scale;
-    const contentStart = off * view.scale + t; // true content edge, view-space px
+  if (!(fit.scale > 0)) return view;
+  const cosMid = cosMidLat(bbox);
+  const scale = fit.scale / view.span;
+  const mapW = Math.max(1e-9, (bbox[2] - bbox[0]) * cosMid);
+  const mapH = Math.max(1e-9, bbox[3] - bbox[1]);
+
+  const clampOffset = (off: number, contentSize: number, viewportSize: number): number => {
     const min = -(1 - MIN_VISIBLE_FRACTION) * contentSize;
-    const max = size - MIN_VISIBLE_FRACTION * contentSize;
-    const clampedStart = Math.min(max, Math.max(min, contentStart));
-    return clampedStart - off * view.scale;
+    const max = viewportSize - MIN_VISIBLE_FRACTION * contentSize;
+    return Math.min(max, Math.max(min, off));
   };
+
+  const ox = viewportW / 2 - (view.cLon - bbox[0]) * cosMid * scale;
+  const oy = viewportH / 2 - (bbox[3] - view.cLat) * scale;
+  const oxClamped = clampOffset(ox, mapW * scale, viewportW);
+  const oyClamped = clampOffset(oy, mapH * scale, viewportH);
+
   return {
-    scale: view.scale,
-    tx: clampAxis(view.tx, fit.ox, viewportW),
-    ty: clampAxis(view.ty, fit.oy, viewportH),
+    cLon: bbox[0] + (viewportW / 2 - oxClamped) / (cosMid * scale),
+    cLat: bbox[3] - (viewportH / 2 - oyClamped) / scale,
+    span: view.span,
   };
+}
+
+/** Frames both A/B points with `pad` fraction of margin held back on every
+ * side (design spec §16.6: "starting any race zooms the viewport to the A-B
+ * bounds with pleasant padding (~15%)") — returns the geo view any panel
+ * should adopt to show both points centered with that padding, independent
+ * of any specific panel's own pixel size (span is panel-shape-agnostic by
+ * construction — see the ViewState doc comment), which is what lets ONE
+ * `viewStore.set(zoomToBounds(...))` call at the single race-start entry
+ * point (home.ts) correctly frame every active panel at once, overlay and
+ * every Compare panel alike. `span` is matched to whichever axis the pair
+ * spans a LARGER fraction of the whole bbox on (that's the one that would
+ * clip first); the other axis ends up with more than the target padding,
+ * never less. Clamped to `[MIN_SPAN, MAX_SPAN]`: a pair spanning most of
+ * the bbox already (e.g. the "Belconnen -> Tuggeranong" full-diagonal
+ * preset) clamps to the whole map rather than requesting an impossible
+ * zoom-out past it. A degenerate same-point pair (or two nodes that snapped
+ * to the same node) has zero extent to frame — the fraction is then exactly
+ * 0, which clamps up to MIN_SPAN (the closest legal zoom) instead of
+ * needing a special-cased branch: framing a single point at max zoom ("show
+ * me where this pin actually is") is exactly the sensible fallback the
+ * degenerate case needs, and the formula reaches it without a division by
+ * zero (mapW/mapH are bbox-derived and always positive) or a NaN. */
+export function zoomToBounds(
+  bbox: [number, number, number, number], lonA: number, latA: number, lonB: number, latB: number, pad = 0.15,
+): ViewState {
+  const cosMid = cosMidLat(bbox);
+  const mapW = Math.max(1e-9, (bbox[2] - bbox[0]) * cosMid);
+  const mapH = Math.max(1e-9, bbox[3] - bbox[1]);
+  const lonSpread = Math.abs(lonB - lonA) * cosMid;
+  const latSpread = Math.abs(latB - latA);
+  const frac = Math.max(lonSpread / mapW, latSpread / mapH);
+  return { cLon: (lonA + lonB) / 2, cLat: (latA + latB) / 2, span: clampSpan(frac / (1 - 2 * pad)) };
 }
 
 /** Reverses render.json's per-line encoding: `line[0]` is `cls`, `line[1]`
@@ -326,41 +462,68 @@ const GHOST_ALPHA = 0.07;
 /** Owns the two stacked canvases the home page's race (and /how/'s
  * hierarchy toy, which reuses the same data) paint into: `base` is the
  * static road network, redrawn only on resize/theme-change/threshold
- * change; `overlay` is the per-frame settle-flood/route/pins layer the
- * caller (RaceController, Task 8) drives directly. MapView never redraws
+ * change/store-change; `overlay` is the per-frame settle-flood/route/pins
+ * layer the caller (RaceController) drives directly. MapView never redraws
  * the overlay on its own — replay state lives in the caller, not here (see
  * design spec §8: "Canvases re-render on theme change, including mid-race
- * — replay state lives in data") — so after a theme change flips the base
- * layer's colors automatically, the caller re-invokes clearOverlay/
- * drawDots/drawRoute/drawPin with whatever frame it was already showing;
- * those four methods ARE that redraw hook.
+ * — replay state lives in data") — so after a theme change (or a pan/zoom)
+ * flips/moves the base layer automatically, the caller re-invokes
+ * clearOverlay/drawDots/drawRoute/drawPin with whatever frame it was
+ * already showing; those four methods ARE that redraw hook.
  *
- * Build-review §14.3 (Compare mode): the user's pan/zoom `ViewState` now
- * lives in an external `ViewStore` (see createViewStore above), not a
- * private field — every MapView constructed against the SAME store
- * recomposes/redraws whenever ANY of them (or a caller calling `store.set`
- * directly) changes it, which is the entire mechanism behind "pan/zoom in
- * one Compare panel moves every panel". A MapView constructed with no
- * `store` argument creates its own private one (createViewStore's own
- * default), so every pre-existing single-instance caller (the /how/ toys)
- * is unaffected. Because Compare panels are constructed and discarded
+ * Build-review §14.3 (Compare mode): the user's pan/zoom `ViewState` lives
+ * in an external `ViewStore` (see createViewStore above), not a private
+ * field — every MapView constructed against the SAME store redraws its base
+ * layer whenever ANY of them (or a caller calling `store.set` directly)
+ * changes it, which is the entire mechanism behind "pan/zoom in one Compare
+ * panel moves every panel". A MapView constructed with no `store` argument
+ * creates its own private one (`wholeMapView(render.bbox)`, this class's
+ * own default), so every pre-existing single-instance caller (the /how/
+ * toys) is unaffected. Because Compare panels are constructed and discarded
  * repeatedly (unlike every prior MapView caller, which built exactly one
  * for the page's lifetime), call `dispose()` when discarding one — see
- * that method's own comment for what it does and does not fully unhook. */
+ * that method's own comment for what it does and does not fully unhook.
+ *
+ * §16.9 (the overlay-lag bug) — root cause and fix: this class used to
+ * cache ONE derived Transform (`recompose()`, writing a private
+ * `this.transform` field) inside its own store subscription callback, and
+ * every draw method read that cached field. home.ts ALSO subscribes to the
+ * same shared store, separately, to redraw the overlay (pins/dots/route)
+ * whenever the view changes — and because home.ts's page-level subscription
+ * was registered BEFORE this class's MapView instances existed (it's set up
+ * synchronously in boot(), while a MapView is only constructed once
+ * render.json resolves), `ViewStore`'s listener `Set` — which fires
+ * callbacks in insertion order — always called home.ts's overlay-redraw
+ * subscriber BEFORE this instance's own subscriber on every single
+ * `store.set()`. So every overlay redraw read `this.transform` one store
+ * update BEFORE this instance's own subscriber had refreshed it — the base
+ * layer (redrawn by THIS instance's subscriber, later in the same
+ * notification) always painted the CURRENT view; the overlay (redrawn by
+ * home.ts's subscriber, earlier) always painted the PREVIOUS one. Two
+ * things independently make this class immune now: there is no cached
+ * transform field at all (see `currentTransform()` below — every draw call
+ * derives it fresh from `this.store.get()`, which `ViewStore.set()` already
+ * updates BEFORE it notifies anyone, so every subscriber sees the same,
+ * current state regardless of registration order — see ViewStore's own doc
+ * comment and mapRenderer.test.ts's direct regression test for that
+ * property), and the state itself is now geo-anchored rather than a pixel
+ * pan that only made sense relative to a snapshot of `fit`. Base and
+ * overlay redraws still run from two separately-registered subscriptions
+ * (home.ts's overlay one and this class's own base one) — that ordering no
+ * longer matters, because there's nothing left for the order to make stale. */
 export class MapView {
   private readonly baseCanvas: HTMLCanvasElement;
   private readonly overlayCanvas: HTMLCanvasElement;
   private readonly baseCtx: CanvasRenderingContext2D;
   private readonly overlayCtx: CanvasRenderingContext2D;
   private render: RenderData;
-  // `fit` is the raw geo->screen fit (recomputed on every resize()); the
-  // user's pan/zoom state lives in `store` (shared, possibly with other
-  // MapView instances — see the class doc comment), composed with `fit` on
-  // top of it into `transform` (see recompose()) — project()/unproject()
-  // only ever touch `transform`, never `fit`/the store directly, so they
-  // stay correct whichever changed most recently (a resize, or a
-  // zoomAt/panBy/resetView call from THIS instance or a sibling sharing
-  // the same store).
+  // `fit` is the raw geo->screen fit (recomputed on every resize() — it
+  // depends only on THIS panel's own css size + the bbox, never on the
+  // shared store). Deliberately NOT composed with the store's view into a
+  // cached `transform` field anymore — see the class doc comment's §16.9
+  // section for why that used to be the overlay-lag bug. Every draw method
+  // instead derives the effective Transform fresh, per call, via
+  // `currentTransform()`.
   private fit: Transform = { scale: 1, ox: 0, oy: 0 };
   private readonly store: ViewStore;
   private readonly unsubscribeStore: () => void;
@@ -368,7 +531,6 @@ export class MapView {
   // own comment: theme.ts's onThemeChange has no matching "off", so this
   // flag is what actually stops the redraw cost on a disposed instance).
   private disposed = false;
-  private transform: Transform = { scale: 1, ox: 0, oy: 0 };
   private pctThreshold: number | null = null;
   private emphasize = false;
   private dpr = 1;
@@ -384,14 +546,14 @@ export class MapView {
     if (!baseCtx || !overlayCtx) throw new Error("MapView: 2D canvas context unavailable");
     this.baseCtx = baseCtx;
     this.overlayCtx = overlayCtx;
-    this.store = store ?? createViewStore();
+    this.store = store ?? createViewStore(wholeMapView(render.bbox));
     // Fires on every `store.set()` from ANY sharer of this store, this
     // instance's own zoomAt/panBy/resetView included (they go through
-    // `store.set` too, see below) — so recompose+drawBase has exactly one
-    // call site regardless of who originated the change.
+    // `store.set` too, see below) — so drawBase has exactly one call site
+    // regardless of who originated the change. No transform to refresh
+    // first (see the class doc comment) — drawBase derives its own fresh.
     this.unsubscribeStore = this.store.subscribe(() => {
       if (this.disposed) return;
-      this.recompose();
       this.drawBase();
     });
     // NOTE (ledger, carried from an earlier review): onThemeChange has no
@@ -435,8 +597,8 @@ export class MapView {
    * the (capped) device pixel ratio, recomputes the fitted projection,
    * re-clamps the existing pan/zoom against the new size (a resize or
    * orientation change can otherwise strand a pan that was valid a moment
-   * ago off-screen — build-review finding; see clampPan's call below), and
-   * repaints the base layer — safe to call from a ResizeObserver as often
+   * ago off-screen — build-review finding; see clampGeoView's call below),
+   * and repaints the base layer — safe to call from a ResizeObserver as often
    * as layout changes; also called once by the constructor so a freshly
    * constructed MapView is never left blank. Does NOT itself redraw the
    * OVERLAY (pins/route/settle-flood): the caller's ResizeObserver hook
@@ -451,9 +613,9 @@ export class MapView {
    * together in practice (a window resize or a panel-count change reflows
    * all of them at once), so this settles rather than fights. If the clamp
    * is a no-op (nothing to re-clamp), the store never fires, which is why
-   * `recompose()`/`drawBase()` are still called explicitly below — resize()
-   * must repaint at the new `fit` either way, not only when the store
-   * happens to change. */
+   * `drawBase()` is still called explicitly below — resize() must repaint
+   * at the new `fit` either way, not only when the store happens to
+   * change. */
   resize(): void {
     const dpr = Math.min(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
     this.dpr = dpr;
@@ -469,8 +631,7 @@ export class MapView {
     this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.fit = fitTransform(this.render.bbox, this.cssWidth, this.cssHeight, PAD);
-    this.store.set(clampPan(this.store.get(), this.fit, this.cssWidth, this.cssHeight));
-    this.recompose();
+    this.store.set(clampGeoView(this.store.get(), this.render.bbox, this.fit, this.cssWidth, this.cssHeight));
     this.drawBase();
   }
 
@@ -486,53 +647,65 @@ export class MapView {
     this.drawBase();
   }
 
-  private recompose(): void {
-    this.transform = composeView(this.fit, this.store.get());
+  /** Derives this panel's CURRENT effective Transform fresh from the shared
+   * store's live state, this instance's own `fit`, and this instance's own
+   * css size — never cached across calls (see the class doc comment's
+   * §16.9 section: a cached transform, refreshed only inside this
+   * instance's own store subscription, is exactly what used to make the
+   * overlay lag one store update behind the base layer). Called once per
+   * draw method invocation (drawBase/drawDots/drawRoute), not once per
+   * point traced within one — cheap (one cos() call, a handful of flops),
+   * and the store cannot change mid-call (JS is single-threaded), so
+   * hoisting it to the top of each draw method is a pure perf win with zero
+   * staleness risk; `project`/`unproject` (below), called at arbitrary
+   * times by callers like home.ts's pin hit-testing, each derive their own
+   * on every call for the same always-fresh guarantee. */
+  private currentTransform(): Transform {
+    return deriveTransform(this.store.get(), this.render.bbox, this.fit, this.cssWidth, this.cssHeight);
   }
 
   /** Zooms by `factor` anchored at the screen point `(cx, cy)` in CSS px
-   * (see zoomAbout for the anchor-preserving math, the [1,8] scale clamp,
-   * and the zoomed-all-the-way-out reset) — wheel, pinch, and the +/-
-   * buttons all funnel through this one method. Writes the new view to the
-   * shared store; the store's own subscription (registered in the
-   * constructor) is what actually redraws the base layer — for THIS
-   * instance and, on a shared store, every sibling too (see the class doc
-   * comment: that fan-out IS Compare mode's pan/zoom sync). */
+   * (see zoomAbout for the anchor-preserving math, the span clamp, and the
+   * zoomed-all-the-way-out reset) — wheel, pinch, and the +/- buttons all
+   * funnel through this one method. Writes the new view to the shared
+   * store; the store's own subscription (registered in the constructor) is
+   * what actually redraws the base layer — for THIS instance and, on a
+   * shared store, every sibling too (see the class doc comment: that
+   * fan-out IS Compare mode's pan/zoom sync). */
   zoomAt(cx: number, cy: number, factor: number): void {
-    this.store.set(zoomAbout(this.store.get(), cx, cy, factor));
+    this.store.set(zoomAbout(this.store.get(), this.render.bbox, this.fit, this.cssWidth, this.cssHeight, cx, cy, factor));
   }
 
   /** Pans the view by `(dx, dy)` CSS px, clamped so the fitted content can
-   * never fully leave the viewport (see clampPan), then writes the result
-   * to the shared store — same fan-out as zoomAt above. */
+   * never fully leave the viewport (see clampGeoView), then writes the
+   * result to the shared store — same fan-out as zoomAt above. */
   panBy(dx: number, dy: number): void {
-    const view = this.store.get();
-    this.store.set(
-      clampPan({ scale: view.scale, tx: view.tx + dx, ty: view.ty + dy }, this.fit, this.cssWidth, this.cssHeight),
-    );
+    const shifted = panGeo(this.store.get(), this.render.bbox, this.fit, this.cssWidth, this.cssHeight, dx, dy);
+    this.store.set(clampGeoView(shifted, this.render.bbox, this.fit, this.cssWidth, this.cssHeight));
   }
 
-  /** Returns to the identity view (no zoom, no pan) — the same state a
+  /** Returns to the identity view (whole map, centered) — the same state a
    * freshly constructed MapView starts at — via the shared store, same
    * fan-out as zoomAt/panBy. */
   resetView(): void {
-    this.store.set({ scale: 1, tx: 0, ty: 0 });
+    this.store.set(wholeMapView(this.render.bbox));
   }
 
-  /** Geo -> screen, through the fit+view composed transform (fit alone
-   * when the view is at identity) — every draw call (drawBase, drawDots,
-   * drawRoute, drawPin) and every caller's own hit-testing (home.ts's
-   * pinNear) goes through this one method, so zoom/pan is correct
-   * everywhere for free once `transform` is right. */
+  /** Geo -> screen, through this panel's current derived transform (see
+   * currentTransform) — every draw call (drawBase, drawDots, drawRoute,
+   * drawPin) and every caller's own hit-testing (home.ts's pinNear) goes
+   * through this one method (or, for the three hot-loop draw methods, a
+   * transform hoisted once from the same currentTransform() call), so
+   * zoom/pan is correct everywhere for free once the store is right. */
   project(lon: number, lat: number): [number, number] {
-    return projectPoint(this.render.bbox, this.transform, lon, lat);
+    return projectPoint(this.render.bbox, this.currentTransform(), lon, lat);
   }
 
   /** Screen -> geo, the exact inverse of project() against the same
-   * composed transform — home.ts uses this for pin-drag snapping and pan
+   * derived transform — home.ts uses this for pin-drag snapping and pan
    * math correctly at any zoom level. */
   unproject(x: number, y: number): [number, number] {
-    return unprojectPoint(this.render.bbox, this.transform, x, y);
+    return unprojectPoint(this.render.bbox, this.currentTransform(), x, y);
   }
 
   /** Traces one render.json line into `ctx`'s current path (decode + project
@@ -540,15 +713,21 @@ export class MapView {
    * strokeStyle/lineWidth/globalAlpha and calls `stroke()`. Returns false
    * (nothing traced) for a degenerate single-point line, matching the old
    * inline `if (pts.length < 2) continue`. Shared by drawBase's ghost pass
-   * and its retained-lines pass so the decode/project walk exists once. */
-  private tracePath(ctx: CanvasRenderingContext2D, line: number[]): boolean {
+   * and its retained-lines pass so the decode/project walk exists once.
+   * Takes `t` (a Transform) from the caller rather than calling
+   * `this.project()` per point: drawBase derives it ONCE per repaint (see
+   * currentTransform's own comment on why that's still always-fresh, just
+   * not re-derived per point) — with tens of thousands of line points in
+   * the real Canberra network, re-deriving per point would mean a repeated
+   * `Math.cos()` (deriveTransform's cosMidLat call) on every single one. */
+  private tracePath(ctx: CanvasRenderingContext2D, line: number[], t: Transform): boolean {
     const pts = decodeLine(line, this.render.bbox);
     if (pts.length < 2) return false;
     ctx.beginPath();
-    const [x0, y0] = this.project(pts[0][0], pts[0][1]);
+    const [x0, y0] = projectPoint(this.render.bbox, t, pts[0][0], pts[0][1]);
     ctx.moveTo(x0, y0);
     for (let i = 1; i < pts.length; i++) {
-      const [x, y] = this.project(pts[i][0], pts[i][1]);
+      const [x, y] = projectPoint(this.render.bbox, t, pts[i][0], pts[i][1]);
       ctx.lineTo(x, y);
     }
     return true;
@@ -567,6 +746,7 @@ export class MapView {
   drawBase(): void {
     const ctx = this.baseCtx;
     const colors = themeColors();
+    const t = this.currentTransform(); // one derivation for this whole repaint — see currentTransform's own comment
     ctx.save();
     ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
     ctx.fillStyle = colors.ground;
@@ -578,12 +758,12 @@ export class MapView {
       ctx.globalAlpha = GHOST_ALPHA;
       ctx.lineWidth = 1;
       for (const line of this.render.lines) {
-        if (this.tracePath(ctx, line)) ctx.stroke();
+        if (this.tracePath(ctx, line, t)) ctx.stroke();
       }
     }
     for (const line of visibleLines(this.render.lines, this.pctThreshold)) {
       const major = line[0] >= 2;
-      if (!this.tracePath(ctx, line)) continue;
+      if (!this.tracePath(ctx, line, t)) continue;
       ctx.strokeStyle = this.emphasize ? colors.ch : (major ? colors.roadMajor : colors.road);
       ctx.globalAlpha = major ? 0.9 : 0.55;
       ctx.lineWidth = (major ? 1.6 : 1) + (this.emphasize ? 0.6 : 0);
@@ -610,6 +790,7 @@ export class MapView {
     color: string, opts: { additive: boolean; radius: number; stride: number },
   ): void {
     const ctx = this.overlayCtx;
+    const t = this.currentTransform(); // one derivation for this whole batch — see currentTransform's own comment
     const dark = effectiveTheme() === "dark";
     ctx.save();
     ctx.globalCompositeOperation = dark && opts.additive ? "lighter" : "source-over";
@@ -619,7 +800,7 @@ export class MapView {
     const n = Math.min(upto, order.length);
     for (let i = 0; i < n; i += stride) {
       const node = order[i];
-      const [x, y] = this.project(lon[node], lat[node]);
+      const [x, y] = projectPoint(this.render.bbox, t, lon[node], lat[node]);
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, Math.PI * 2);
       ctx.fill();
@@ -633,6 +814,7 @@ export class MapView {
     if (path.length < 2) return;
     const ctx = this.overlayCtx;
     const colors = themeColors();
+    const t = this.currentTransform(); // one derivation for this whole path — see currentTransform's own comment
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
     ctx.strokeStyle = colors.route;
@@ -640,10 +822,10 @@ export class MapView {
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.beginPath();
-    const [x0, y0] = this.project(lon[path[0]], lat[path[0]]);
+    const [x0, y0] = projectPoint(this.render.bbox, t, lon[path[0]], lat[path[0]]);
     ctx.moveTo(x0, y0);
     for (let i = 1; i < path.length; i++) {
-      const [x, y] = this.project(lon[path[i]], lat[path[i]]);
+      const [x, y] = projectPoint(this.render.bbox, t, lon[path[i]], lat[path[i]]);
       ctx.lineTo(x, y);
     }
     ctx.stroke();

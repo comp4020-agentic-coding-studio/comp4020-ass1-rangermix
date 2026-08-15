@@ -14,7 +14,7 @@
 
 import { initTheme } from "../theme";
 import { loadRender, loadRouting } from "../data";
-import { createViewStore, MapView, type RenderData } from "../viz/mapRenderer";
+import { createViewStore, MapView, wholeMapView, zoomToBounds, type RenderData, type ViewStore } from "../viz/mapRenderer";
 import { haversine, nearestNode } from "../snap";
 import { PRESETS } from "../presets";
 import { ALGO_LABEL, RaceController, type ComparePanel, type RaceUi, formatMs } from "../race/controller";
@@ -175,6 +175,7 @@ function boot(): void {
   const bidiToggle = document.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]');
   const zoomInBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-in"]');
   const zoomOutBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-out"]');
+  const zoomFitBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-fit"]');
   const viewToggleBtn = document.querySelector<HTMLButtonElement>('[data-testid="view-toggle"]');
 
   if (
@@ -188,8 +189,13 @@ function boot(): void {
   // MapView and every Compare panel's MapView are constructed against this
   // SAME store, so a pan/zoom gesture from any one of them moves all of
   // them — see mapRenderer.ts's ViewStore/MapView doc comments for the
-  // mechanism.
-  const viewStore = createViewStore();
+  // mechanism. §16.11: the store is now geo-anchored ({cLon,cLat,span}),
+  // which needs a real bbox to mean anything — created once render.json
+  // resolves (see renderReady below), not here, since nothing can reach it
+  // before then anyway (every use site below is guarded by data having
+  // loaded — see e.g. the preset handlers' `!graph` guard, extended to
+  // `!viewStore`).
+  let viewStore: ViewStore | undefined;
   let view: MapView | undefined;
   let controller: RaceController | undefined;
   let graph: Graph | undefined;
@@ -218,7 +224,20 @@ function boot(): void {
   // pin drag/tap call `scheduler.schedule()` — see src/race/scheduler.ts's
   // own comment for why `now()` cancelling any pending `schedule()` is the
   // fix for a stale debounced race silently overwriting a newer direct one.
+  //
+  // §16.6 (A-B auto-zoom): this IS the single call site every race-start
+  // trigger funnels through (scheduler.now()'s callers directly,
+  // scheduler.schedule()'s callers once its debounce timer fires) — so
+  // framing the view here, before dispatching the race, is what makes
+  // presets/surprise/"R"/auto-run/drag-drop-rerun all "inherit" the auto-zoom
+  // for free, per the task's own requirement, without each trigger needing
+  // its own copy of this call. Runs before `controller?.run()` (not after)
+  // so the view re-frames immediately when the race starts, not once the
+  // worker round-trip finishes.
   const scheduler = makeRaceScheduler((a, b) => {
+    if (viewStore && renderData && graph) {
+      viewStore.set(zoomToBounds(renderData.bbox, graph.lon[a], graph.lat[a], graph.lon[b], graph.lat[b]));
+    }
     controller?.run(a, b).catch(handleRaceError);
   }, DEBOUNCE_MS);
 
@@ -263,17 +282,28 @@ function boot(): void {
     controller?.redrawFrame();
   }
 
-  // ONE subscription drives every view's overlay resync regardless of how
-  // many MapViews currently share viewStore (1 in overlay mode, 2-4 panels
-  // in Compare) — deliberately a single store-level subscription here,
-  // rather than one registered per MapView: each MapView already redraws
-  // its OWN base layer from its own store subscription (see
-  // mapRenderer.ts), but also hanging a full pins+frame overlay resync off
-  // every one of those would re-run it once PER PANEL per change —
-  // O(panels^2) work for one pan/zoom tick instead of O(panels). Safe to
-  // register before `view`/`panels` exist: activeViews() and
-  // controller?.redrawFrame() both handle "not ready yet" gracefully.
-  viewStore.subscribe(() => syncAllOverlays());
+  // The overlay-resync subscription itself is registered once `viewStore`
+  // exists (see renderReady below) — ONE subscription drives every view's
+  // overlay resync regardless of how many MapViews currently share
+  // viewStore (1 in overlay mode, 2-4 panels in Compare), deliberately a
+  // single store-level subscription rather than one registered per MapView:
+  // each MapView already redraws its OWN base layer from its own store
+  // subscription (see mapRenderer.ts), but also hanging a full pins+frame
+  // overlay resync off every one of those would re-run it once PER PANEL
+  // per change — O(panels^2) work for one pan/zoom tick instead of
+  // O(panels).
+  //
+  // §16.9 note (the overlay-lag bug): this subscription and each MapView's
+  // own are still two separately-registered callbacks on the same store —
+  // that used to matter (whichever ran first read a stale cached
+  // transform); it no longer does, because MapView derives its transform
+  // fresh from the store on every draw call instead of caching one inside
+  // its subscription callback (see mapRenderer.ts's MapView class comment
+  // for the full root-cause writeup). This subscription's registration
+  // timing (now deferred until viewStore exists, see below — previously
+  // synchronous here, before any MapView existed) is no longer
+  // load-bearing for correctness, only for "don't touch viewStore before
+  // it exists".
 
   // ------------------------------------------------------------------
   // Pointer interaction (build-review amendments §14.1-3): pins move by
@@ -482,6 +512,29 @@ function boot(): void {
 
   wireMapInteraction(overlayCanvas, () => view, zoomInBtn, zoomOutBtn);
 
+  // §16.7: the fit-toggle button above the zoom pair — a one-shot re-frame
+  // action, not a mode lock (manual pan/zoom after a press just moves
+  // freely; the next press still re-frames from scratch). Its own state is
+  // only "which target does the NEXT press give", flipped on every click —
+  // it does not track or reflect whatever the live view actually shows.
+  let fitShowsWhole = true; // starts by offering "whole map" -- the natural complement to every race's own auto-zoom-to-AB (§16.6)
+  function updateFitButton(): void {
+    if (!zoomFitBtn) return;
+    zoomFitBtn.textContent = fitShowsWhole ? "Map" : "AB";
+    zoomFitBtn.setAttribute("aria-label", fitShowsWhole ? "Zoom to whole map" : "Zoom to fit the route");
+  }
+  updateFitButton();
+  zoomFitBtn?.addEventListener("click", () => {
+    if (!viewStore || !renderData || !graph || pinA === null || pinB === null) return;
+    viewStore.set(
+      fitShowsWhole
+        ? wholeMapView(renderData.bbox)
+        : zoomToBounds(renderData.bbox, graph.lon[pinA], graph.lat[pinA], graph.lon[pinB], graph.lat[pinB]),
+    );
+    fitShowsWhole = !fitShowsWhole;
+    updateFitButton();
+  });
+
   // "R"/"r" re-runs the current pair (ignore browser-refresh chords). A
   // direct trigger, so it goes through scheduler.now() — cancels any
   // pending debounced race from a pin drag that hasn't released yet.
@@ -581,12 +634,13 @@ function boot(): void {
       pinA = nearestNode(preset.a[0], preset.a[1], graph.lon, graph.lat);
       pinB = nearestNode(preset.b[0], preset.b[1], graph.lon, graph.lat);
       // Presets are the keyboard/a11y pin path now that pins move by drag
-      // only — resetView() so a pin placed while the map is zoomed/panned
-      // somewhere else is always immediately visible. Goes through
-      // viewStore directly (not a specific view's resetView()) since it
-      // must reset EVERY view sharing the store, including every active
-      // Compare panel, not just one.
-      viewStore.set({ scale: 1, tx: 0, ty: 0 });
+      // only — a pin placed while the map is zoomed/panned somewhere else
+      // must still end up visible. §16.6 superseded the old
+      // `viewStore.set({scale:1,...})` reset-to-whole-map here: the
+      // scheduler's own callback (see makeRaceScheduler above) now frames
+      // the A-B bounds with padding on EVERY race start, presets included —
+      // a strictly better "make the pins visible" than a flat reset, so
+      // this handler no longer needs its own view call at all.
       drawAllPinsOnly();
       scheduler.now(pinA, pinB); // direct trigger: cancels any pending debounce
     });
@@ -609,8 +663,7 @@ function boot(): void {
     const [a, b] = surprisePair(graph);
     pinA = a;
     pinB = b;
-    viewStore.set({ scale: 1, tx: 0, ty: 0 }); // see the preset handler above for why
-    drawAllPinsOnly();
+    drawAllPinsOnly(); // see the preset handler above for why no view call is needed here either
     scheduler.now(a, b); // direct trigger: cancels any pending debounce
   });
 
@@ -639,7 +692,14 @@ function boot(): void {
    * before the data + controller this needs exist (guarded below) — the
    * initial pre-load call to applyViewMode() relies on that. */
   function syncPanels(): void {
-    if (!compareGrid || !renderData || !graph || !controller) return;
+    // `!viewStore` guards the same "data not loaded yet" window as the rest
+    // of this condition (viewStore is created alongside renderData — see
+    // renderReady below) — belt-and-braces so a Compare panel can never be
+    // constructed with `viewStore` undefined, which would silently fall
+    // back to MapView's OWN private per-instance store (its `store ??
+    // createViewStore(...)` default) instead of the shared one, breaking
+    // Compare mode's whole pan/zoom-sync mechanism for that panel.
+    if (!compareGrid || !renderData || !graph || !controller || !viewStore) return;
     const render = renderData;
     const next = controller.getActiveRoster();
     const { add, remove } = diffPanels(panels.map((p) => p.algo), next);
@@ -761,6 +821,15 @@ function boot(): void {
 
   const renderReady = loadRender().then((render) => {
     renderData = render;
+    // Created here, not at the top of boot(): a geo-anchored store (§16.11)
+    // needs a real bbox to have a meaningful identity value, and render.bbox
+    // is exactly what wasn't available yet up there. Nothing earlier in
+    // boot() could have reached `viewStore` anyway (every use site is
+    // guarded the same way `graph`/`renderData` already are), so this is a
+    // pure "construct it once the data it needs exists" move, not a
+    // behavior change.
+    viewStore = createViewStore(wholeMapView(render.bbox));
+    viewStore.subscribe(() => syncAllOverlays());
     view = new MapView(baseCanvas, overlayCanvas, render, viewStore);
     view.drawBase(); // explicit repaint; harmless right after construction
     if (loadNote && !loadFailed) loadNote.textContent = "warming up the route engine…";
@@ -788,6 +857,7 @@ function boot(): void {
       if (bidiToggle) bidiToggle.disabled = false;
       if (zoomInBtn) zoomInBtn.disabled = false;
       if (zoomOutBtn) zoomOutBtn.disabled = false;
+      if (zoomFitBtn) zoomFitBtn.disabled = false;
       if (viewToggleBtn) viewToggleBtn.disabled = false;
 
       // Pins pre-placed on the signature preset (design spec's "Ready /

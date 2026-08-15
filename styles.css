@@ -344,6 +344,16 @@ a {
   border-color: var(--c-ch);
 }
 
+/* §16.7: the fit-toggle button, same 44x44 footprint as +/- but showing a
+   short word ("Map"/"AB") rather than a single glyph, so its own font-size
+   drops enough to keep 2-3 characters comfortably inside the square without
+   the box growing — everything else (border/background/hover) is shared
+   with .zoom-btn so it reads as one family of controls, not a stray one. */
+.zoom-fit-btn {
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+}
+
 /* Compare mode (build-review amendment §14.3): one panel per ACTIVE racer,
    replacing .map-frame while active — a sibling in the DOM (see index.html),
    toggled via [hidden] so exactly one of the two ever occupies the .hero

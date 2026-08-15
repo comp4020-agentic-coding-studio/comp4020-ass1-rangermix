@@ -169,6 +169,24 @@ describe("spec: home page (/) contracts", () => {
   );
 
   it(
+    "fit-toggle [data-testid=zoom-fit] is a real button, labelled, and sits ABOVE zoom-in/zoom-out in the zoom control stack (second build review §16.7 — toggles A-B-bounds zoom vs. whole-map fit)",
+    () => {
+      const doc = pageDoc("index.html");
+      const fit = doc?.querySelector('[data-testid="zoom-fit"]');
+      const zoomIn = doc?.querySelector('[data-testid="zoom-in"]');
+      expect(fit).toBeTruthy();
+      expect(fit?.tagName).toBe("BUTTON");
+      expect(fit?.getAttribute("aria-label")?.trim()).toBeTruthy();
+      expect(zoomIn).toBeTruthy();
+      // "ABOVE" the pair, concretely: an earlier sibling within the same
+      // zoom-controls stack (a column, first child = top), not just
+      // "present somewhere on the page".
+      const siblings = [...(fit?.parentElement?.children ?? [])];
+      expect(siblings.indexOf(fit as Element)).toBeLessThan(siblings.indexOf(zoomIn as Element));
+    },
+  );
+
+  it(
     "view toggle [data-testid=view-toggle] is a real button, aria-pressed present (build-review amendment §14.3 — Overlay/Compare, aria-pressed reflects Compare)",
     () => {
       const doc = pageDoc("index.html");
