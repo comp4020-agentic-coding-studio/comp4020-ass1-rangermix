@@ -197,3 +197,6 @@ same day (title, dual theme); due noon Mon 2026-08-17.
 - The pipeline is offline-only: `pnpm data:fetch` caches the Overpass
   extract (gitignored), `pnpm data:build` regenerates `public/data/` from
   the cache; artifacts are committed, CI never touches the network.
+- Known-benign local red: the footers link this repo's GitHub URL (a spec
+  line), which linkinator reports 404 while the repo is private. It heals
+  at ship (public flip happens before the deploy that CI link-checks).
