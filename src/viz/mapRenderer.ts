@@ -159,33 +159,64 @@ export function zoomAbout(view: ViewState, cx: number, cy: number, factor: numbe
 
 // The design spec's pan-clamp contract: "the fitted content never fully
 // leaves the viewport — keep >= 25% visible each axis" (build-review
-// amendment §14.2). clampPan treats the viewport's own CSS px size as a
-// proxy for the fitted content's extent at scale 1 (the content the fit
-// transform actually produces is inset from the viewport by PAD on the
-// limiting axis and centered with slack on the other, so this slightly
-// overstates the true content box on the slack axis) — a deliberate
-// simplification in the same spirit as this file's other
-// close-enough-and-documented approximations (the equirectangular
-// projection, the DPR cap): it can never UNDER-clamp (let content fully
-// vanish), which is the hard requirement, and PAD (24px) is small relative
-// to any real viewport.
+// amendment §14.2), enforced against the TRUE fitted content rect, not the
+// viewport's own size as a stand-in for it (a prior version used the
+// viewport size directly, which silently counted a fit's own ox/oy slack —
+// often the majority of the viewport on the non-limiting axis for a bbox as
+// tall/narrow as Canberra's — as if it were content, letting one ordinary
+// drag pan the network to ~0% visible; see clampPan's own comment for the
+// fix and mapRenderer.test.ts's realistic-fit cases for the regression
+// coverage).
 const MIN_VISIBLE_FRACTION = 0.25;
 
 /** Clamps `view`'s pan so the fitted content can't slide fully out of a
- * `viewportW` x `viewportH` viewport — see the MIN_VISIBLE_FRACTION
- * comment above for the exact contract and its one approximation. Used by
- * panBy (drag-pan, wheel-drag, pinch-pan); deliberately NOT applied inside
- * zoomAt (see zoomAbout's own comment on why). Assumes `view.scale >=
- * MIN_VIEW_SCALE` (1), so the content is always at least viewport-sized on
- * both axes and a real clamp interval always exists. */
-export function clampPan(view: ViewState, viewportW: number, viewportH: number): ViewState {
-  const clampAxis = (t: number, size: number): number => {
-    const contentSize = size * view.scale;
-    const min = MIN_VISIBLE_FRACTION * size - contentSize;
-    const max = (1 - MIN_VISIBLE_FRACTION) * size;
-    return Math.min(max, Math.max(min, t));
+ * `viewportW` x `viewportH` viewport — see the MIN_VISIBLE_FRACTION comment
+ * above for the exact contract: at least `MIN_VISIBLE_FRACTION` of the
+ * CONTENT rect's own size (not the viewport's) stays inside the viewport,
+ * per axis. `fit` locates the TRUE fitted content rect: at view-scale 1 it
+ * spans `[fit.ox, fit.ox + contentSize]` in screen space on each axis,
+ * where `contentSize` is recovered from `fit.ox`/`fit.oy` alone via the
+ * identity `contentSize = viewportSize - 2*off` — algebraically exact from
+ * fitTransform's own centering (`ox = pad + (availW - mapW*scale) / 2`
+ * implies `w - 2*ox = mapW*scale`, the true fitted content width; same
+ * derivation for oy/height), so there's no need to separately thread
+ * fitTransform's internal mapW/mapH through this function. That content
+ * rect is then transformed by `view` exactly as composeView does (`screen =
+ * fitSpace * view.scale + (tx, ty)`), giving the content's view-space edge
+ * `contentStart = off*view.scale + t`. The valid range for `contentStart`
+ * is content-size-relative, NOT viewport-size-relative — solving
+ * `overlap(contentStart) >= MIN_VISIBLE_FRACTION * contentSize` for each
+ * sliding-off-one-side case gives `min = -(1 - MIN_VISIBLE_FRACTION) *
+ * contentSize` (content sliding off the start edge) and `max = viewportSize
+ * - MIN_VISIBLE_FRACTION * contentSize` (content sliding off the end edge);
+ * these only reduce to the viewport-relative-looking `[0.25*size -
+ * contentSize, 0.75*size]` shape when `contentSize === size` (no fit slack,
+ * no zoom) — a prior version used that reduced shape unconditionally, which
+ * over-clamps when content is narrower than the viewport (fit slack, e.g.
+ * Canberra's tall/narrow bbox in a wide viewport) and under-clamps when
+ * content is wider (any real zoom), so it's wrong on both sides of scale 1
+ * once `fit`'s true slack is accounted for at all. Used by panBy (drag-pan,
+ * wheel-drag, pinch-pan) and resize (re-clamping a pan that a
+ * viewport-size change left stale); deliberately NOT applied inside zoomAt
+ * (see zoomAbout's own comment on why). Assumes `view.scale >=
+ * MIN_VIEW_SCALE` (1), so a real clamp interval always exists on both
+ * axes (in fact `min <= max` holds for any non-negative size/contentSize). */
+export function clampPan(
+  view: ViewState, fit: Transform, viewportW: number, viewportH: number,
+): ViewState {
+  const clampAxis = (t: number, off: number, size: number): number => {
+    const contentSize = (size - 2 * off) * view.scale;
+    const contentStart = off * view.scale + t; // true content edge, view-space px
+    const min = -(1 - MIN_VISIBLE_FRACTION) * contentSize;
+    const max = size - MIN_VISIBLE_FRACTION * contentSize;
+    const clampedStart = Math.min(max, Math.max(min, contentStart));
+    return clampedStart - off * view.scale;
   };
-  return { scale: view.scale, tx: clampAxis(view.tx, viewportW), ty: clampAxis(view.ty, viewportH) };
+  return {
+    scale: view.scale,
+    tx: clampAxis(view.tx, fit.ox, viewportW),
+    ty: clampAxis(view.ty, fit.oy, viewportH),
+  };
 }
 
 /** Reverses render.json's per-line encoding: `line[0]` is `cls`, `line[1]`
@@ -284,10 +315,16 @@ export class MapView {
   }
 
   /** Re-reads each canvas's CSS box size, re-allocates its backing store at
-   * the (capped) device pixel ratio, recomputes the fitted projection, and
+   * the (capped) device pixel ratio, recomputes the fitted projection,
+   * re-clamps the existing pan/zoom against the new size (a resize or
+   * orientation change can otherwise strand a pan that was valid a moment
+   * ago off-screen — build-review finding; see clampPan's call below), and
    * repaints the base layer — safe to call from a ResizeObserver as often
    * as layout changes; also called once by the constructor so a freshly
-   * constructed MapView is never left blank. */
+   * constructed MapView is never left blank. Does NOT itself fire
+   * onViewChange: the caller's ResizeObserver hook already re-syncs the
+   * overlay right after calling resize() (see home.ts), same as it always
+   * has for the backing-store-reallocation-blanks-the-overlay case. */
   resize(): void {
     const dpr = Math.min(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
     this.dpr = dpr;
@@ -303,6 +340,7 @@ export class MapView {
     this.baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.fit = fitTransform(this.render.bbox, this.cssWidth, this.cssHeight, PAD);
+    this.view = clampPan(this.view, this.fit, this.cssWidth, this.cssHeight);
     this.recompose();
     this.drawBase();
   }
@@ -357,6 +395,7 @@ export class MapView {
   panBy(dx: number, dy: number): void {
     this.view = clampPan(
       { scale: this.view.scale, tx: this.view.tx + dx, ty: this.view.ty + dy },
+      this.fit,
       this.cssWidth,
       this.cssHeight,
     );

@@ -143,6 +143,7 @@ function boot(): void {
   // handlers with its own scroll/pinch gestures.
   // ------------------------------------------------------------------
   let dragPin: "A" | "B" | null = null;
+  let dragPinOrigin: number | null = null; // the node dragPin sat on before THIS drag began -- see the mid-drag-abort restore below
   let panActive = false;
   let panX = 0;
   let panY = 0;
@@ -197,8 +198,22 @@ function boot(): void {
 
     if (pointers.size >= 2) {
       // A second pointer landing turns any single-pointer gesture into a
-      // pinch — two fingers down is never "drag one pin" or "pan with
-      // one finger" — with a fresh baseline so there's no jump.
+      // pinch — two fingers down is never "drag one pin" or "pan with one
+      // finger" — with a fresh baseline so there's no jump. If a pin drag
+      // was in progress, this ABORTS it: the pin is restored to its
+      // pre-drag node (build-review fix) rather than left wherever it had
+      // moved to when the second finger landed, and no race is scheduled
+      // for that in-flight position. Policy: a second touch mid-drag is
+      // read as "the user is starting a pinch", not "confirm the pin
+      // here" — restoring keeps the pin's node and the scoreboard's last
+      // completed race in sync (the alternative, committing + racing the
+      // in-flight position, would fire a race for a spot the user never
+      // deliberately released a drag on). See the F2 fix report.
+      if (dragPin) {
+        if (dragPin === "A") pinA = dragPinOrigin;
+        else pinB = dragPinOrigin;
+        drawPinsOnly();
+      }
       dragPin = null;
       panActive = false;
       const geo = pinchGeometry();
@@ -213,6 +228,7 @@ function boot(): void {
     const near = pinNear(x, y);
     if (near) {
       dragPin = near;
+      dragPinOrigin = near === "A" ? pinA : pinB;
     } else {
       panActive = true;
       panX = x;

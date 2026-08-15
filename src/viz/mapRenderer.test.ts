@@ -15,6 +15,7 @@ import {
   unprojectPoint,
   visibleLines,
   zoomAbout,
+  type Transform,
   type ViewState,
 } from "./mapRenderer";
 
@@ -29,6 +30,44 @@ function mulberry32(seed: number): () => number {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+/** The fraction of the TRUE fitted content rect's own width/height that
+ * overlaps the viewport, per axis, after a `clampPan` call — what the
+ * design spec's ">= 25% visible each axis" contract (build-review amendment
+ * §14.2) actually means. Computed independently of clampPan's own
+ * internals — straight from `fit.ox`/`fit.oy` and the `contentSize =
+ * viewportSize - 2*off` identity (see clampPan's own comment for the
+ * derivation) — so this helper can't share a bug with the code it checks.
+ * Also returns the content size itself (px, per axis) — callers deep enough
+ * into zoom territory need it to compute `minRequiredFraction` below rather
+ * than compare against a flat 0.25 (see that function's comment for why). */
+function contentVisibleFraction(
+  view: ViewState, fit: Transform, viewportW: number, viewportH: number,
+): { x: number; y: number; contentW: number; contentH: number } {
+  const contentW = (viewportW - 2 * fit.ox) * view.scale;
+  const contentH = (viewportH - 2 * fit.oy) * view.scale;
+  const x0 = fit.ox * view.scale + view.tx;
+  const y0 = fit.oy * view.scale + view.ty;
+  const overlapX = Math.min(viewportW, x0 + contentW) - Math.max(0, x0);
+  const overlapY = Math.min(viewportH, y0 + contentH) - Math.max(0, y0);
+  return { x: overlapX / contentW, y: overlapY / contentH, contentW, contentH };
+}
+
+/** The visible-fraction floor the design spec's own 25% target degrades to
+ * once the content is more than 4x the viewport on an axis — reachable at
+ * any view.scale above 4 (well inside [MIN_VIEW_SCALE, MAX_VIEW_SCALE] =
+ * [1, 8]) even with zero fit slack, since content size scales linearly with
+ * view.scale while the viewport doesn't. Past that point, showing 25% of
+ * the content would need more px than the viewport HAS at all — no pan
+ * position can do it — so the best (and correct) achievable is filling the
+ * viewport completely (overlap == viewportSize, a smaller fraction of the
+ * content than 25% but the true physical maximum, not a clamp bug). Proven
+ * algebraically in the fix's own report: clampAxis's `min`/`max` both
+ * evaluate to exactly this floor in that regime, not just the plain 25%
+ * target. */
+function minRequiredFraction(contentSize: number, viewportSize: number): number {
+  return Math.min(0.25, viewportSize / contentSize);
 }
 
 describe("fitTransform", () => {
@@ -229,30 +268,92 @@ describe("zoomAbout (anchor-preserving zoom)", () => {
   });
 });
 
-describe("clampPan", () => {
-  it("a wildly out-of-range pan clamps to the 25%-visible boundary on each axis", () => {
-    const clamped = clampPan({ scale: 1, tx: 1000, ty: -1000 }, 800, 600);
+describe("clampPan (against the TRUE fitted content rect, not the viewport as a stand-in)", () => {
+  // A fit with NO slack on either axis (content exactly fills the viewport
+  // at scale 1, ox=oy=0) -- the one case where the true content rect and
+  // "the whole viewport" coincide, so the simplest boundary math is exact
+  // and hand-checkable.
+  const flushFit: Transform = { scale: 1, ox: 0, oy: 0 };
+
+  it("a wildly out-of-range pan clamps to the 25%-visible boundary on each axis (flush fit, no slack)", () => {
+    const clamped = clampPan({ scale: 1, tx: 1000, ty: -1000 }, flushFit, 800, 600);
     expect(clamped).toEqual({ scale: 1, tx: 0.75 * 800, ty: 0.25 * 600 - 600 });
   });
 
-  it("leaves an already in-bounds pan untouched", () => {
+  it("leaves an already in-bounds pan untouched (flush fit)", () => {
     const view: ViewState = { scale: 3, tx: 50, ty: -30 };
-    expect(clampPan(view, 800, 600)).toEqual(view);
+    expect(clampPan(view, flushFit, 800, 600)).toEqual(view);
   });
 
-  it("never lets the content fully leave the viewport: overlap stays >= 25% of each axis (property, 200 seeded random scales/viewport sizes/pans)", () => {
+  // The real committed bbox (public/data/render.json) fitted into a
+  // realistic desktop map viewport (~1016x778, PAD=24 -- mirrors
+  // mapRenderer.ts's own PAD constant). Canberra's bbox is much taller than
+  // wide in map units (mapH/mapW ~= 1.8 after cos(midLat) x-correction --
+  // see the fitTransform describe block above), so THIS viewport is
+  // height-constrained: the fitted content is far NARROWER than the
+  // viewport, centered with wide slack on the x-axis. `fit.ox` (that slack)
+  // is exactly what the old `contentSize = viewportSize * scale` code
+  // silently treated as if it were content -- the bug this block pins.
+  const bbox: [number, number, number, number] = [
+    148.9179634, -35.6505443, 149.3332927, -35.0450695,
+  ];
+  const viewportW = 1016, viewportH = 778, pad = 24;
+  const fit = fitTransform(bbox, viewportW, viewportH, pad);
+
+  it("sanity: this fit is genuinely asymmetric (wide x-axis slack) -- otherwise this block wouldn't exercise the bug", () => {
+    expect(fit.ox).toBeGreaterThan(pad + 50);
+  });
+
+  it("one ordinary drag (well under the map's own ~1016px width, not an extreme fling) never drops below 25% visible on either axis", () => {
+    // A single continuous drag from near one side of the map toward the
+    // other -- NOT an adversarial/extreme value (both axes stay well
+    // inside the viewport's own size). Verified (see the fix report) that
+    // the OLD viewport-as-content clamp let a drag exactly this size pan
+    // the true content to ~3% visible on the x-axis -- the true-content-
+    // rect clamp must not.
+    const dragged = clampPan({ scale: 1, tx: -700, ty: -700 }, fit, viewportW, viewportH);
+    const frac = contentVisibleFraction(dragged, fit, viewportW, viewportH);
+    expect(frac.x).toBeGreaterThanOrEqual(0.25 - 1e-6);
+    expect(frac.y).toBeGreaterThanOrEqual(0.25 - 1e-6);
+  });
+
+  it("an extreme pan clamps to exactly 25% visible on the TRUE content rect, both axes", () => {
+    const clamped = clampPan({ scale: 1, tx: -100000, ty: 100000 }, fit, viewportW, viewportH);
+    const frac = contentVisibleFraction(clamped, fit, viewportW, viewportH);
+    expect(frac.x).toBeCloseTo(0.25, 5);
+    expect(frac.y).toBeCloseTo(0.25, 5);
+  });
+
+  it("resize()'s job: reclamping a pan that was valid at one viewport size against a NEW (much smaller) size still satisfies the 25% bound", () => {
+    const bigW = 1200, bigH = 900;
+    const bigFit = fitTransform(bbox, bigW, bigH, pad);
+    const view = clampPan({ scale: 5, tx: -900, ty: 700 }, bigFit, bigW, bigH);
+
+    // The viewport then shrinks a lot (phone rotation, drastic desktop
+    // resize) without the view itself changing -- MapView.resize() must
+    // now re-run clampPan against the new fit/size for exactly this reason
+    // (a resize used to leave the view untouched, stranding content
+    // off-screen); simulating that re-clamp here must still land within
+    // the 25% bound at the NEW size, not the stale bounds of a viewport
+    // that no longer exists.
+    const smallW = 380, smallH = 700;
+    const smallFit = fitTransform(bbox, smallW, smallH, pad);
+    const reclamped = clampPan(view, smallFit, smallW, smallH);
+    const frac = contentVisibleFraction(reclamped, smallFit, smallW, smallH);
+    expect(frac.x).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentW, smallW) - 1e-6);
+    expect(frac.y).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentH, smallH) - 1e-6);
+  });
+
+  it("never lets the content fully leave the viewport: visible fraction of the CONTENT rect >= 25% (or the viewport-filling floor once zoom makes 25% physically unreachable — see minRequiredFraction) per axis, incl. at max zoom and after extreme pans (property, 200 seeded random scales/pans against the realistic asymmetric fit)", () => {
     const rand = mulberry32(7);
     for (let i = 0; i < 200; i++) {
-      const scale = 1 + rand() * 7;
-      const w = 300 + rand() * 1600;
-      const h = 300 + rand() * 1600;
-      const tx = (rand() - 0.5) * 10000;
-      const ty = (rand() - 0.5) * 10000;
-      const clamped = clampPan({ scale, tx, ty }, w, h);
-      const overlapX = Math.min(w, clamped.tx + w * scale) - Math.max(0, clamped.tx);
-      const overlapY = Math.min(h, clamped.ty + h * scale) - Math.max(0, clamped.ty);
-      expect(overlapX).toBeGreaterThanOrEqual(0.25 * w - 1e-6);
-      expect(overlapY).toBeGreaterThanOrEqual(0.25 * h - 1e-6);
+      const scale = 1 + rand() * 7; // full [MIN_VIEW_SCALE, MAX_VIEW_SCALE] = [1, 8] range
+      const tx = (rand() - 0.5) * 20000; // deliberately far beyond any real drag
+      const ty = (rand() - 0.5) * 20000;
+      const clamped = clampPan({ scale, tx, ty }, fit, viewportW, viewportH);
+      const frac = contentVisibleFraction(clamped, fit, viewportW, viewportH);
+      expect(frac.x).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentW, viewportW) - 1e-6);
+      expect(frac.y).toBeGreaterThanOrEqual(minRequiredFraction(frac.contentH, viewportH) - 1e-6);
     }
   });
 });
