@@ -13,12 +13,37 @@
 import { loadRender } from "../data";
 import { MapView } from "../viz/mapRenderer";
 
-// pct thresholds MapView.setPctThreshold expects — render.json's `pct`
-// field is the CH-rank percentile (0-255) scripts/data/build.ts stamped on
-// each line; `null` means unfiltered. These four steps are the design
-// spec's own "all / top 35% / top 12% / top 2%" reveal.
-const PCT_STEPS: (number | null)[] = [null, 166, 224, 250];
+// The design spec's own "all / top 35% / top 12% / top 2%" reveal — `null`
+// means unfiltered (step 0), the other three are FRACTIONS to keep, turned
+// into actual `pct` byte thresholds by percentileThreshold() below once the
+// real data is loaded (see that function's comment for why: a fixed byte
+// guess drifted badly from what these labels claim).
+const KEEP_FRACS: (number | null)[] = [null, 0.35, 0.12, 0.02];
 const STEP_LABELS = ["every road", "top 35%", "top 12%", "top 2%"];
+
+/** The byte-valued `pct` threshold (0-255) that keeps (at least) `keepFrac`
+ * of `lines` under `visibleLines`'s `pct >= threshold` rule. Computed from
+ * the ACTUAL loaded data every mount, not a guessed constant: an earlier
+ * version hardcoded byte thresholds (166/224/250) that were calibrated
+ * against assumptions about the rank distribution, not the shipped
+ * render.json — against the real ~60k-line Canberra artifact they actually
+ * retained 10.2% / 0.75% / 0.025% of lines, not 35% / 12% / 2% (the "top
+ * 2%" step showed 15 lines, not ~1,200 — nowhere near "a connected spine
+ * with the bridges"). Exported + pure (array in, number out) for direct
+ * testing without a fetch. */
+export function percentileThreshold(lines: number[][], keepFrac: number): number {
+  if (lines.length === 0) return 0;
+  const sorted = lines.map((l) => l[1]).sort((a, b) => a - b);
+  const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * (1 - keepFrac))));
+  return sorted[idx];
+}
+
+/** The full 4-step threshold list `KEEP_FRACS`/`STEP_LABELS` describe: `null`
+ * (every road) plus one data-derived `percentileThreshold` per labelled
+ * fraction, in step order. */
+export function computePctSteps(lines: number[][]): (number | null)[] {
+  return KEEP_FRACS.map((frac) => (frac === null ? null : percentileThreshold(lines, frac)));
+}
 
 function skeletonMarkup(): string {
   return (
@@ -50,15 +75,20 @@ export function mountHierarchy(root: HTMLElement): void {
   }
 
   let view: MapView | undefined;
+  // Placeholder until the real data loads; `range` stays `disabled` until
+  // then (see skeletonMarkup), so applyStep() can only run off this
+  // placeholder from the one internal call right after pctSteps is
+  // computed below, never from user input arriving too early.
+  let pctSteps: (number | null)[] = [null, null, null, null];
 
   function applyStep(step: number): void {
-    const clamped = Math.min(PCT_STEPS.length - 1, Math.max(0, step));
+    const clamped = Math.min(pctSteps.length - 1, Math.max(0, step));
     const label = STEP_LABELS[clamped];
     if (output) output.textContent = label;
     if (stack) {
       stack.setAttribute("aria-label", `Map of Canberra's road network, ${label} shown.`);
     }
-    view?.setPctThreshold(PCT_STEPS[clamped]);
+    view?.setPctThreshold(pctSteps[clamped]);
   }
 
   range?.addEventListener("input", () => applyStep(Number(range.value)));
@@ -79,6 +109,7 @@ export function mountHierarchy(root: HTMLElement): void {
   const dataBase = new URL("../data/", document.baseURI).href;
   loadRender(dataBase)
     .then((render) => {
+      pctSteps = computePctSteps(render.lines);
       view = new MapView(baseCanvas, overlayCanvas, render);
       applyStep(Number(range?.value ?? 0));
       if (loading) loading.hidden = true;

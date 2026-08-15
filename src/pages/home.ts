@@ -27,8 +27,21 @@ const DRAG_HIT_PX = 20;
 const SURPRISE_MIN_M = 8000;
 const SURPRISE_MAX_TRIES = 50;
 
-function reducedMotion(): boolean {
-  return matchMedia("(prefers-reduced-motion: reduce)").matches;
+/** The AUTO_RUN_MS idle timer's fire condition: both pins must be placed,
+ * returned as the pinned pair (or `null` if either still isn't) so the
+ * caller never re-checks nullness itself. Motion preference does NOT gate
+ * this — design spec §5.1 state 2 says the auto-run is "skipped under
+ * prefers-reduced-motion, replaced by the final still + numbers", i.e.
+ * reduced motion swaps out the ANIMATION, not the race itself.
+ * RaceController.run() already renders straight to the final frame with no
+ * rAF loop when `matchMedia("(prefers-reduced-motion: reduce)").matches`
+ * (see controller.ts's `isReducedMotion()`/`animate()` split), so the
+ * auto-run below reuses that exact path via the same `scheduler.now()` a
+ * manual trigger uses — motion preference only changes how the race is
+ * DRAWN, not whether or when it runs. Pure and exported so this one
+ * decision is unit-testable without a real timer/DOM/matchMedia. */
+export function autoRunPins(pinA: number | null, pinB: number | null): [number, number] | null {
+  return pinA !== null && pinB !== null ? [pinA, pinB] : null;
 }
 
 function boot(): void {
@@ -299,10 +312,19 @@ function boot(): void {
     if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
   });
 
+  // render.json and routing.json load independently — nothing orders one
+  // before the other — so routingReady's rejection can land BEFORE
+  // renderReady's success. Without this guard, renderReady's own "warming
+  // up…" text write still lands even after Promise.all's catch below has
+  // already shown the honest failure copy, silently overwriting it with a
+  // progress message that will now never move again. Once true,
+  // renderReady's own then() stops touching loadNote at all.
+  let loadFailed = false;
+
   const renderReady = loadRender().then((render) => {
     view = new MapView(baseCanvas, overlayCanvas, render);
     view.drawBase(); // explicit repaint; harmless right after construction
-    if (loadNote) loadNote.textContent = "warming up the route engine…";
+    if (loadNote && !loadFailed) loadNote.textContent = "warming up the route engine…";
   });
 
   const routingReady = loadRouting().then((routing) => {
@@ -333,14 +355,20 @@ function boot(): void {
       drawPinsOnly();
 
       setTimeout(() => {
-        if (reducedMotion()) return; // no auto-run under reduced motion
-        if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
+        const pins = autoRunPins(pinA, pinB);
+        if (pins) scheduler.now(pins[0], pins[1]);
       }, AUTO_RUN_MS);
     })
     .catch((err: unknown) => {
+      loadFailed = true;
       console.error("failed to load map/routing data", err);
       if (loadNote) loadNote.textContent = "failed to load the map — reload to retry";
     });
 }
 
-boot();
+// Guarded (not a bare call) so this module is safely importable from a
+// plain Node test environment (no `document`) to reach `autoRunPins` alone
+// — same "don't assume a browser global exists" idiom this file already
+// uses for `typeof ResizeObserver !== "undefined"` above. Always true, so
+// always runs, on any real page load.
+if (typeof document !== "undefined") boot();
