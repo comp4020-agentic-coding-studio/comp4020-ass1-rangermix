@@ -390,10 +390,13 @@ function boot(): void {
       updateHint();
       drawPinsOnly();
 
-      setTimeout(() => {
-        const pins = autoRunPins(pinA, pinB);
-        if (pins) scheduler.now(pins[0], pins[1]);
-      }, AUTO_RUN_MS);
+      // Auto-run on desktop only (design spec §5.1)
+      if (matchMedia("(min-width: 940px)").matches) {
+        setTimeout(() => {
+          const pins = autoRunPins(pinA, pinB);
+          if (pins) scheduler.now(pins[0], pins[1]);
+        }, AUTO_RUN_MS);
+      }
     })
     .catch((err: unknown) => {
       loadFailed = true;

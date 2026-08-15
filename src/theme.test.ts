@@ -52,4 +52,28 @@ describe("theme", () => {
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
     expect(btn?.textContent).toContain("dark");
   });
+
+  it("cycles and applies themes in-memory when localStorage throws", () => {
+    // Stub localStorage to throw on all operations
+    const throwError = () => {
+      throw new Error("storage unavailable");
+    };
+    globalThis.localStorage.getItem = throwError as never;
+    globalThis.localStorage.setItem = throwError as never;
+    globalThis.localStorage.removeItem = throwError as never;
+
+    // initTheme should not throw and should apply system (default) without crashing
+    initTheme();
+    expect(document.documentElement.getAttribute("data-theme")).toBeNull();
+
+    // cycling should still work in-memory despite storage errors
+    expect(cycleTheme()).toBe("dark");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+
+    expect(cycleTheme()).toBe("light");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+
+    expect(cycleTheme()).toBe("system");
+    expect(document.documentElement.getAttribute("data-theme")).toBeNull();
+  });
 });

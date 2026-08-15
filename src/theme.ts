@@ -3,8 +3,33 @@ const KEY = "hth-theme";
 const ORDER: ThemeSetting[] = ["system", "dark", "light"];
 let listeners: (() => void)[] = [];
 
+function safeGetItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    // Private-mode / storage disabled: fall back to session-only state
+    return null;
+  }
+}
+
+function safeSetItem(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* storage unavailable — cycling still works in-memory */
+  }
+}
+
+function safeRemoveItem(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* storage unavailable — cycling still works in-memory */
+  }
+}
+
 function current(): ThemeSetting {
-  const v = localStorage.getItem(KEY);
+  const v = safeGetItem(KEY);
   return v === "light" || v === "dark" ? v : "system";
 }
 
@@ -29,8 +54,8 @@ export function effectiveTheme(): "light" | "dark" {
 
 export function cycleTheme(): ThemeSetting {
   const next = ORDER[(ORDER.indexOf(current()) + 1) % ORDER.length];
-  if (next === "system") localStorage.removeItem(KEY);
-  else localStorage.setItem(KEY, next);
+  if (next === "system") safeRemoveItem(KEY);
+  else safeSetItem(KEY, next);
   apply(next);
   return next;
 }
