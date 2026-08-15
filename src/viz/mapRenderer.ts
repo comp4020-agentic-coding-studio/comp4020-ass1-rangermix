@@ -210,10 +210,14 @@ const MIN_VISIBLE_FRACTION = 0.25;
  * because the only thing ever stored is a ViewState and the only consumer
  * is MapView. `subscribe()` does NOT fire on registration, only on a LATER
  * `set()` (matches theme.ts's onThemeChange: register-then-wait, not
- * register-then-replay), and — unlike onThemeChange — returns a REAL
- * unsubscribe function; MapView.dispose() depends on that (see its own
- * comment for why: a Compare panel gets constructed and discarded
- * repeatedly, which theme.ts's existing callers never did). */
+ * register-then-replay) whose value actually differs from the current one —
+ * `set()` field-compares against the current state and no-ops otherwise
+ * (build-review fix: a resize's re-clamp calls set() unconditionally, and
+ * without this guard a no-op clamp would still fan out to every sharer of
+ * the store) — and, unlike onThemeChange, returns a REAL unsubscribe
+ * function; MapView.dispose() depends on that (see its own comment for why:
+ * a Compare panel gets constructed and discarded repeatedly, which
+ * theme.ts's existing callers never did). */
 export interface ViewStore {
   get(): ViewState;
   set(view: ViewState): void;
@@ -232,6 +236,15 @@ export function createViewStore(initial: ViewState = { scale: 1, tx: 0, ty: 0 })
   return {
     get: () => state,
     set(next) {
+      // Equality guard (build-review fix): resize()'s re-clamp calls set()
+      // unconditionally even when clampPan is a no-op, which on a SHARED
+      // store would otherwise fan a genuinely unchanged view out to every
+      // sibling panel (and home.ts's page-level overlay-resync
+      // subscription) — O(panels) wasted work per panel resizing, i.e.
+      // O(panels^2) for one grid reflow, for zero visual change. Field
+      // compare, not reference: every caller passes a freshly computed
+      // object, so `===` per field is a true value check.
+      if (next.scale === state.scale && next.tx === state.tx && next.ty === state.ty) return;
       state = next;
       for (const cb of listeners) cb(state);
     },
@@ -356,7 +369,6 @@ export class MapView {
   // flag is what actually stops the redraw cost on a disposed instance).
   private disposed = false;
   private transform: Transform = { scale: 1, ox: 0, oy: 0 };
-  private readonly viewChangeListeners: (() => void)[] = [];
   private pctThreshold: number | null = null;
   private emphasize = false;
   private dpr = 1;
@@ -375,13 +387,12 @@ export class MapView {
     this.store = store ?? createViewStore();
     // Fires on every `store.set()` from ANY sharer of this store, this
     // instance's own zoomAt/panBy/resetView included (they go through
-    // `store.set` too, see below) — so recompose+drawBase+fireViewChange
-    // has exactly one call site regardless of who originated the change.
+    // `store.set` too, see below) — so recompose+drawBase has exactly one
+    // call site regardless of who originated the change.
     this.unsubscribeStore = this.store.subscribe(() => {
       if (this.disposed) return;
       this.recompose();
       this.drawBase();
-      this.fireViewChange();
     });
     // NOTE (ledger, carried from an earlier review): onThemeChange has no
     // matching "off" — theme.ts's own listener array only ever grows, and
@@ -427,10 +438,11 @@ export class MapView {
    * ago off-screen — build-review finding; see clampPan's call below), and
    * repaints the base layer — safe to call from a ResizeObserver as often
    * as layout changes; also called once by the constructor so a freshly
-   * constructed MapView is never left blank. Does NOT itself fire
-   * onViewChange: the caller's ResizeObserver hook already re-syncs the
-   * overlay right after calling resize() (see home.ts), same as it always
-   * has for the backing-store-reallocation-blanks-the-overlay case.
+   * constructed MapView is never left blank. Does NOT itself redraw the
+   * OVERLAY (pins/route/settle-flood): the caller's ResizeObserver hook
+   * already re-syncs the overlay right after calling resize() (see
+   * home.ts's syncAllOverlays()), same as it always has for the
+   * backing-store-reallocation-blanks-the-overlay case.
    *
    * The re-clamp goes through `store.set` like every other view mutation
    * (see the class doc comment), so on a SHARED store a resize of ANY one
@@ -478,31 +490,14 @@ export class MapView {
     this.transform = composeView(this.fit, this.store.get());
   }
 
-  private fireViewChange(): void {
-    for (const cb of this.viewChangeListeners) cb();
-  }
-
-  /** Registers `cb` to run after every zoomAt/panBy/resetView call (the
-   * base layer has already been redrawn by then, at the new projection) —
-   * the caller's hook for re-rendering whatever it owns on the OVERLAY
-   * (pins, and — mid-race — the current settle-flood/route frame), since
-   * MapView itself only ever owns the base layer's redraw (see this
-   * class's own doc comment on why the overlay redraw is always the
-   * caller's job). Multiple listeners supported (array, same pattern as
-   * theme.ts's onThemeChange) though home.ts currently registers just one. */
-  onViewChange(cb: () => void): void {
-    this.viewChangeListeners.push(cb);
-  }
-
   /** Zooms by `factor` anchored at the screen point `(cx, cy)` in CSS px
    * (see zoomAbout for the anchor-preserving math, the [1,8] scale clamp,
    * and the zoomed-all-the-way-out reset) — wheel, pinch, and the +/-
    * buttons all funnel through this one method. Writes the new view to the
    * shared store; the store's own subscription (registered in the
-   * constructor) is what actually redraws the base layer and notifies
-   * onViewChange listeners — for THIS instance and, on a shared store,
-   * every sibling too (see the class doc comment: that fan-out IS Compare
-   * mode's pan/zoom sync). */
+   * constructor) is what actually redraws the base layer — for THIS
+   * instance and, on a shared store, every sibling too (see the class doc
+   * comment: that fan-out IS Compare mode's pan/zoom sync). */
   zoomAt(cx: number, cy: number, factor: number): void {
     this.store.set(zoomAbout(this.store.get(), cx, cy, factor));
   }

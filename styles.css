@@ -398,14 +398,24 @@ a {
    toggled via [hidden] so exactly one of the two ever occupies the .hero
    column's flex space. Desktop: an even, self-wrapping row/grid — panels
    never shrink below 340px, so 2 sit side by side and 3-4 wrap onto a
-   second row rather than squeezing unreadably narrow. min-height matches
-   .map-stack's own desktop figure so the LOADING state (view mode restored
-   from localStorage before any panel exists yet) doesn't collapse to a
-   blank sliver the way a childless grid otherwise would. */
+   second row rather than squeezing unreadably narrow. Panels carry their
+   own aspect-ratio (see .compare-panel below), so once real panels exist
+   the grid sizes from that content — no min-height here. `.is-loading`
+   (below) is the ONLY place a min-height applies: it matches .map-stack's
+   own desktop figure so the LOADING state (view mode restored from
+   localStorage before any panel exists yet) doesn't collapse to a blank
+   sliver the way a childless grid otherwise would, and it's removed the
+   moment home.ts's syncPanels() actually mounts panels (build-review fix —
+   the unconditional min-height used to survive past that point too,
+   flooring a real 2-racer row to 72vh and leaving a ~400px dead gap above
+   the controls at 1920x1080). */
 .compare-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 16px;
+}
+
+.compare-grid.is-loading {
   min-height: 72vh;
 }
 
@@ -829,6 +839,13 @@ a {
      from the actual panel count, not guessed from CSS alone. */
   .compare-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Same loading-only floor as the desktop `.compare-grid.is-loading` rule
+     above, at .map-stack's own phone figure (55vh, matching line ~825) —
+     see that rule's comment for why it's scoped to .is-loading and not the
+     bare .compare-grid. */
+  .compare-grid.is-loading {
     min-height: 55vh;
   }
 

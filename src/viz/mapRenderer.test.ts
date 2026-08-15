@@ -428,6 +428,27 @@ describe("createViewStore (the shared pan/zoom store)", () => {
     expect([a, b, c]).toEqual([1, 1, 1]);
   });
 
+  it("set() with a value field-equal to the current state is a no-op: no notify, no re-render fan-out (build-review fix — a resize's no-op re-clamp used to still notify every sharer of the store)", () => {
+    const store = createViewStore({ scale: 2, tx: 5, ty: -3 });
+    let calls = 0;
+    store.subscribe(() => {
+      calls++;
+    });
+    store.set({ scale: 2, tx: 5, ty: -3 }); // same values, deliberately a NEW object (not the same reference)
+    expect(calls).toBe(0);
+    expect(store.get()).toEqual({ scale: 2, tx: 5, ty: -3 });
+  });
+
+  it("set() still notifies when only ONE field actually changes (the guard is a full field compare, not a truthy/reference shortcut)", () => {
+    const store = createViewStore({ scale: 2, tx: 5, ty: -3 });
+    let calls = 0;
+    store.subscribe(() => {
+      calls++;
+    });
+    store.set({ scale: 2, tx: 5, ty: -3.0001 });
+    expect(calls).toBe(1);
+  });
+
   it("subscribe() returns a REAL unsubscribe: that callback stops firing, other subscribers keep firing", () => {
     const store = createViewStore();
     let stopped = 0;

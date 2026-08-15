@@ -265,15 +265,14 @@ function boot(): void {
 
   // ONE subscription drives every view's overlay resync regardless of how
   // many MapViews currently share viewStore (1 in overlay mode, 2-4 panels
-  // in Compare) — deliberately a store-level subscription, not one
-  // registered via each MapView's own onViewChange: each MapView's
-  // onViewChange still fires per-instance for its OWN base-layer
-  // bookkeeping (see mapRenderer.ts), but wiring syncAllOverlays to every
-  // one of those too would re-run a full pins+frame redraw across every
-  // panel once PER PANEL per change — O(panels^2) work for one pan/zoom
-  // tick instead of O(panels). Safe to register before `view`/`panels`
-  // exist: activeViews() and controller?.redrawFrame() both handle "not
-  // ready yet" gracefully.
+  // in Compare) — deliberately a single store-level subscription here,
+  // rather than one registered per MapView: each MapView already redraws
+  // its OWN base layer from its own store subscription (see
+  // mapRenderer.ts), but also hanging a full pins+frame overlay resync off
+  // every one of those would re-run it once PER PANEL per change —
+  // O(panels^2) work for one pan/zoom tick instead of O(panels). Safe to
+  // register before `view`/`panels` exist: activeViews() and
+  // controller?.redrawFrame() both handle "not ready yet" gracefully.
   viewStore.subscribe(() => syncAllOverlays());
 
   // ------------------------------------------------------------------
@@ -665,6 +664,18 @@ function boot(): void {
 
     panels = next.map((algo) => byAlgo.get(algo)).filter((p): p is PanelEntry => p !== undefined);
     for (const p of panels) compareGrid.append(p.el); // re-append in `next`'s order (relocates existing nodes too)
+    // `.is-loading` (styles.css) ships in the static markup so the pre-data
+    // LOADING state — a persisted "compare" view mode restored before
+    // renderData/graph/controller exist, when this function's own guard
+    // above still returns early — has a min-height floor instead of
+    // collapsing to a blank sliver. Once panels actually exist (always true
+    // past this point: Dijkstra+CH are never excludable, so `next` is never
+    // empty), drop it so the grid sizes from the panels' own aspect-ratio
+    // instead of an unconditional min-height (build-review fix — that used
+    // to survive past the loading state too, flooring a real 2-racer row
+    // to 72vh and leaving a ~400px dead gap above the controls at
+    // 1920x1080).
+    compareGrid.classList.toggle("is-loading", panels.length === 0);
     // Phone layout (§14.3): 2 racers stack in one full-width column (two
     // ~171px columns at 390px are too cramped); 3-4 racers use a 2x2 grid
     // at ~44vw per panel instead of also stacking — four full-width
