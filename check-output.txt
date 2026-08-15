@@ -1,0 +1,26 @@
+$ pnpm typecheck && pnpm build && oxlint --ignore-path .gitignore && stylelint "**/*.css" --ignore-path .gitignore --allow-empty-input && vitest run
+$ tsc --noEmit
+$ vite build
+vite v8.1.5 building client environment for production...
+[2K
+transforming...✓ 29 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                  6.00 kB │ gzip:  1.95 kB
+dist/how/index.html              7.70 kB │ gzip:  2.90 kB
+dist/assets/worker-ZaEJviXs.js   9.84 kB
+dist/docs/mockup/index.html     54.49 kB │ gzip: 14.07 kB
+dist/assets/data-nSNGjWLw.css   17.78 kB │ gzip:  4.06 kB
+dist/assets/data-ufHlCXU3.js     9.43 kB │ gzip:  3.69 kB
+dist/assets/index-v6e9KolG.js   13.46 kB │ gzip:  5.23 kB
+dist/assets/index-B63aIM0j.js   31.45 kB │ gzip: 10.80 kB
+
+✓ built in 76ms
+ RUN  v4.1.10 C:/workspaces-local/comp4020-ass1-rangermix
+
+
+ Test Files  22 passed (22)
+      Tests  318 passed | 4 todo (322)
+   Start at  04:12:17
+   Duration  1.29s (transform 1.68s, setup 0ms, import 4.83s, tests 2.76s, environment 715ms)
+

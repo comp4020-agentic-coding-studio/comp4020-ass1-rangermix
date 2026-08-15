@@ -573,17 +573,16 @@ export function emit(g: RoutingGraph, outDir: string): EmitResult {
 
 // ---------------------------------------------------------------------
 // Toytown: a small ANU-area drivable subgraph cut from the SAME cached
-// extract, for the /how/ toys (Task F5 rewires the toys onto it; this task
-// ships only the artifact + loader — src/toys/minitown.ts's hand-made
-// 12-node graph stays live until then). Reuses buildRoutingGraph verbatim
-// on a bbox-restricted way list — same drivable filter, same largest-SCC
-// keep, same chain contraction as the main Canberra graph — so this is a
-// real subgraph, not a second pipeline to keep in sync.
+// extract, for the /how/ toys. Loaded by src/toys/toytown.ts and used by
+// the four interactive toys (hierarchy runs on full-Canberra render.json).
+// Reuses buildRoutingGraph verbatim on a bbox-restricted way list — same
+// drivable filter, same largest-SCC keep, same chain contraction as the main
+// Canberra graph — so this is a real subgraph, not a second pipeline to keep
+// in sync.
 //
 // Unlike routing.json, toytown.json carries no CH data: the /how/ toys
-// build their own CH from the decoded graph at load time, exactly how
-// MINITOWN's toys call buildCh(MINITOWN.graph) themselves (see
-// src/toys/climb.ts) — shipping precomputed shortcuts here would just be
+// build their own CH from the decoded graph at load time (see src/toys/climb.ts
+// for the CH-build call) — shipping precomputed shortcuts here would just be
 // dead weight for a ≤80-node graph a browser can CH-build in milliseconds.
 // What IS shipped: node coordinates and, per edge, its full geometry, so
 // the toys can draw real street shapes instead of straight lines.
