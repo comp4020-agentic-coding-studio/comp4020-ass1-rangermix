@@ -854,6 +854,28 @@ a {
     justify-content: center;
   }
 
+  /* F6 gate fix: at 44vw (~172px at 390px width) a quad panel's own height
+     (4:3 aspect ratio) is ~129px, but the desktop-sized zoom-controls stack
+     (two 44px buttons + gap = 96px tall) starts only ~17px from the
+     panel's top at its `bottom: 16px` desktop offset — landing squarely
+     across the panel-chip's own top-left corner, so the chip's racer
+     name/count read as cut off, painted over by the zoom buttons' opaque
+     background (found live: "Dijkstra — 1[3,249]", "Bidirectional
+     — [8,]cl[653]"). Shrinking the buttons (and tightening their offset to
+     match) clears the chip's row entirely at this panel size instead of
+     removing either control. */
+  .compare-grid-quad .zoom-controls {
+    right: 6px;
+    bottom: 6px;
+    gap: 4px;
+  }
+
+  .compare-grid-quad .zoom-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 1.05rem;
+  }
+
   .hero-copy {
     max-width: 100%;
     padding: 18px 18px 30px;
@@ -1034,6 +1056,20 @@ a {
   font-family: var(--mono);
   font-size: 9px;
   fill: var(--muted);
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+/* Opaque chip behind each label (sized + positioned in contraction.ts's
+   drawShortcut via getBBox, incl. the collision stagger) — F6 fix:
+   several shortcuts bowing away from the SAME contracted node used to
+   stack bare text on top of each other, illegible on a normal first click
+   on a busy (4-way) intersection. panel/line tokens so the chip reads as
+   the same UI chrome as the rest of the toy in both themes. */
+.shortcut-label-bg {
+  fill: var(--panel);
+  stroke: var(--line);
+  stroke-width: 1;
 }
 
 .route-path {
@@ -1344,6 +1380,18 @@ a {
    by default in the markup, shown by hierarchy.ts. */
 .hier-controls [data-role="resume"] {
   align-self: flex-start;
+}
+
+/* F6 gate fix: `[hidden]` and `.chip` (the resume button's own base class,
+   `display: inline-flex`) are equal specificity, so without this rule
+   source order let `.chip` win and the button rendered from the very first
+   frame — before the visitor ever touched the slider — instead of only
+   after a real pause (found live: a fresh page load already showed
+   "resume tour" though the loop was still auto-playing). Same fix, same
+   reason, as `.hier-loading[hidden]`/`.board .row[hidden]`/`.controls
+   .load-note[hidden]` elsewhere in this file. */
+.hier-controls [data-role="resume"][hidden] {
+  display: none;
 }
 
 @media (width <= 940px) {

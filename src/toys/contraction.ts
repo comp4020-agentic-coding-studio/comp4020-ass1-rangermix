@@ -25,6 +25,13 @@ import { declutterXY, MIN_NODE_DIST, physicalEdges, roadPolylineMarkup } from ".
 const FLASH_MS = 800;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CURVE_OFFSET = 16;
+// How far the k-th label of a busy contraction gets pushed past the plain
+// midpoint, along its OWN curve's normal (see drawShortcut) — a deliberately
+// simple per-shortcut-rank stagger, not real collision detection.
+const LABEL_STAGGER = 10;
+const LABEL_PAD_X = 3;
+const LABEL_PAD_Y = 1.5;
+const LABEL_RADIUS = 3;
 
 function orderedKey(a: number, b: number): string {
   return `${a}->${b}`;
@@ -34,13 +41,15 @@ function unorderedKey(a: number, b: number): string {
   return a < b ? `${a}-${b}` : `${b}-${a}`;
 }
 
-// Bows the shortcut's curve away from the node it bypasses, so it visually
-// arcs around the gap that node left behind instead of cutting straight
-// through where it used to sit. `flip` bows to the OPPOSITE side instead —
-// used so a directed pair's two independent shortcuts (u->w AND w->u,
-// which toytown's one-ways make genuinely different events, each with its
-// own weight) don't draw as two identical overlapping curves.
-function controlPoint(
+// Unit normal of the (a, b) chord, pointed away from `via` so a curve (or a
+// label walking the same line) bows around the gap the contracted node left
+// rather than through it. `flip` points to the OPPOSITE side instead — used
+// so a directed pair's two independent shortcuts (u->w AND w->u, which
+// toytown's one-ways make genuinely different events, each with its own
+// weight) don't draw as two identical overlapping curves. Shared by
+// controlPoint (the curve's midpoint bow) and drawShortcut (the label's
+// collision stagger) so both walk out from the chord along the same line.
+function curveNormal(
   xy: [number, number][],
   a: number,
   b: number,
@@ -65,7 +74,23 @@ function controlPoint(
     nx = -nx;
     ny = -ny;
   }
-  return [mx + nx * CURVE_OFFSET, my + ny * CURVE_OFFSET];
+  return [nx, ny];
+}
+
+// Bows the shortcut's curve away from the node it bypasses, so it visually
+// arcs around the gap that node left behind instead of cutting straight
+// through where it used to sit.
+function controlPoint(
+  xy: [number, number][],
+  a: number,
+  b: number,
+  via: number,
+  flip: boolean,
+): [number, number] {
+  const [x1, y1] = xy[a];
+  const [x2, y2] = xy[b];
+  const [nx, ny] = curveNormal(xy, a, b, via, flip);
+  return [(x1 + x2) / 2 + nx * CURVE_OFFSET, (y1 + y2) / 2 + ny * CURVE_OFFSET];
 }
 
 /** The real, DIRECTED edge list straight off `g.fwd`'s CSR — never
@@ -171,21 +196,50 @@ export function mountContraction(root: HTMLElement, t: Toytown): void {
     }, FLASH_MS);
   }
 
-  function drawShortcut(a: number, b: number, w: number, via: number): void {
+  // `collisionRank` is this shortcut's index within the batch a single
+  // contraction just produced (0 for the first/only one). A busy
+  // intersection can add several shortcuts that all bow away from the SAME
+  // via node, so their plain midpoint label positions cluster and overlap —
+  // the review's "5 labels collided on a normal first click" finding, on a
+  // 4-way ANU intersection. Fix is two-part: an opaque background chip
+  // (below, sized to the real rendered text via getBBox) so any label stays
+  // readable over what's behind it, plus this deterministic stagger that
+  // walks each label further along its OWN curve's normal by its rank —
+  // simple, not real collision detection, but it turns a stack into a fan.
+  function drawShortcut(a: number, b: number, w: number, via: number, collisionRank: number): void {
     if (!shortcutsGroup) return;
     const [x1, y1] = t.xy[a];
     const [x2, y2] = t.xy[b];
-    const [cx, cy] = controlPoint(t.xy, a, b, via, a > b);
+    const flip = a > b;
+    const [cx, cy] = controlPoint(t.xy, a, b, via, flip);
     const path = document.createElementNS(SVG_NS, "path");
     path.setAttribute("class", "shortcut-path");
     path.setAttribute("d", `M ${x1},${y1} Q ${cx},${cy} ${x2},${y2}`);
     shortcutsGroup.appendChild(path);
+
+    const [nx, ny] = curveNormal(t.xy, a, b, via, flip);
+    const lx = cx + nx * collisionRank * LABEL_STAGGER;
+    const ly = cy + ny * collisionRank * LABEL_STAGGER;
+
     const label = document.createElementNS(SVG_NS, "text");
     label.setAttribute("class", "shortcut-label");
-    label.setAttribute("x", String(cx));
-    label.setAttribute("y", String(cy));
+    label.setAttribute("x", String(lx));
+    label.setAttribute("y", String(ly));
     label.textContent = String(Math.round(w));
+    // Appended before measuring: getBBox() only reflects real rendered
+    // geometry once the element is actually in the (live) document.
     shortcutsGroup.appendChild(label);
+
+    const box = label.getBBox();
+    const bg = document.createElementNS(SVG_NS, "rect");
+    bg.setAttribute("class", "shortcut-label-bg");
+    bg.setAttribute("x", String(box.x - LABEL_PAD_X));
+    bg.setAttribute("y", String(box.y - LABEL_PAD_Y));
+    bg.setAttribute("width", String(box.width + LABEL_PAD_X * 2));
+    bg.setAttribute("height", String(box.height + LABEL_PAD_Y * 2));
+    bg.setAttribute("rx", String(LABEL_RADIUS));
+    shortcutsGroup.insertBefore(bg, label);
+
     shortcutEls.set(orderedKey(a, b), path);
   }
 
@@ -219,10 +273,10 @@ export function mountContraction(root: HTMLElement, t: Toytown): void {
     }
 
     liveEdges = liveEdges.filter((e) => e.from !== v && e.to !== v);
-    for (const s of outcome.shortcuts) {
+    outcome.shortcuts.forEach((s, collisionRank) => {
       liveEdges.push({ from: s.from, to: s.to, w: s.w });
-      drawShortcut(s.from, s.to, s.w, v);
-    }
+      drawShortcut(s.from, s.to, s.w, v, collisionRank);
+    });
 
     markContracted(v);
     updateCounter();

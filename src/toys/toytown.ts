@@ -1,8 +1,6 @@
-// The ANU-area drivable subgraph the /how/ toys will run on (Task F5
-// rewires the toys themselves onto this; this task ships the artifact +
-// this loader/decoder only — src/toys/minitown.ts's hand-made 12-node graph
-// stays live as the toys' actual data source until F5 lands). Cut from the
-// SAME cached Overpass extract as the main Canberra graph
+// The ANU-area drivable subgraph every /how/ toy runs on — F5 rewired all
+// five toys onto this; minitown.ts's old hand-made 12-node graph is gone.
+// Cut from the SAME cached Overpass extract as the main Canberra graph
 // (scripts/data/build.ts's emitToytown()), through the identical
 // drivable-filter -> largest-SCC -> chain-contraction pipeline, just
 // bboxed down first — see that function's own comment for the bbox tuning

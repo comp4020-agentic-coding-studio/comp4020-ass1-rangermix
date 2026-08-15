@@ -814,6 +814,28 @@ function boot(): void {
       loadFailed = true;
       console.error("failed to load map/routing data", err);
       if (loadNote) loadNote.textContent = "failed to load the map — reload to retry";
+      // F6 gate fix: a visitor whose LAST session left view mode persisted
+      // as "compare" (loadViewMode(), above) hits this catch with
+      // compareGrid still showing the EMPTY `.is-loading` placeholder —
+      // syncPanels() needs `controller`/`graph`, neither of which this
+      // failure path ever sets, so it can never populate real panels. Left
+      // alone, that's a permanently blank box AND (styles.css's
+      // `.compare-grid:not([hidden]) ~ .hero-copy` rule) a hidden h1/lede,
+      // i.e. a failure state that reads as a broken blank page instead of
+      // an honest one. Falling back to the overlay DOM state re-shows
+      // whatever base map DID load (render.json is independent of
+      // routing.json) and the hero copy, through the exact same
+      // applyViewMode() the success path uses — safe here since its
+      // non-compare branch only touches `panels` (still empty),
+      // `controller`/`graph` (both optionally-chained/guarded), and `view`
+      // (already constructed if renderReady won this race). Deliberately
+      // NOT persisted (no saveViewMode call): this only steadies the
+      // FAILURE view, so a reload that succeeds still restores the
+      // visitor's actual compare preference via the normal load path.
+      if (viewMode === "compare") {
+        viewMode = "overlay";
+        applyViewMode();
+      }
     });
 }
 
