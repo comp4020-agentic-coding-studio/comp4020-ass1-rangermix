@@ -59,6 +59,12 @@ export function computePctSteps(lines: number[][]): (number | null)[] {
   return KEEP_FRACS.map((frac) => (frac === null ? null : percentileThreshold(lines, frac)));
 }
 
+const LOOP_MS = 2500;
+
+function reducedMotion(): boolean {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 function skeletonMarkup(): string {
   return (
     `<div class="hier-stack" data-role="stack" role="img" ` +
@@ -71,6 +77,7 @@ function skeletonMarkup(): string {
     `<div class="hier-controls">` +
     `<label for="hier-range">roads shown: <output data-role="output" for="hier-range">${STEP_LABELS[0]}</output></label>` +
     `<input type="range" id="hier-range" min="0" max="3" step="1" value="0" data-role="range" disabled />` +
+    `<button class="chip" type="button" data-action="resume" data-role="resume" hidden>&#9658; resume tour</button>` +
     `</div>`
   );
 }
@@ -85,10 +92,43 @@ export function mountHierarchy(root: HTMLElement): void {
   const output = root.querySelector<HTMLOutputElement>('[data-role="output"]');
   const caption = root.querySelector<HTMLElement>('[data-role="caption"]');
   const range = root.querySelector<HTMLInputElement>('[data-role="range"]');
+  const resumeBtn = root.querySelector<HTMLButtonElement>('[data-role="resume"]');
 
   if (!(baseCanvas instanceof HTMLCanvasElement) || !(overlayCanvas instanceof HTMLCanvasElement)) {
     return;
   }
+
+  let loopTimer: ReturnType<typeof setInterval> | undefined;
+
+  function stopLoop(): void {
+    if (loopTimer !== undefined) {
+      clearInterval(loopTimer);
+      loopTimer = undefined;
+    }
+  }
+
+  // Auto-loops through the four level stops (~2.5s each, wrapping) once the
+  // real data is loaded — design spec §14.10 ch2: this chapter stays on the
+  // real Canberra map as the page's intuition anchor, so unlike the
+  // click-driven toys it plays itself. Reduced-motion never starts the
+  // loop at all (see mountHierarchy's own .then callback) — the slider
+  // stays fully manual, matching flood/climb's "final state, no loops"
+  // rule in spirit (there's no single "final" step here to jump to, so
+  // simply never auto-advancing is the equivalent).
+  function startLoop(): void {
+    stopLoop();
+    loopTimer = setInterval(() => {
+      if (!range) return;
+      const next = (Number(range.value) + 1) % (pctSteps.length || 4);
+      range.value = String(next);
+      applyStep(next);
+    }, LOOP_MS);
+  }
+
+  resumeBtn?.addEventListener("click", () => {
+    if (resumeBtn) resumeBtn.hidden = true;
+    startLoop();
+  });
 
   let view: MapView | undefined;
   // Placeholder until the real data loads; `range` stays `disabled` until
@@ -113,7 +153,16 @@ export function mountHierarchy(root: HTMLElement): void {
     view?.setPctThreshold(pctSteps[clamped], { emphasize: clamped >= 2 });
   }
 
-  range?.addEventListener("input", () => applyStep(Number(range.value)));
+  // A user-initiated slider move pauses the loop PERMANENTLY (not just for
+  // one cycle) — design spec §14.10: "pausing when the visitor selects a
+  // level". Only the loop's own setInterval tick advances the slider
+  // without going through this listener, so this only fires on real user
+  // input.
+  range?.addEventListener("input", () => {
+    applyStep(Number(range.value));
+    stopLoop();
+    if (resumeBtn) resumeBtn.hidden = false;
+  });
 
   if (stack && typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => view?.resize());
@@ -136,6 +185,12 @@ export function mountHierarchy(root: HTMLElement): void {
       applyStep(Number(range?.value ?? 0));
       if (loading) loading.hidden = true;
       if (range) range.disabled = false;
+      // Reduced-motion: no loop at all, slider manual only (design spec
+      // §14.10) — this toy is already only mounted once its root has
+      // scrolled into view (see how.ts's IntersectionObserver gate), so
+      // starting the tour right here IS "auto-start on scroll" for chapter
+      // 2, no separate visibility gate needed.
+      if (!reducedMotion()) startLoop();
     })
     .catch((err: unknown) => {
       console.error("hierarchy toy: render.json failed to load", err);

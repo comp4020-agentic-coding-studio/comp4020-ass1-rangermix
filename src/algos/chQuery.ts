@@ -2,7 +2,20 @@ import { MinHeap } from "./heap.ts";
 import type { SearchResult } from "./dijkstra";
 import type { Ch, ChEdge } from "./chBuild";
 
-export interface ChResult extends SearchResult { settledB: Uint32Array; meet: number }
+export interface ChResult extends SearchResult {
+  settledB: Uint32Array;
+  meet: number;
+  /** True iff the WINNING PATH's compact (pre-unpack) edge chain — upSeq +
+   * dnSeq below — includes at least one real CH shortcut (`childA !== -1`).
+   * Deliberately narrower than "did the search relax through a shortcut
+   * anywhere while exploring": a bidirectional search settles many nodes
+   * that never end up on the final answer, so that broader question can be
+   * true even when the winning path itself is built entirely from original
+   * streets. This is what /how/'s climb toy actually needs to answer
+   * "does this pair's winning path traverse a shortcut" honestly (see
+   * src/toys/climb.ts's findDefaultClimbPair). */
+  usesShortcut: boolean;
+}
 
 // Module-held scratch, reused across every chQuery call instead of
 // allocating dist/parent/done + a MinHeap (six n-sized arrays total,
@@ -104,7 +117,7 @@ export function chQuery(ch: Ch, from: number, to: number): ChResult {
     if (d < best.d) { best.d = d; best.meet = v; }
   }
   if (best.meet === -1)
-    return { dist: INF, path: [], settled: Uint32Array.from(sF), settledB: Uint32Array.from(sB), relaxed: counters.relaxed, meet: -1 };
+    return { dist: INF, path: [], settled: Uint32Array.from(sF), settledB: Uint32Array.from(sB), relaxed: counters.relaxed, meet: -1, usesShortcut: false };
   // reconstruct: forward chain of up-edges to meet, then backward chain
   const upSeq: number[] = [];
   for (let v = best.meet; v !== from && getParent(fwd, v) !== -1; ) {
@@ -128,9 +141,11 @@ export function chQuery(ch: Ch, from: number, to: number): ChResult {
     cur = e.to;
     path.push(cur);
   }
+  const usesShortcut =
+    upSeq.some((ei) => ch.edges[ei].childA !== -1) || dnSeq.some((ei) => ch.edges[ei].childA !== -1);
   return {
     dist: best.d, path,
     settled: Uint32Array.from(sF), settledB: Uint32Array.from(sB),
-    relaxed: counters.relaxed, meet: best.meet,
+    relaxed: counters.relaxed, meet: best.meet, usesShortcut,
   };
 }

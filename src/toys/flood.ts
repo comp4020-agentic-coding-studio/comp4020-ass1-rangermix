@@ -1,57 +1,86 @@
-// Chapter 1 toy: press play and watch Dijkstra's settle order bloom across
-// the mini-town from A to L — the exact same dijkstra() that drives the
-// real Canberra race, just twelve nodes instead of tens of thousands.
+// Chapter 1 toy: press play (or just scroll it into view — see how.ts's
+// visibility gate) and watch Dijkstra's settle order bloom across a real
+// ANU-area street network from a default far pair — the exact same
+// dijkstra() that drives the real Canberra race, just 55 streets instead of
+// tens of thousands. The visitor can re-pick their own start/end pair by
+// clicking two intersections (toytownView's advancePick: first=start,
+// second=end+re-run, third=reset+new start); every re-pick calls the SAME
+// real dijkstra(), never a scripted replay.
 
+import type { Graph } from "../algos/graph";
 import { dijkstra } from "../algos/dijkstra";
-import { MINITOWN, VIEWBOX, minitownEdges } from "./minitown";
+import { VIEWBOX, VIEWBOX_H, VIEWBOX_W, type Toytown } from "./toytown";
+import {
+  advancePick,
+  declutterXY,
+  IDLE_PICK,
+  MIN_NODE_DIST,
+  physicalEdges,
+  roadPolylineMarkup,
+  type PickState,
+} from "./toytownView";
 
-const STEP_MS = 350;
-const FROM_NAME = "A";
-const TO_NAME = "L";
+const STEP_MS = 80; // 55 nodes x 80ms ~= a 4.5s full flood — brisk, not draggy
 
 function reducedMotion(): boolean {
   return matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-function svgMarkup(): string {
-  const edgeLines = minitownEdges()
-    .map((e) => {
-      const [x1, y1] = MINITOWN.xy[e.a];
-      const [x2, y2] = MINITOWN.xy[e.b];
-      const cls = e.highway ? "edge-line edge-highway" : "edge-line";
-      return `<line class="${cls}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" />`;
-    })
-    .join("");
-  const nodes = MINITOWN.names
-    .map((name, i) => {
-      const [x, y] = MINITOWN.xy[i];
-      const endpoint = name === FROM_NAME || name === TO_NAME ? " node-endpoint" : "";
+/** The toy's default "far pair": a double-sweep (two dijkstra() passes,
+ * starting from an arbitrary node) — the standard cheap approximation of a
+ * graph's diameter endpoints. Like every other number this site shows,
+ * this is COMPUTED from the real loaded graph, never hand-picked node
+ * indices: `dijkstra(g, from, -1)` settles every reachable node in
+ * non-decreasing distance order, so the LAST settled node is already the
+ * farthest one from `from` — no separate per-node distance array needed. */
+export function findFarPair(g: Graph): { from: number; to: number } {
+  const first = dijkstra(g, 0, -1);
+  const far1 = first.settled[first.settled.length - 1] ?? 0;
+  const second = dijkstra(g, far1, -1);
+  const far2 = second.settled[second.settled.length - 1] ?? far1;
+  return { from: far1, to: far2 };
+}
+
+/** Button centers, decluttered apart (see toytownView's declutterXY): the
+ * real toytown layout has intersections as little as ~2px apart on screen,
+ * which no hit-circle padding alone can make individually clickable. The
+ * route path and every other geometry-accurate draw stays on `t.xy` — only
+ * the button LAYER moves. */
+function nodeButtonsMarkup(t: Toytown): string {
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+  return buttonXY
+    .map(([x, y], i) => {
+      const left = ((x / VIEWBOX_W) * 100).toFixed(3);
+      const top = ((y / VIEWBOX_H) * 100).toFixed(3);
       return (
-        `<g class="flood-node${endpoint}" data-node="${i}">` +
-        `<circle cx="${x}" cy="${y}" r="12" />` +
-        `<text x="${x}" y="${y}" dy="0.32em">${name}</text>` +
-        `</g>`
+        `<button class="node-btn" type="button" data-node="${i}" ` +
+        `style="left:${left}%;top:${top}%" aria-label="Intersection ${i + 1} of ${t.xy.length}"></button>`
       );
     })
     .join("");
-  return (
-    `<svg class="minitown-svg" viewBox="${VIEWBOX}" role="img" ` +
-    `aria-label="Mini-town of twelve intersections, used to demonstrate Dijkstra's search from ${FROM_NAME} to ${TO_NAME}.">` +
-    `<g class="edges">${edgeLines}</g>` +
-    `<path class="route-path" d="" />` +
-    `<g class="nodes">${nodes}</g>` +
-    `</svg>`
-  );
 }
 
-export function mountFlood(root: HTMLElement): void {
-  const from = MINITOWN.names.indexOf(FROM_NAME);
-  const to = MINITOWN.names.indexOf(TO_NAME);
-  const result = dijkstra(MINITOWN.graph, from, to);
-  const total = MINITOWN.graph.n;
+function labelFor(i: number, n: number, from: number, to: number): string {
+  const base = `Intersection ${i + 1} of ${n}`;
+  if (i === from) return `${base}, start`;
+  if (i === to) return `${base}, end`;
+  return base;
+}
+
+export function mountFlood(root: HTMLElement, t: Toytown): { playDefault: () => void } {
+  const roads = physicalEdges(t);
 
   root.innerHTML =
-    `<div class="minitown-stage">${svgMarkup()}</div>` +
+    `<div class="toy-stage">` +
+    `<svg class="toy-svg" viewBox="${VIEWBOX}" role="img" ` +
+    `aria-label="Street network used to demonstrate Dijkstra's search.">` +
+    `<g class="edges">${roadPolylineMarkup(roads)}</g>` +
+    `<path class="route-path" d="" />` +
+    `</svg>` +
+    nodeButtonsMarkup(t) +
+    `</div>` +
+    `<p class="toy-subhead">Click two intersections to race your own pair — first
+      is the start, second is the end.</p>` +
     `<div class="toy-controls">` +
     `<button class="chip" type="button" data-action="play">&#9658; play</button>` +
     `<button class="chip" type="button" data-action="step">step</button>` +
@@ -59,18 +88,29 @@ export function mountFlood(root: HTMLElement): void {
     `<span class="toy-counter" data-role="counter"></span>` +
     `</div>`;
 
-  const svg = root.querySelector("svg");
   const routePath = root.querySelector<SVGPathElement>(".route-path");
   const counter = root.querySelector<HTMLElement>('[data-role="counter"]');
   const playBtn = root.querySelector<HTMLButtonElement>('[data-action="play"]');
   const stepBtn = root.querySelector<HTMLButtonElement>('[data-action="step"]');
   const resetBtn = root.querySelector<HTMLButtonElement>('[data-action="reset"]');
 
-  let shown = 0; // how many of result.settled are currently revealed
-  let timer: ReturnType<typeof setInterval> | undefined;
+  const nodeButtons = new Map<number, HTMLButtonElement>();
+  for (const btn of root.querySelectorAll<HTMLButtonElement>(".node-btn")) {
+    nodeButtons.set(Number(btn.dataset.node), btn);
+  }
 
-  function nodeEl(i: number): SVGGElement | null {
-    return svg?.querySelector<SVGGElement>(`.flood-node[data-node="${i}"]`) ?? null;
+  let from = 0;
+  let to = 0;
+  let result = dijkstra(t.graph, 0, 0);
+  let shown = 0;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let pick: PickState = IDLE_PICK;
+
+  function stop(): void {
+    if (timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
   }
 
   function paintPath(atEnd: boolean): void {
@@ -79,25 +119,18 @@ export function mountFlood(root: HTMLElement): void {
       routePath.setAttribute("d", "");
       return;
     }
-    const pts = result.path.map((i) => MINITOWN.xy[i].join(",")).join(" L ");
+    const pts = result.path.map((i) => t.xy[i].join(",")).join(" L ");
     routePath.setAttribute("d", `M ${pts}`);
   }
 
   function render(): void {
     for (let i = 0; i < result.settled.length; i++) {
-      nodeEl(result.settled[i])?.classList.toggle("settled", i < shown);
+      nodeButtons.get(result.settled[i])?.classList.toggle("settled", i < shown);
     }
     const done = shown >= result.settled.length;
-    if (counter) counter.textContent = `settled ${shown} of ${total}`;
+    if (counter) counter.textContent = `settled ${shown} of ${t.graph.n}`;
     paintPath(done);
     if (stepBtn) stepBtn.disabled = done;
-  }
-
-  function stop(): void {
-    if (timer !== undefined) {
-      clearInterval(timer);
-      timer = undefined;
-    }
   }
 
   // Returns true if there's still more to reveal after this step.
@@ -108,28 +141,65 @@ export function mountFlood(root: HTMLElement): void {
     return shown < result.settled.length;
   }
 
-  playBtn?.addEventListener("click", () => {
+  function playFromCurrent(): void {
     stop();
+    shown = 0;
     if (reducedMotion()) {
       shown = result.settled.length;
       render();
       return;
     }
+    render();
     timer = setInterval(() => {
       if (!step()) stop();
     }, STEP_MS);
-  });
+  }
 
+  function setPair(newFrom: number, newTo: number): void {
+    stop();
+    from = newFrom;
+    to = newTo;
+    result = dijkstra(t.graph, from, to);
+    shown = 0;
+    for (const [i, btn] of nodeButtons) {
+      btn.classList.remove("settled");
+      btn.classList.toggle("endpoint-a", i === from);
+      btn.classList.toggle("endpoint-b", i === to);
+      // Echoes the home page's own map-pin convention ("A"/"B" discs) —
+      // aria-label carries the same info for screen readers regardless.
+      btn.textContent = i === from ? "A" : i === to ? "B" : "";
+      btn.setAttribute("aria-label", labelFor(i, t.graph.n, from, to));
+    }
+    render();
+  }
+
+  for (const [i, btn] of nodeButtons) {
+    btn.addEventListener("click", () => {
+      const { next, complete } = advancePick(pick, i);
+      pick = next;
+      for (const [j, b] of nodeButtons) {
+        b.classList.toggle("pending-start", j === pick.start && pick.end === null);
+      }
+      if (complete) {
+        setPair(complete[0], complete[1]);
+        playFromCurrent();
+      }
+    });
+  }
+
+  playBtn?.addEventListener("click", () => playFromCurrent());
   stepBtn?.addEventListener("click", () => {
     stop();
     step();
   });
-
   resetBtn?.addEventListener("click", () => {
     stop();
     shown = 0;
     render();
   });
 
-  render();
+  const start = findFarPair(t.graph);
+  setPair(start.from, start.to);
+
+  return { playDefault: () => playFromCurrent() };
 }

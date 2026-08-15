@@ -117,6 +117,67 @@ describe("unpacking", () => {
   });
 });
 
+describe("ChResult.usesShortcut: honestly reports the WINNING PATH, not just the search frontier", () => {
+  // A 5-node path, 0-1-2-3-4 (undirected, weight 4 per hop). Contracting
+  // node 3 (which the heuristic does early — verified below) removes it
+  // and adds a 2<->4 shortcut of weight 8, since no witness bypass exists.
+  // Node ranks came out as [0,3,4,1,2] when this fixture was built (node 0
+  // contracted first, node 2 last) — queries that only ever stay within
+  // the low-rank end (e.g. 0->1) never touch the shortcut; queries that
+  // have to cross past the contracted node 3 to reach node 4 do.
+  const g = toyGraph(
+    5,
+    [
+      [0, 1, 4],
+      [1, 2, 4],
+      [2, 3, 4],
+      [3, 4, 4],
+    ],
+    { undirected: true },
+  );
+  const ch = buildCh(g);
+
+  it("node 3 is contracted early and creates exactly the expected 2<->4 shortcut", () => {
+    expect(ch.rank[3]).toBeLessThan(ch.rank[2]); // sanity: 3 is contracted well before 2
+    const shortcut = ch.edges.find(
+      (e) => e.childA !== -1 && ((e.from === 2 && e.to === 4) || (e.from === 4 && e.to === 2)),
+    );
+    expect(shortcut).toBeTruthy();
+    expect(shortcut?.w).toBe(8);
+  });
+
+  it("false for a query whose winning path is a single direct original edge", () => {
+    const r = chQuery(ch, 0, 1);
+    expect(r.path).toEqual([0, 1]);
+    expect(r.usesShortcut).toBe(false);
+  });
+
+  it("true for a query whose winning path is actually built via the 2<->4 shortcut", () => {
+    const r = chQuery(ch, 0, 4);
+    // The unpacked node sequence looks like a plain walk down every original
+    // edge — exactly why usesShortcut can't be inferred from `path` alone
+    // (see ChResult.usesShortcut's own doc comment): the search itself
+    // resolved this query via the shortcut, which happens to expand back to
+    // this same sequence.
+    expect(r.path).toEqual([0, 1, 2, 3, 4]);
+    expect(r.usesShortcut).toBe(true);
+  });
+
+  it("false for an unreachable pair (the early-return branch)", () => {
+    const disconnected = toyGraph(6, [
+      [0, 1, 4],
+      [1, 2, 4],
+      [2, 3, 4],
+      [3, 4, 4],
+      // node 5 has no edges at all
+    ], { undirected: true });
+    const chD = buildCh(disconnected);
+    const r = chQuery(chD, 0, 5);
+    expect(r.dist).toBe(Infinity);
+    expect(r.usesShortcut).toBe(false);
+  });
+});
+
 describe("ordering matters (the chapter-4 claim)", () => {
   it("the heuristic order adds no more shortcuts than a bad fixed order", () => {
     // star-of-cliques shape where contracting hubs first is catastrophic

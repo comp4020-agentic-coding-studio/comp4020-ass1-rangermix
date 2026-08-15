@@ -23,12 +23,15 @@ export const CONTRACTS = {
     "Drop two pins on Canberra. Watch Dijkstra flood the city while " +
     "Contraction Hierarchies thread a handful of shortcuts — same route, " +
     "a fraction of the work.",
+  // §14.10 (build-review amendment, 2026-08-15): intuition (hierarchy) before
+  // use (the climb query) before construction (shortcuts, then ordering) —
+  // replacing the v2 order (Dijkstra, contraction, order, hierarchy, climb).
   chapterHeadings: [
     "What Dijkstra actually does",
-    "Contraction: remove a node without lying about distances",
-    "Order is everything",
     "The hierarchy, revealed",
     "The query: only ever climb",
+    "Shortcuts: the price of forgetting",
+    "Order is everything",
   ],
   testids: {
     themeToggle: "theme-toggle",
@@ -38,7 +41,7 @@ export const CONTRACTS = {
     raceLive: "race-live",
     presetHill: "preset-hill",
     howCta: "how-cta",
-    toys: ["toy-flood", "toy-contraction", "toy-order", "toy-hierarchy", "toy-climb"],
+    toys: ["toy-flood", "toy-hierarchy", "toy-climb", "toy-contraction", "toy-order"],
   },
   attribution: "OpenStreetMap contributors",
 } as const;

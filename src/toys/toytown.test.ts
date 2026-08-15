@@ -54,6 +54,15 @@ describe("decodeToytown: quantization decode", () => {
     expect(graph.fwd.weight[slot]).toBeCloseTo(10, 9);
   });
 
+  // Migrated from src/toys/minitown.test.ts (deleted in F5 — toytown is its
+  // replacement substrate): every toy that measures "distance order"
+  // (flood's settle order, dijkstra-based far-pair search) only makes sense
+  // if every edge weight is genuinely positive.
+  it("every edge weight is positive", () => {
+    expect(graph.fwd.weight.length).toBeGreaterThan(0);
+    for (const w of graph.fwd.weight) expect(w).toBeGreaterThan(0);
+  });
+
   it("builds a DIRECTED graph — edges are not symmetrized", () => {
     expect(outNeighbors(graph, 0)).toEqual([1, 2]); // 0->1, 0->2
     expect(outNeighbors(graph, 1)).toEqual([2]); // 1->2 only, no 1->0

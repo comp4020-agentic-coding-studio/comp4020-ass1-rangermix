@@ -1,17 +1,65 @@
 import { describe, expect, it } from "vitest";
 import { buildCh, orderedShortcutCount } from "../algos/chBuild";
-import { MINITOWN } from "./minitown";
+import { buildCsr, type Graph } from "../algos/graph";
 import { degreeDescendingOrder, heuristicOrder, seededShuffleOrder } from "./order";
 
-// Chapter-3 toy's honesty contract: every tile's number is a REAL,
-// deterministic run of the real CH build on the real mini-town — never a
-// scripted figure. These tests pin the inequalities the chapter's copy
-// claims actually hold on MINITOWN, and that "random" is reproducible per
-// seed (a visitor who reloads sees the same "random" tile, not a new
-// shuffle masquerading as the one they saw before).
+// Chapter-5 toy's honesty contract: every tile's number is a REAL,
+// deterministic run of the real CH build — never a scripted figure. These
+// tests pin the inequalities the chapter's copy claims actually hold, that
+// "random" is reproducible per seed, and — since MINITOWN (always
+// undirected) can't tell this bug apart from its fix — that "worst order"
+// really does mean total (in+out) degree on a real DIRECTED graph, not
+// out-degree alone.
 
-describe("order toy: MINITOWN shortcut counts", () => {
-  const g = MINITOWN.graph;
+/** A tiny hand-built DIRECTED fixture where out-degree-only and
+ * in+out-degree disagree about which node is "busiest": node 0 is a hub
+ * with SIX one-way streets feeding INTO it (in-degree 6, out-degree 0) from
+ * a six-node path (1-2-3-4-5-6, two-way). Under out-degree-only, the hub's
+ * degree reads as 0 — the LOWEST in the graph — so a "high-degree-first"
+ * order would contract it LAST, the opposite of the intended "busiest hub
+ * first" story. Under total degree it correctly reads as 6, the highest,
+ * so the fixed order contracts it FIRST. */
+function hubFixture(): Graph {
+  const list: { from: number; to: number; w: number }[] = [];
+  const path: [number, number][] = [
+    [1, 2],
+    [2, 3],
+    [3, 4],
+    [4, 5],
+    [5, 6],
+  ];
+  for (const [a, b] of path) {
+    list.push({ from: a, to: b, w: 5 });
+    list.push({ from: b, to: a, w: 5 });
+  }
+  for (let i = 1; i <= 6; i++) list.push({ from: i, to: 0, w: 3 });
+  return { n: 7, lon: new Float64Array(7), lat: new Float64Array(7), fwd: buildCsr(7, list) };
+}
+
+describe("degreeDescendingOrder: total (in+out) degree on a directed graph", () => {
+  const g = hubFixture();
+
+  it("ranks the hub (in-degree 6, out-degree 0) FIRST — out-degree alone would rank it last", () => {
+    // This is the exact bug the F5 risk-list flagged: degreeDescendingOrder
+    // used to count g.fwd's out-degree only, so a node with heavy INCOMING
+    // one-way traffic and little outgoing read as "quiet" instead of "busy".
+    const order = degreeDescendingOrder(g);
+    expect(order[0]).toBe(0);
+  });
+
+  it("the six path nodes (total degree 5 or 3) all come after the hub", () => {
+    const order = degreeDescendingOrder(g);
+    expect(order.indexOf(0)).toBe(0);
+    expect(order.slice(1)).toEqual(expect.arrayContaining([1, 2, 3, 4, 5, 6]));
+  });
+
+  it("is a permutation of every node exactly once", () => {
+    expect([...degreeDescendingOrder(g)].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+});
+
+describe("order toy: shortcut-count inequalities on a real (directed) graph", () => {
+  const g = hubFixture();
   const smartOrder = heuristicOrder(g);
   const smartCount = orderedShortcutCount(g, smartOrder);
 
@@ -19,7 +67,7 @@ describe("order toy: MINITOWN shortcut counts", () => {
     expect(smartCount).toBeGreaterThan(0);
   });
 
-  it.each([1, 2, 3, 4, 5])(
+  it.each([1, 2, 3, 4, 5, 7])(
     "seed %i: random-order count is >= the smart (heuristic) count",
     (seed) => {
       const randomCount = orderedShortcutCount(g, seededShuffleOrder(seed, g.n));
@@ -27,7 +75,7 @@ describe("order toy: MINITOWN shortcut counts", () => {
     },
   );
 
-  it("worst (high-degree-first) order count is >= the smart count", () => {
+  it("worst (high-degree-first, total degree) order count is >= the smart count", () => {
     const worstCount = orderedShortcutCount(g, degreeDescendingOrder(g));
     expect(worstCount).toBeGreaterThanOrEqual(smartCount);
   });
@@ -41,9 +89,7 @@ describe("order toy: MINITOWN shortcut counts", () => {
   it("seededShuffleOrder is a permutation of every node exactly once, for every seed", () => {
     for (const seed of [1, 2, 3, 4, 5, 7]) {
       const order = seededShuffleOrder(seed, g.n);
-      expect([...order].sort((a, b) => a - b)).toEqual(
-        Array.from({ length: g.n }, (_, i) => i),
-      );
+      expect([...order].sort((a, b) => a - b)).toEqual(Array.from({ length: g.n }, (_, i) => i));
     }
   });
 
@@ -57,5 +103,24 @@ describe("order toy: MINITOWN shortcut counts", () => {
     );
     expect(rankOrder).toEqual(smartOrder);
     expect(orderedShortcutCount(g, rankOrder)).toBe(smartCount);
+  });
+});
+
+describe("orderedShortcutCount: performance on a 55-node-scale graph", () => {
+  it("a partial fixed order (heuristic prefix, as the your-turn comparison calls it) stays well under budget", () => {
+    // The your-turn comparison re-runs orderedShortcutCount(g,
+    // heuristicOrder.slice(0,k)) on every tap against the REAL 55-node
+    // toytown graph; measured there at <0.4ms per call (see the F5
+    // report). This is a smoke check on a smaller synthetic graph (no
+    // fetch/DOM needed) that a partial order — most of the graph left
+    // uncontracted — doesn't blow up asymptotically; the real budget
+    // evidence is the measured number in the report, not a timing
+    // assertion here (wall-clock assertions in CI are exactly the kind of
+    // flaky test this repo's own conventions avoid).
+    const g = hubFixture();
+    const order = heuristicOrder(g);
+    for (let k = 1; k <= g.n; k++) {
+      expect(() => orderedShortcutCount(g, order.slice(0, k))).not.toThrow();
+    }
   });
 });

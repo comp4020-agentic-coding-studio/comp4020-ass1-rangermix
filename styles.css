@@ -879,7 +879,7 @@ a {
   }
 }
 
-/* ---------- /how/ page (chapters, mini-town toys) ---------- */
+/* ---------- /how/ page (chapters, toytown toys) ---------- */
 
 .how-layout {
   max-width: 1400px;
@@ -945,6 +945,18 @@ a {
   border-radius: 8px;
 }
 
+/* how.ts's shared toytown loading/failure line, shown inside a toy root
+   before mountX() replaces it (design spec §14.8: "visible loading line;
+   honest failure line on fetch reject"). */
+.toy-loading {
+  margin: 0;
+  padding: 28px 16px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
 .toy-controls {
   display: flex;
   flex-wrap: wrap;
@@ -960,18 +972,25 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
-/* the SVG diagram + its HTML button overlay share one coordinate system:
-   the stage's aspect-ratio matches the SVG viewBox exactly, so node
-   buttons positioned by percentage line up with viewBox coordinates at
-   any rendered size. */
-.minitown-stage {
+.toy-subhead {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* The SVG road network + its HTML node-button overlay share one coordinate
+   system: the stage's aspect-ratio matches toytown's viewBox exactly (see
+   src/toys/toytown.ts's VIEWBOX_W/VIEWBOX_H — 460x300), so buttons
+   positioned by percentage line up with viewBox coordinates at any
+   rendered size. */
+.toy-stage {
   position: relative;
   width: 100%;
   max-width: 460px;
-  aspect-ratio: 460 / 280;
+  aspect-ratio: 460 / 300;
 }
 
-.minitown-svg {
+.toy-svg {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -979,20 +998,20 @@ a {
 }
 
 .edge-line {
+  fill: none;
   stroke: var(--road);
   stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   transition: stroke 200ms ease;
 }
 
-.edge-highway {
-  stroke: var(--road-major);
-  stroke-width: 3;
-}
-
-.edge-weight {
-  font-family: var(--mono);
-  font-size: 8px;
-  fill: var(--muted);
+/* One-way streets draw with a dash instead of a fabricated second line for
+   the reverse direction they don't have — F5 risk-list: toytown is 36%
+   one-way, never invent a reverse edge that isn't really in the graph (see
+   src/toys/toytownView.ts's physicalEdges). */
+.edge-line.edge-oneway {
+  stroke-dasharray: 5 4;
 }
 
 .edge-line.flash {
@@ -1024,58 +1043,90 @@ a {
   stroke-linecap: round;
 }
 
-.flood-node circle {
-  fill: var(--panel);
-  stroke: var(--muted);
-  stroke-width: 2;
-  transition: fill 200ms ease;
-}
-
-.flood-node.node-endpoint circle {
-  stroke-width: 3;
-}
-
-.flood-node text {
-  font-family: var(--mono);
-  font-size: 10px;
-  fill: var(--ink);
-  text-anchor: middle;
-  paint-order: stroke;
-  stroke: var(--panel);
-  stroke-width: 3px;
-  stroke-linejoin: round;
-}
-
-.flood-node.settled circle {
-  fill: var(--c-dijkstra);
-  stroke: var(--c-dijkstra);
-}
-
+/* Every toy node is a real <button> — small dots at toytown's 40-80-node
+   scale (design spec §14.8), but the clickable box stays >=24px (a padded
+   transparent hit-circle) even though the visible mark is much smaller,
+   via a ::before pseudo-element instead of stretching the whole button to
+   the dot's size. */
 .node-btn {
   position: absolute;
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid var(--muted);
-  border-radius: 50%;
-  background: var(--panel);
+  border: none;
+  background: transparent;
   color: var(--ink);
   font-family: var(--mono);
-  font-size: 0.7rem;
+  font-size: 0.6rem;
+  font-weight: 700;
   cursor: pointer;
+}
+
+.node-btn::before {
+  content: "";
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 2px solid var(--muted);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
 }
 
 .node-btn:disabled {
   cursor: not-allowed;
+}
+
+.node-btn:disabled::before {
   opacity: 0.25;
 }
 
-.node-btn:hover:not(:disabled) {
+.node-btn:hover:not(:disabled)::before {
   border-color: var(--c-ch);
+}
+
+/* flood/climb's endpoint re-pick: while only a start is chosen, the pending
+   node gets a highlighted ring so the visitor can see their first tap
+   registered before picking the second. */
+.node-btn.pending-start::before {
+  border-color: var(--c-dijkstra);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-dijkstra) 35%, transparent);
+}
+
+/* The two active endpoints draw as bigger lettered discs — the same "A"/"B"
+   convention the home page's own map pins use — instead of the small dot. */
+.node-btn.endpoint-a,
+.node-btn.endpoint-b {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  background: var(--panel);
+}
+
+.node-btn.endpoint-a::before,
+.node-btn.endpoint-b::before {
+  display: none;
+}
+
+.node-btn.endpoint-a {
+  border-color: var(--c-dijkstra);
+}
+
+.node-btn.endpoint-b {
+  border-color: var(--c-ch);
+}
+
+/* ch1 (flood): settled dots turn Dijkstra-orange as the frontier reaches them */
+.node-btn.settled::before {
+  background: var(--c-dijkstra);
+  border-color: var(--c-dijkstra);
 }
 
 @media (width <= 940px) {
@@ -1092,7 +1143,70 @@ a {
   }
 }
 
-/* ---------- ch3 toy: the ordering game ---------- */
+/* ---------- ch4 toy: shortcuts / contraction ---------- */
+
+/* The tiny static A-B-C explainer that opens the chapter, ahead of the
+   interactive toy (design spec §14.10 ch4) — plain SVG, no data, no JS. */
+.shortcut-intro {
+  margin: 0 0 20px;
+  padding: 16px 20px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.shortcut-intro-svg {
+  display: block;
+  width: 100%;
+  max-width: 300px;
+  margin: 0 auto;
+}
+
+.shortcut-intro-arc {
+  fill: none;
+  stroke: var(--c-ch);
+  stroke-width: 2;
+  stroke-dasharray: 6 5;
+}
+
+.shortcut-intro-ghost {
+  stroke: var(--line);
+  stroke-width: 2;
+  stroke-dasharray: 3 3;
+}
+
+.shortcut-intro-node circle {
+  fill: var(--panel);
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.shortcut-intro-node text {
+  font-family: var(--mono);
+  font-size: 12px;
+  fill: var(--ink);
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+.shortcut-intro-node-ghost circle {
+  stroke: var(--muted);
+  stroke-dasharray: 3 2;
+  opacity: 0.5;
+}
+
+.shortcut-intro-node-ghost text {
+  fill: var(--muted);
+}
+
+.shortcut-intro figcaption {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* ---------- ch5 toy: the ordering game ---------- */
 
 .order-tiles {
   display: flex;
@@ -1147,12 +1261,6 @@ a {
   border-top: 1px dashed var(--line);
 }
 
-.toy-subhead {
-  margin: 0 0 12px;
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
 .toy-result {
   margin: 12px 0 0;
   padding: 10px 12px;
@@ -1163,7 +1271,7 @@ a {
   font-size: 0.82rem;
 }
 
-/* ---------- ch4 toy: the real-map hierarchy reveal ---------- */
+/* ---------- ch2 toy: the real-map hierarchy reveal ---------- */
 
 .hier-stack {
   position: relative;
@@ -1208,6 +1316,7 @@ a {
 .hier-controls {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 14px;
 }
@@ -1230,6 +1339,13 @@ a {
   accent-color: var(--c-ch);
 }
 
+/* The "resume tour" button only appears once the visitor's own slider move
+   has permanently paused the auto-loop (design spec §14.10 ch2) — hidden
+   by default in the markup, shown by hierarchy.ts. */
+.hier-controls [data-role="resume"] {
+  align-self: flex-start;
+}
+
 @media (width <= 940px) {
   .hier-stack {
     height: 240px;
@@ -1240,51 +1356,11 @@ a {
   }
 }
 
-/* ---------- ch5 toy: the climb (2.5-D rank-lifted upward query) ---------- */
+/* ---------- ch3 toy: the climb (2.5-D rank-lifted upward query) ---------- */
 
-.climb-base-edge {
-  opacity: 0.55;
-}
-
-.climb-node .climb-fill {
-  fill: var(--panel);
-  stroke: var(--muted);
-  stroke-width: 2;
-  transition:
-    fill 200ms ease,
-    stroke 200ms ease;
-}
-
-.climb-node.node-endpoint .climb-fill {
-  stroke-width: 3;
-}
-
-.climb-node.settled-fwd .climb-fill {
-  fill: var(--c-ch);
-  stroke: var(--c-ch);
-}
-
-.climb-node .climb-ring {
-  fill: none;
-  stroke: none;
-  transition: stroke 200ms ease;
-}
-
-.climb-node.settled-bwd .climb-ring {
-  stroke: var(--c-ch);
-  stroke-width: 2;
-  stroke-dasharray: 3 3;
-}
-
-.climb-node text {
-  font-family: var(--mono);
-  font-size: 10px;
-  fill: var(--ink);
-  text-anchor: middle;
-  paint-order: stroke;
-  stroke: var(--panel);
-  stroke-width: 3px;
-  stroke-linejoin: round;
+.climb-nodes {
+  position: absolute;
+  inset: 0;
 }
 
 .climb-edge {
@@ -1302,10 +1378,47 @@ a {
   stroke-dasharray: 5 4;
 }
 
+/* Climb's node buttons reuse the shared .node-btn base plus three extra
+   states: touched by the forward search (solid fill), touched by the
+   backward search (dashed ring), and ghost — untouched by this query,
+   drawn small and faint at the baseline instead of lifted (the rank-lift
+   layout draws ONLY touched nodes lifted, everything else stays on the
+   ground — design spec §14.8). */
+.climb-node-btn.ghost {
+  opacity: 0.32;
+}
+
+.climb-node-btn.ghost::before {
+  width: 6px;
+  height: 6px;
+}
+
+.climb-node-btn.touched-fwd::before {
+  background: var(--c-ch);
+  border-color: var(--c-ch);
+}
+
+.climb-node-btn.touched-bwd::before {
+  background: transparent;
+  border-color: var(--c-ch);
+  border-style: dashed;
+}
+
+.climb-node-btn.touched-fwd.touched-bwd::before {
+  background: var(--c-ch);
+  border-style: solid;
+}
+
 .climb-meet {
-  opacity: 0;
-  fill: var(--c-ch);
+  position: absolute;
+  transform: translate(-50%, -230%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: var(--c-ch);
   font-family: var(--mono);
+  opacity: 0;
+  pointer-events: none;
   transition: opacity 200ms ease;
 }
 
@@ -1315,12 +1428,12 @@ a {
 
 .climb-meet .meet-star {
   font-size: 16px;
-  text-anchor: middle;
+  line-height: 1;
 }
 
 .climb-meet .meet-label {
+  margin-top: 2px;
   font-size: 9px;
-  text-anchor: middle;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }

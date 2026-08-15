@@ -8,6 +8,8 @@ import { dijkstraCsr } from "../src/algos/dijkstra";
 import { chQuery } from "../src/algos/chQuery";
 import { chFromArtifact, graphFromArtifact, type RoutingArtifact } from "../src/data-node";
 import { decodeToytown, type Toytown, type ToytownArtifact } from "../src/toys/toytown";
+import { findDefaultClimbPair } from "../src/toys/climb";
+import { findFarPair } from "../src/toys/flood";
 
 // The data-layer contracts: CH<->Dijkstra equivalence on the SHIPPED
 // Canberra graph, the settled-nodes headline ratio, and the payload budget.
@@ -129,6 +131,32 @@ describe.skipIf(!haveToytown)("toytown artifact (ANU-area /how/ subgraph)", () =
     for (const f of ["render.json", "routing.json", "meta.json", "toytown.json"])
       total += gzipSync(readFileSync(resolve(DATA, f))).length;
     expect(total).toBeLessThan(4 * 1024 * 1024);
+  });
+
+  // F5 regression sensor (design spec §14.10 ch3): the climb toy's DEFAULT
+  // pair is found live by scanning the real graph for the first ordered
+  // pair whose winning path traverses a shortcut (never a hardcoded node
+  // index — see src/toys/climb.ts's findDefaultClimbPair and mountClimb's
+  // own dev-loud throw if this ever comes up empty in a browser). This test
+  // is the SAME check run against the SHIPPED artifact in CI, so an
+  // artifact regeneration that broke chapter 3's whole premise fails here
+  // instead of only surfacing live in a browser.
+  it("has at least one ordered pair whose CH winning path traverses a real shortcut (the climb toy's default-pair search must never come up empty)", () => {
+    const ch = buildCh(toytown.graph);
+    const pair = findDefaultClimbPair(ch);
+    expect(pair).not.toBeNull();
+  });
+
+  // F5 sensor (design spec §14.10 ch1): the flood toy's default "far pair"
+  // (a double-sweep from an arbitrary node — see src/toys/flood.ts's
+  // findFarPair) should genuinely exercise "Dijkstra floods the whole
+  // town" on the real graph, not settle for a handful of nearby
+  // intersections.
+  it("findFarPair's default pair settles a substantial majority of the graph", () => {
+    const { from, to } = findFarPair(toytown.graph);
+    expect(from).not.toBe(to);
+    const r = dijkstraCsr(toytown.graph.n, toytown.graph.fwd, from, to);
+    expect(r.settled.length).toBeGreaterThanOrEqual(Math.ceil(toytown.graph.n * 0.5));
   });
 });
 
