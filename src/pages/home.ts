@@ -253,6 +253,14 @@ function boot(): void {
     setHeadline(text) {
       const el = document.getElementById("board-headline");
       if (el) el.textContent = text;
+      // Single point where a completed race turns up the /how/ CTA's
+      // emphasis (design spec §14.7) — setHeadline fires exactly once per
+      // race, only after results are in (see controller.ts's
+      // reportResults), so this can't fire early or repeat mid-replay.
+      // classList.add on an already-present class is a no-op, which is
+      // exactly what keeps the CSS pulse (styles.css's .is-hot) a ONE-TIME
+      // animation across repeat races rather than replaying it every time.
+      document.querySelector('[data-testid="how-cta"]')?.classList.add("is-hot");
     },
     announce(text) {
       // Same text, two sinks: the aria-live region (screen readers hear it

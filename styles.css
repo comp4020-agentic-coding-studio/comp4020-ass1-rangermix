@@ -137,6 +137,7 @@ a {
   color: var(--ink);
   font-family: var(--mono);
   font-size: 0.8rem;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -147,6 +148,44 @@ a {
 .chip:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* The run control: a distinct PRIMARY button (build-review amendment §14.4)
+   so it can never read as just another chip in the row — solid ink-on-ground
+   fill (the same pairing the page already uses for body text, so contrast is
+   inherited rather than picked by eye) with a CH-hued accent border to tie it
+   to the hero comparison. */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 12px 22px;
+  border: 2px solid var(--c-ch);
+  border-radius: 10px;
+  background: var(--ink);
+  color: var(--ground);
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Mix toward --c-ch rather than swapping fill+text to it: --ink/--ground
+   is the pairing already trusted for body-text contrast, so keeping --ground
+   as the text color and staying ink-dominant in the mix carries that
+   guarantee through hover instead of re-deriving contrast for a new
+   text-on-solid-accent combination. */
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 80%, var(--c-ch) 20%);
+  border-color: var(--c-ch);
 }
 
 /* The two optional-racer toggle chips (A*, Bidirectional) — off by default.
@@ -179,6 +218,45 @@ a {
 
 .chip.algo-toggle[aria-pressed="true"][data-algo="bidi"]::before {
   background: var(--c-bidi);
+}
+
+/* Dijkstra + CH "always-on" indicators in the Racers group — same dot+tint
+   language as a PRESSED algo-toggle chip (so all four racers read as one
+   family), but permanently tinted and not a button: these two can never be
+   switched off, so there is nothing to press. cursor stays default and hover
+   is neutralized so the chip doesn't imply an affordance it doesn't have. */
+.chip.chip-fixed {
+  cursor: default;
+}
+
+.chip.chip-fixed:hover {
+  border-color: var(--line);
+}
+
+.chip.chip-fixed::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.chip.chip-fixed[data-algo="dijkstra"] {
+  border-color: var(--c-dijkstra);
+  background: color-mix(in srgb, var(--c-dijkstra) 14%, var(--panel));
+}
+
+.chip.chip-fixed[data-algo="dijkstra"]::before {
+  background: var(--c-dijkstra);
+}
+
+.chip.chip-fixed[data-algo="ch"] {
+  border-color: var(--c-ch);
+  background: color-mix(in srgb, var(--c-ch) 14%, var(--panel));
+}
+
+.chip.chip-fixed[data-algo="ch"]::before {
+  background: var(--c-ch);
 }
 
 .site-head {
@@ -297,20 +375,61 @@ a {
 .controls {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .controls .load-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.78rem;
+}
+
+/* `[hidden]` and `.controls .load-note` are both author rules, so the
+   class-based `display: inline-flex` above wins over the UA stylesheet's
+   `[hidden] { display: none }` and would keep the note laid out even after
+   home.ts sets `loadNote.hidden = true` once data is ready — same fix, same
+   reason, as `.board .row[hidden]` and `.hier-loading[hidden]` elsewhere in
+   this file. */
+.controls .load-note[hidden] {
+  display: none;
 }
 
 .controls .hint {
   color: var(--muted);
   cursor: default;
   pointer-events: none;
+}
+
+/* Racers / Routes groups (build-review amendment §14.4): a subtle recessed
+   container plus a mono "eyebrow" label — same voice as the scoreboard's own
+   .headline — so the run control, the always-on/toggle racers, and the route
+   presets read as three distinct clusters instead of one undifferentiated
+   chip soup. */
+.control-group {
+  padding: 10px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.group-label {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.group-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .board {
@@ -450,17 +569,71 @@ a {
   font-size: 0.8rem;
 }
 
+/* The real CTA to /how/ (build-review amendment §14.7): a large, inviting
+   button-styled link under the scoreboard — never just a fineprint link.
+   Default state is an inviting-but-calm outline; .is-hot (added once a race
+   completes, see home.ts's setHeadline) turns the emphasis up. The one-time
+   pulse relies on the file's own global `prefers-reduced-motion` rule
+   (near the top of this file) to go inert — no separate media query needed
+   here. */
+.how-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 14px 20px;
+  border: 1px solid var(--c-ch);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  transition:
+    background 200ms ease,
+    border-color 200ms ease;
+}
+
+.how-cta:hover {
+  background: color-mix(in srgb, var(--c-ch) 14%, var(--panel-2));
+}
+
+.how-cta.is-hot {
+  border-width: 2px;
+  background: color-mix(in srgb, var(--c-ch) 16%, var(--panel-2));
+  animation: cta-pulse 900ms ease-out 1;
+}
+
+@keyframes cta-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--c-ch) 55%, transparent);
+  }
+
+  100% {
+    box-shadow: 0 0 0 14px color-mix(in srgb, var(--c-ch) 0%, transparent);
+  }
+}
+
 .site-foot {
   margin-top: 40px;
+  padding: 28px 20px 40px;
   border-top: 1px solid var(--line);
+  background: var(--panel);
 }
 
 .site-foot p {
-  max-width: 80ch;
+  /* No separate `.site-foot a` rule: the base `a { color: var(--link); }`
+     already covers the repo link here — adding an identical override just
+     to scope it would be redundant. */
+  max-width: 68ch;
   margin: 0 auto;
-  padding: 24px 20px 40px;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.7;
 }
 
 @media (width <= 940px) {
@@ -479,16 +652,19 @@ a {
     padding: 18px 18px 30px;
   }
 
+  /* Below 940px the Racers/Routes groups stack full-width instead of
+     sharing a horizontal-scroll strip: once route labels are real place
+     names ("Belconnen → Tuggeranong") a scroll strip hides chips off-screen
+     with no affordance that there's more to find, where a wrapped, fully
+     visible group reads as complete at a glance. Each group's own
+     .group-chips still wraps internally (unchanged from desktop). */
   .controls {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding-bottom: 4px;
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .controls .chip,
-  .controls .load-note {
-    flex: none;
-    white-space: nowrap;
+  .control-group {
+    width: 100%;
   }
 
   .board {

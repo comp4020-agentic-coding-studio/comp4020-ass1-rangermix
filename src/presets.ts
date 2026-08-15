@@ -14,20 +14,32 @@ export interface Preset {
 export const PRESETS: Preset[] = [
   {
     id: "hill",
-    label: "To the Hill",
+    label: "Gungahlin → Capital Hill",
     a: [149.133, -35.186], // Gungahlin
     b: [149.1245, -35.308], // Capital Hill
-  },
-  {
-    id: "diagonal",
-    label: "Full diagonal",
-    a: [149.066, -35.24], // Belconnen
-    b: [149.088, -35.415], // Tuggeranong
   },
   {
     id: "anu-airport",
     label: "ANU → Airport",
     a: [149.119, -35.278], // ANU
     b: [149.193, -35.307], // Canberra Airport
+  },
+  {
+    id: "diagonal",
+    label: "Belconnen → Tuggeranong",
+    a: [149.066, -35.24], // Belconnen
+    b: [149.088, -35.415], // Tuggeranong
+  },
+  {
+    id: "dickson-woden",
+    label: "Dickson → Woden",
+    a: [149.14, -35.252], // Dickson
+    b: [149.085, -35.345], // Woden
+  },
+  {
+    id: "kingston-belconnen",
+    label: "Kingston → Belconnen",
+    a: [149.147, -35.316], // Kingston
+    b: [149.066, -35.24], // Belconnen
   },
 ];

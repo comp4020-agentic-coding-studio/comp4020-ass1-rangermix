@@ -34,13 +34,27 @@
           <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
         </div>
         <div class="controls">
-          <button data-testid="race-run" type="button" class="chip" disabled>Race</button>
-          <button data-testid="preset-hill" type="button" class="chip">To the Hill</button>
-          <button data-preset="diagonal" type="button" class="chip">Full diagonal</button>
-          <button data-preset="anu-airport" type="button" class="chip">ANU → Airport</button>
-          <button data-preset="surprise" type="button" class="chip">Surprise me</button>
-          <button data-testid="algo-astar" data-algo="astar" type="button" class="chip algo-toggle" aria-pressed="false" disabled>A*</button>
-          <button data-testid="algo-bidi" data-algo="bidi" type="button" class="chip algo-toggle" aria-pressed="false" disabled>Bidirectional</button>
+          <button data-testid="race-run" type="button" class="btn-primary" disabled>▶ Race again</button>
+          <div class="control-group" role="group" aria-labelledby="racers-label">
+            <p class="group-label" id="racers-label">Racers</p>
+            <div class="group-chips">
+              <span class="chip chip-fixed" data-algo="dijkstra">Dijkstra</span>
+              <span class="chip chip-fixed" data-algo="ch">Contraction Hierarchies</span>
+              <button data-testid="algo-astar" data-algo="astar" type="button" class="chip algo-toggle" aria-pressed="false" disabled>A*</button>
+              <button data-testid="algo-bidi" data-algo="bidi" type="button" class="chip algo-toggle" aria-pressed="false" disabled>Bidirectional</button>
+            </div>
+          </div>
+          <div class="control-group" role="group" aria-labelledby="routes-label">
+            <p class="group-label" id="routes-label">Routes</p>
+            <div class="group-chips">
+              <button data-testid="preset-hill" type="button" class="chip">Gungahlin → Capital Hill</button>
+              <button data-preset="anu-airport" type="button" class="chip">ANU → Airport</button>
+              <button data-preset="diagonal" type="button" class="chip">Belconnen → Tuggeranong</button>
+              <button data-preset="dickson-woden" type="button" class="chip">Dickson → Woden</button>
+              <button data-preset="kingston-belconnen" type="button" class="chip">Kingston → Belconnen</button>
+              <button data-preset="surprise" type="button" class="chip">Surprise me</button>
+            </div>
+          </div>
           <span class="load-note" id="load-note">loading the road network…</span>
         </div>
       </section>
@@ -64,11 +78,12 @@
         </div>
         <p class="fineprint">Times and counts are measured in your browser.
           CH did a one-off preprocessing pass before this page loaded — that
-          trade is the whole story. <a href="./how/">How it works →</a></p>
+          trade is the whole story.</p>
+        <a data-testid="how-cta" class="how-cta" href="./how/">How is that possible? →</a>
       </aside>
       <p class="visually-hidden" data-testid="race-live" aria-live="polite"></p>
     </main>
-    <footer class=”site-foot”>
+    <footer class="site-foot">
       <p>Road data © OpenStreetMap contributors, ODbL. Routing is computed
         in your browser on a simplified graph (one-ways yes, turn
         restrictions no). Reference: Geisberger, Sanders, Schultes &amp;

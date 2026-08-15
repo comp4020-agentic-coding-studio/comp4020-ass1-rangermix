@@ -37,6 +37,7 @@ export const CONTRACTS = {
     raceRun: "race-run",
     raceLive: "race-live",
     presetHill: "preset-hill",
+    howCta: "how-cta",
     toys: ["toy-flood", "toy-contraction", "toy-order", "toy-hierarchy", "toy-climb"],
   },
   attribution: "OpenStreetMap contributors",
@@ -152,13 +153,25 @@ describe("spec: home page (/) contracts", () => {
   });
 
   it(
-    `default preset [data-testid=${CONTRACTS.testids.presetHill}] "To the Hill" (Gungahlin → Capital Hill) exists`,
+    `default preset [data-testid=${CONTRACTS.testids.presetHill}] "Gungahlin → Capital Hill" exists`,
     () => {
       const doc = pageDoc("index.html");
       const btn = doc?.querySelector(`[data-testid="${CONTRACTS.testids.presetHill}"]`);
       expect(btn).toBeTruthy();
       expect(btn?.tagName).toBe("BUTTON");
-      expect(btn?.textContent?.trim()).toBe("To the Hill");
+      expect(btn?.textContent?.trim()).toBe("Gungahlin → Capital Hill");
+    },
+  );
+
+  it(
+    `CTA [data-testid=${CONTRACTS.testids.howCta}] is a real anchor linking to ./how/ with non-empty text`,
+    () => {
+      const doc = pageDoc("index.html");
+      const cta = doc?.querySelector(`[data-testid="${CONTRACTS.testids.howCta}"]`);
+      expect(cta).toBeTruthy();
+      expect(cta?.tagName).toBe("A");
+      expect(cta?.getAttribute("href")).toBe("./how/");
+      expect(cta?.textContent?.trim()).toBeTruthy();
     },
   );
 
