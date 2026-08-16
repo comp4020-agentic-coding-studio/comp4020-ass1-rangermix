@@ -1,12 +1,43 @@
-// Pure-function tests only (no Worker in jsdom/node — see worker.ts's own
+// @vitest-environment jsdom
+//
+// Mostly pure-function tests (no Worker in jsdom/node — see worker.ts's own
 // comment on why it isn't unit-tested directly). What's exercised here is
 // everything the replay loop and the once-per-race announcement are built
 // on: frame-fraction math and text formatting, both plain functions with no
 // DOM/Worker dependency — plus dispatchResponse, the pure routing logic
 // behind RaceController.request()'s resolve/reject behavior (a Map and a
 // plain message object in, no Worker needed to exercise it).
+//
+// One exception (§16.10 review round 2, finding 3 — a real production bug,
+// `additive: dark` instead of `additive: true`, had shipped with NO
+// regression test): the "RaceController.run() (renderAt) — additive:true
+// regression" describe block below constructs a REAL RaceController, using
+// the SAME view/ui constructor seam every other caller (home.ts) already
+// goes through, with a lightweight FakeWorker standing in for the real
+// off-main-thread Worker (jsdom has none — same rationale as worker.ts's
+// own comment) and a mocked `../data` module standing in for the real
+// fetch-based routing load. jsdom (not the file's usual bare-node
+// environment) is needed for exactly this one block: RaceController's own
+// constructor reads `document.baseURI`. Forcing the reduced-motion branch
+// (see the matchMedia stub below) keeps this test doing real work rather
+// than fighting a rAF loop: RaceController.run() renders straight to the
+// final frame synchronously under `prefers-reduced-motion: reduce`, no
+// timer/animation plumbing needed to reach the drawDots call under test.
 
-import { describe, expect, it } from "vitest";
+// Stub matchMedia for jsdom (same idiom as theme.test.ts's own stub), but
+// discriminating on the query string rather than a single flat false: this
+// file specifically wants `prefers-reduced-motion: reduce` to read as
+// TRUE (see the block comment above for why), while other queries (e.g.
+// theme.ts's own prefers-color-scheme read inside RaceController's
+// effectiveTheme() call) don't matter to what this test asserts.
+window.matchMedia ??= ((q: string) => ({
+  matches: q.includes("prefers-reduced-motion"),
+  media: q,
+  addEventListener() {},
+  removeEventListener() {},
+})) as never;
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   activeRoster,
   dispatchResponse,
@@ -14,12 +45,70 @@ import {
   formatMs,
   headlineText,
   pathKm,
+  RaceController,
   rejectAllPending,
   sliceForFrame,
   type PendingRace,
+  type RaceUi,
 } from "./controller";
-import type { RaceErrorResponse, RaceResponse } from "./worker";
+import type { RaceErrorResponse, RaceRequest, RaceResponse, WorkerResponse } from "./worker";
 import { toyGraph } from "../algos/graph";
+import type { MapView } from "../viz/mapRenderer";
+
+// The real `../data.ts` fetches JSON over the network — unreachable (and
+// unwanted) from this test, which only needs SOME graph for drawDots'
+// coordinate lookups to have something to read. Self-contained (no
+// reference to outer test-file bindings): vi.mock factories run during
+// module-graph resolution, before this file's OWN top-level `const`s have
+// necessarily initialized, so a fresh dynamic import inside the factory
+// sidesteps that ordering hazard entirely rather than risking a TDZ bug.
+vi.mock("../data", async () => {
+  const { toyGraph: buildGraph } = await import("../algos/graph");
+  return {
+    loadRouting: vi.fn().mockResolvedValue({ graph: buildGraph(2, [[0, 1, 100]], { undirected: true }) }),
+  };
+});
+
+/** A minimal stand-in for the real off-main-thread Worker (jsdom has none —
+ * see the file-header comment) that captures every posted request and lets
+ * the test manually dispatch a fake response through the SAME onmessage
+ * handler RaceController's constructor wires up — exactly the seam a real
+ * worker message would arrive through, just driven by hand instead of a
+ * real thread. `instances` is a static registry (not a single module-level
+ * variable) so each test that constructs its own RaceController can grab
+ * exactly the FakeWorker that controller made, even across multiple tests
+ * in the same run. */
+class FakeWorker {
+  static instances: FakeWorker[] = [];
+  onmessage: ((e: MessageEvent<WorkerResponse>) => void) | null = null;
+  onerror: ((e: ErrorEvent) => void) | null = null;
+  onmessageerror: (() => void) | null = null;
+  sent: RaceRequest[] = [];
+  constructor() {
+    FakeWorker.instances.push(this);
+  }
+  postMessage(msg: RaceRequest): void {
+    this.sent.push(msg);
+  }
+  terminate(): void {
+    /* no-op — nothing in this suite needs teardown-observable behavior */
+  }
+}
+
+/** A minimal, wire-shaped AlgoResult — every field renderAt/reportResults
+ * actually reads (settledCount, settled node-index buffer, path) with
+ * placeholder-but-valid values for the rest (dist/ms/relaxed: unchecked by
+ * this test). */
+function fakeAlgoResult(settled: number[], path: number[]) {
+  return {
+    dist: 100,
+    ms: 5,
+    relaxed: settled.length,
+    settledCount: settled.length,
+    settled: Uint32Array.from(settled).buffer,
+    path,
+  };
+}
 
 describe("sliceForFrame", () => {
   it("is 0 at t <= 0", () => {
@@ -229,5 +318,65 @@ describe("rejectAllPending (the Worker onerror/onmessageerror path — a whole-w
     const pending = new Map<number, PendingRace>();
     expect(() => rejectAllPending(pending, "race worker posted an undeliverable message")).not.toThrow();
     expect(pending.size).toBe(0);
+  });
+});
+
+// §16.10 review round 2, finding 3: the `additive: dark` -> `additive: true`
+// production bug (see the G3 report's "Bug 1") shipped with no regression
+// test — nothing in this file exercised a real replay frame at all, only
+// the pure helpers around it. This block closes that gap using the
+// RaceController constructor's own view/ui seam (the SAME one home.ts's
+// real boot() goes through) with a mock/spy MapView standing in as the
+// render target, so the assertion is against an ACTUAL drawDots call
+// renderAt makes, not a re-implementation of its logic.
+describe("RaceController.run() (renderAt) — additive:true regression", () => {
+  function mockUi(): RaceUi {
+    return { setRow: vi.fn(), setTime: vi.fn(), setHeadline: vi.fn(), announce: vi.fn() };
+  }
+
+  function mockView() {
+    return { clearOverlay: vi.fn(), drawDots: vi.fn(), drawRoute: vi.fn(), drawPin: vi.fn() };
+  }
+
+  beforeEach(() => {
+    FakeWorker.instances = [];
+    vi.stubGlobal("Worker", FakeWorker);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("every drawDots call a completed race's replay makes has opts.additive === true, in both themes — dark/light is MapView's OWN read (opts.additive is only ever the caller's density-wanted intent), so this caller must never gate it on the theme again", async () => {
+    const view = mockView();
+    const controller = new RaceController(view as unknown as MapView, mockUi());
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    expect(worker).toBeDefined();
+    expect(worker?.sent).toHaveLength(1); // the request went out synchronously, before this line — see request()'s own comment
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+
+    // Manually drive the response through the SAME onmessage handler a real
+    // worker message would arrive through (dispatchResponse) — resolves
+    // request()'s pending promise, unblocking run()'s own Promise.all.
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          dijkstra: fakeAlgoResult([0, 1], [0, 1]),
+          ch: fakeAlgoResult([0, 1], [0, 1]),
+        },
+      },
+    } as MessageEvent<WorkerResponse>);
+
+    await runPromise;
+
+    expect(view.drawDots).toHaveBeenCalled();
+    for (const call of view.drawDots.mock.calls) {
+      const opts = call[5] as { additive: boolean };
+      expect(opts.additive).toBe(true);
+    }
   });
 });

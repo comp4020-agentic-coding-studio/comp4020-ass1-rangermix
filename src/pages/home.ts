@@ -14,7 +14,7 @@
 
 import { initTheme } from "../theme";
 import { loadRender, loadRouting } from "../data";
-import { createViewStore, MapView, wholeMapView, zoomToBounds, type RenderData, type ViewStore } from "../viz/mapRenderer";
+import { assignStaggerSlots, createViewStore, MapView, wholeMapView, zoomToBounds, type RenderData, type ViewStore } from "../viz/mapRenderer";
 import { haversine, nearestNode } from "../snap";
 import { PRESETS } from "../presets";
 import { ALGO_LABEL, RaceController, type ComparePanel, type RaceUi, formatMs } from "../race/controller";
@@ -807,6 +807,19 @@ function boot(): void {
 
     panels = next.map((algo) => byAlgo.get(algo)).filter((p): p is PanelEntry => p !== undefined);
     for (const p of panels) compareGrid.append(p.el); // re-append in `next`'s order (relocates existing nodes too)
+    // §16.10 review round 2: (re)assign every CURRENTLY-live panel's base-
+    // layer re-stroke stagger from its position in `panels` (mapRenderer.ts's
+    // own assignStaggerSlots) — not only the newly-added ones. The old
+    // construction-time-only assignment (MapView's own mapViewSequence
+    // default) could hand a REBUILT panel (this function is diff-based — a
+    // racer toggled off then back on really does construct a new MapView)
+    // the same slot a still-live sibling already holds; recomputing from the
+    // live roster on every call makes that structurally impossible (see
+    // assignStaggerSlots' own comment), and covers a KEPT panel's slot
+    // shifting too (e.g. CH's own position shifts whenever astar/bidi toggle
+    // around it in ROSTER order).
+    const staggerSlots = assignStaggerSlots(panels.map((p) => p.algo));
+    for (const p of panels) p.view.setStaggerSlot(staggerSlots.get(p.algo) ?? 0);
     // `.is-loading` (styles.css) ships in the static markup so the pre-data
     // LOADING state — a persisted "compare" view mode restored before
     // renderData/graph/controller exist, when this function's own guard

@@ -579,6 +579,25 @@ export function baseCacheValid(cached: BaseCacheKey | null, current: BaseCacheKe
   );
 }
 
+/** Canonical string key for the CROSS-INSTANCE shared base-layer cache
+ * (§16.10 review round 2 — see the `sharedBaseCache` module comment, right
+ * before `MapView`, for the full mechanism this keys): every field
+ * BaseCacheKey already tracks (theme/cssWidth/cssHeight/dpr/pctThreshold/
+ * emphasize) PLUS the live geo ViewState's own three fields. `view` has to
+ * be part of the key, not just `key`: two panels only ever stroke IDENTICAL
+ * pixels when both their fingerprint AND their current view agree — folding
+ * its fields into the string (rather than relying on same-store panels
+ * usually sharing ONE ViewState object reference) also makes this correct
+ * for a future caller whose panels don't share a store but happen to
+ * coincide numerically. Plain string interpolation, not a hash: a small
+ * fixed field count, and a readable key is easier to debug than a hash
+ * collision would be to notice. Exported so the "identical inputs -> the
+ * same key, any one differing field -> a different key" contract is
+ * directly unit-testable without a real canvas. */
+export function baseFingerprintKey(key: BaseCacheKey, view: ViewState): string {
+  return `${key.theme}|${key.cssWidth}|${key.cssHeight}|${key.dpr}|${key.pctThreshold}|${key.emphasize}|${view.cLon}|${view.cLat}|${view.span}`;
+}
+
 /** Reverses render.json's per-line encoding: `line[0]` is `cls`, `line[1]`
  * is `pct` (both metadata, not coordinates), `line[2..3]` is the first
  * point in absolute quantized units, and every following pair is a delta
@@ -727,12 +746,113 @@ const DENSITY_BUCKETS = 12;
 // live measurement caught as a real regression: the plain single-overlay
 // case (the MOST common one) got MORE frequent re-strokes than before this
 // fix existed at all, for a desync benefit that case doesn't even need.
-// Only the 2nd/3rd/4th SIMULTANEOUS instance (Compare mode's additional
-// panels) drift away from the default, spread widely enough that a batch of
-// up to 4 panels built together (the common case: an initial Compare-mode
-// build, or a racer-toggle rebuild) gets 4 clearly distinct thresholds.
+//
+// This counter is ONLY a construction-time DEFAULT now (review round 2):
+// it correctly covers a batch of up to 4 panels built together from empty
+// (an initial Compare-mode build gets 4 clearly distinct thresholds), but
+// on its own it does NOT cover home.ts's syncPanels being diff-based — it
+// only ever counts UP, so a panel torn down and later rebuilt (a racer
+// toggled off then back on) gets whatever slot the counter is up to next,
+// with no regard for which slots its CURRENTLY-LIVE siblings already hold.
+// setStaggerSlot/assignStaggerSlots (below) are the real fix: home.ts calls
+// setStaggerSlot on every currently-live Compare panel after every diff,
+// which supersedes whatever this counter guessed at construction.
 const BLIT_RATIO_MULTIPLIERS = [1, 1.3, 0.75, 1.15];
 let mapViewSequence = 0;
+
+/** Assigns each id in `liveIds` (already in the caller's own stable order —
+ * home.ts's syncPanels passes its ROSTER-ordered active-panel list) a
+ * stagger slot index (0..BLIT_RATIO_MULTIPLIERS.length-1) for
+ * MapView.setStaggerSlot, purely as a function of POSITION within the
+ * CURRENT live set. Exists to replace the collision `mapViewSequence`
+ * (above) can produce on its own: a page-lifetime counter, assigned ONCE at
+ * construction and never revisited, hands a REBUILT panel (home.ts's
+ * syncPanels is diff-based — a racer toggled off then back on really does
+ * construct a brand-new MapView) whatever slot the counter is up to next,
+ * with zero regard for which slots its CURRENTLY-LIVE siblings already
+ * hold — silently recreating the exact same-tick simultaneous-restroke
+ * spike the stagger exists to prevent (review round 2 finding). Deriving
+ * fresh from the live set's own order instead makes a collision
+ * structurally impossible: positions within one array are always pairwise
+ * distinct, so calling this against whichever ids are live RIGHT NOW, every
+ * time the set changes (syncPanels calls it for every CURRENT panel, not
+ * only newly-added ones — a kept panel's own position can shift too, e.g.
+ * CH's slot shifts whenever astar/bidi toggle around it in ROSTER order),
+ * guarantees every concurrently-live panel has its own slot regardless of
+ * how many add/remove cycles came before it — there's no persisted per-id
+ * counter state for a stale removal to leave stranded. `%
+ * BLIT_RATIO_MULTIPLIERS.length` is defensive (this app's own ROSTER never
+ * exceeds 4 concurrently-active algos, exactly that many slots), not
+ * load-bearing for the common case. Pure and exported so the
+ * pairwise-distinctness property is unit-testable directly, across
+ * arbitrary add/remove sequences, without a real MapView/DOM. */
+export function assignStaggerSlots<T>(liveIds: readonly T[]): Map<T, number> {
+  const slots = new Map<T, number>();
+  liveIds.forEach((id, i) => slots.set(id, i % BLIT_RATIO_MULTIPLIERS.length));
+  return slots;
+}
+
+// Shared (cross-instance) base-layer cache (§16.10, review round 2): Compare
+// mode's panels all share ONE ViewStore AND (styles.css's `.compare-panel`:
+// equal 1fr grid columns + a fixed aspect-ratio) the same css size, so at
+// any instant every panel sharing that size/theme/filter sees the exact
+// SAME view (literally the same object, via ViewStore's own `state` field —
+// see that interface's own comment) — meaning the crisp bitmap ANY ONE of
+// them just stroked is pixel-for-pixel identical to what every OTHER
+// same-fingerprint panel would independently re-stroke a moment later (same
+// bbox/render data — home.ts constructs every MapView on the page against
+// the SAME `renderData` object — same PAD constant, same derived fit and
+// transform for matching css size). Before this, N panels crossing their
+// re-stroke threshold on the same tick each paid the FULL
+// tens-of-thousands-of-points stroke cost independently — the residual
+// "architectural floor" the G3 report's own compare-4 zoom-burst
+// measurement flagged. Now the FIRST panel to need a fresh stroke this
+// instant pays for it and PUBLISHES the result here (MapView.
+// captureBaseCache), and every sibling that needs the identical
+// fingerprint within the same window finds it (MapView.strokeBaseCrisp)
+// and pays only for a drawImage copy (adoptSharedBaseCache) instead of a
+// real re-stroke. Module-level (shared by every MapView on the page, not
+// per-instance) and small/bounded (SHARED_BASE_CACHE_CAP entries, oldest
+// evicted first) so a session of continuous panning — where the
+// fingerprint changes on nearly every tick — can't grow this into an
+// unbounded leak of full-size offscreen bitmaps. Real canvas objects, so
+// (like the rest of this section) untested here by design — see
+// baseFingerprintKey's own comment for the one piece of this that IS pure
+// and unit-tested.
+const SHARED_BASE_CACHE_CAP = BLIT_RATIO_MULTIPLIERS.length; // this app's own ROSTER never has more concurrently-live panels than this
+interface SharedBaseCacheEntry {
+  bitmap: HTMLCanvasElement;
+  view: ViewState;
+  key: BaseCacheKey;
+}
+const sharedBaseCache = new Map<string, SharedBaseCacheEntry>();
+
+/** Publishes a freshly-stroked bitmap into the shared cache under its own
+ * fingerprint — called only from MapView.captureBaseCache, right after a
+ * REAL crisp stroke (never from adoptSharedBaseCache's own cheap path,
+ * which would just be re-publishing a copy of what's already there).
+ * Stores a private COPY of `bitmap`, not the caller's own canvas by
+ * reference: `bitmap` is a MapView instance's own `baseBitmap`, which THAT
+ * instance mutates in place on every future crisp stroke (captureBaseCache
+ * resizes/redraws into the SAME canvas object rather than allocating a
+ * fresh one) — aliasing it here would let a later stroke on the PUBLISHING
+ * instance silently corrupt every OTHER instance that has since adopted
+ * this entry. Evicts the oldest entry first once at cap (a Map iterates
+ * insertion order in JS, so `.keys().next()` is the oldest). */
+function publishSharedBaseCache(key: BaseCacheKey, view: ViewState, bitmap: HTMLCanvasElement): void {
+  const fpKey = baseFingerprintKey(key, view);
+  if (!sharedBaseCache.has(fpKey) && sharedBaseCache.size >= SHARED_BASE_CACHE_CAP) {
+    const oldest = sharedBaseCache.keys().next().value;
+    if (oldest !== undefined) sharedBaseCache.delete(oldest);
+  }
+  const copy = document.createElement("canvas");
+  copy.width = bitmap.width;
+  copy.height = bitmap.height;
+  const copyCtx = copy.getContext("2d");
+  if (copyCtx) copyCtx.drawImage(bitmap, 0, 0);
+  sharedBaseCache.set(fpKey, { bitmap: copy, view, key });
+}
+
 export class MapView {
   private readonly baseCanvas: HTMLCanvasElement;
   private readonly overlayCanvas: HTMLCanvasElement;
@@ -781,17 +901,26 @@ export class MapView {
   // the branch decision to elapsed-time comparison alone would be one
   // scheduling-jitter away from occasionally blitting a stale cache forever.
   private idleRestrokeTimer: ReturnType<typeof setTimeout> | undefined;
-  // This instance's own zoom-delta re-stroke threshold, assigned
-  // deterministically at construction from BLIT_RATIO_MULTIPLIERS' own
-  // round-robin (see that module-level comment for the full reasoning,
-  // including why its first entry is exactly 1 — the common single-overlay
-  // case must see exactly BLIT_SPAN_RATIO_LIMIT, unstaggered). Exists at all
+  // This instance's own zoom-delta re-stroke threshold. Exists at all
   // because Compare mode's panels share ONE ViewStore, so during a
   // sustained zoom every panel would otherwise cross the exact SAME fixed
   // threshold on the exact SAME tick, turning one frame into an
   // N-panel-simultaneous full re-stroke spike — found via this task's own
-  // honest before/after measurement (see the G3 report).
-  private readonly blitRatioLimit =
+  // honest before/after measurement (see the G3 report). Defaults to a
+  // deterministic construction-time value from BLIT_RATIO_MULTIPLIERS' own
+  // round-robin (mapViewSequence, see that module-level comment) — correct
+  // on its own for a standalone MapView (the /how/ toys: always exactly one
+  // instance on the page, always lands on the unstaggered slot 0) but NOT
+  // sufficient on its own for Compare mode, where panels are torn down and
+  // rebuilt over the page's life (review round 2 finding — see
+  // assignStaggerSlots' own comment for the exact collision). setStaggerSlot
+  // (below) is the real fix: home.ts's syncPanels calls it on every
+  // currently-live Compare panel after every diff, via assignStaggerSlots,
+  // which supersedes whatever this construction-time guess assigned.
+  // Mutable (not `readonly`) for exactly that override; safe to change at
+  // any time — read fresh by drawBase on every call, nothing about it is
+  // stateful across calls.
+  private blitRatioLimit =
     BLIT_SPAN_RATIO_LIMIT * BLIT_RATIO_MULTIPLIERS[mapViewSequence++ % BLIT_RATIO_MULTIPLIERS.length];
 
   constructor(base: HTMLCanvasElement, overlay: HTMLCanvasElement, render: RenderData, store?: ViewStore) {
@@ -914,6 +1043,19 @@ export class MapView {
    * ever writes `cssWidth`/`cssHeight`. */
   viewportSize(): { w: number; h: number } {
     return { w: this.cssWidth, h: this.cssHeight };
+  }
+
+  /** Overrides this instance's own §16.10 re-stroke-threshold stagger (see
+   * `blitRatioLimit`'s own field comment) to a specific slot index —
+   * home.ts's syncPanels calls this on every currently-live Compare panel,
+   * every time the panel set changes (via assignStaggerSlots), so slots are
+   * always derived from the CURRENT live roster rather than trusting the
+   * construction-time default (mapViewSequence) to still be collision-free
+   * after panels have been torn down and rebuilt over the page's life.
+   * Out-of-range slots wrap (`% BLIT_RATIO_MULTIPLIERS.length`), the same
+   * defensive stance the constructor's own default already takes. */
+  setStaggerSlot(slot: number): void {
+    this.blitRatioLimit = BLIT_SPAN_RATIO_LIMIT * BLIT_RATIO_MULTIPLIERS[slot % BLIT_RATIO_MULTIPLIERS.length];
   }
 
   /** Sets the hierarchy-slider filter (`null` = show every road) and
@@ -1080,13 +1222,30 @@ export class MapView {
     else this.strokeBaseCrisp();
   }
 
-  /** The full-cost path: strokes every visible road line from scratch
-   * (identical painting logic to before §16.10 — ground fill, optional
-   * ghost pass, class-weighted lines) and then captures the freshly-painted
-   * canvas as the new interaction-time cache (captureBaseCache) — see
-   * drawBase's own comment for when this runs vs. the cheap blitBase path.
-   * The ONLY place `baseBitmap`/`baseCacheView`/`baseCacheKey` are written. */
+  /** The "this panel needs a fresh crisp view" path — but not necessarily a
+   * fresh STROKE. First checks the shared cross-instance cache (§16.10
+   * review round 2 — see the `sharedBaseCache` module comment) for a bitmap
+   * a SIBLING panel already stroked at the exact same fingerprint+view this
+   * instant, and adopts it (adoptSharedBaseCache) instead of repeating the
+   * work on a hit — Compare mode's panels share one ViewStore and (equal
+   * css size) an identical fit, so a hit's pixels are guaranteed identical
+   * to what THIS instance would otherwise independently stroke. Only on a
+   * genuine miss does it actually stroke every visible road line from
+   * scratch (identical painting logic to before §16.10 — ground fill,
+   * optional ghost pass, class-weighted lines) and capture the
+   * freshly-painted canvas as this instance's own interaction-time cache
+   * (captureBaseCache, which also PUBLISHES it for the next sibling to
+   * adopt) — see drawBase's own comment for when this runs vs. the cheap
+   * blitBase path. The only place (together with adoptSharedBaseCache)
+   * `baseBitmap`/`baseCacheView`/`baseCacheKey` are written. */
   private strokeBaseCrisp(): void {
+    const view = this.store.get();
+    const key = this.currentBaseKey();
+    const shared = sharedBaseCache.get(baseFingerprintKey(key, view));
+    if (shared) {
+      this.adoptSharedBaseCache(shared);
+      return;
+    }
     const ctx = this.baseCtx;
     const colors = themeColors();
     const t = this.currentTransform(); // one derivation for this whole repaint — see currentTransform's own comment
@@ -1116,13 +1275,52 @@ export class MapView {
     this.captureBaseCache();
   }
 
+  /** The cross-instance cheap path (§16.10 review round 2): copies a
+   * sibling's already-fresh bitmap (found by strokeBaseCrisp via the shared
+   * cache) onto both this instance's VISIBLE base canvas and its OWN
+   * `baseBitmap`. The second copy matters just as much as the first: this
+   * instance's FUTURE blitBase calls read `baseBitmap` directly, so without
+   * a private copy of its own, the very next interaction tick would find
+   * nothing to blit from and force ANOTHER strokeBaseCrisp call — defeating
+   * the §16.10 interaction-time cache for every panel that ever takes this
+   * path. Never aliases `shared.bitmap` itself into `this.baseBitmap` — see
+   * publishSharedBaseCache's own comment for why that would be unsafe (a
+   * later captureBaseCache on THIS instance mutates whatever canvas
+   * `baseBitmap` points at, in place). Draws through the SAME dpr-scaled
+   * `baseCtx` transform every other paint in this class relies on (see
+   * blitBase's own comment) — no explicit setTransform needed here either. */
+  private adoptSharedBaseCache(shared: SharedBaseCacheEntry): void {
+    const ctx = this.baseCtx;
+    ctx.save();
+    ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
+    ctx.drawImage(
+      shared.bitmap, 0, 0, shared.bitmap.width, shared.bitmap.height,
+      0, 0, this.cssWidth, this.cssHeight,
+    );
+    ctx.restore();
+    if (!this.baseBitmap) this.baseBitmap = document.createElement("canvas");
+    this.baseBitmap.width = shared.bitmap.width;
+    this.baseBitmap.height = shared.bitmap.height;
+    const cacheCtx = this.baseBitmap.getContext("2d");
+    if (cacheCtx) {
+      cacheCtx.setTransform(1, 0, 0, 1, 0, 0);
+      cacheCtx.clearRect(0, 0, this.baseBitmap.width, this.baseBitmap.height);
+      cacheCtx.drawImage(shared.bitmap, 0, 0);
+    }
+    this.baseCacheView = shared.view;
+    this.baseCacheKey = shared.key;
+  }
+
   /** Copies the base canvas's just-stroked pixels into `baseBitmap`
    * (allocating it on first use) and records the geo ViewState + fingerprint
    * that produced them. A plain device-pixel copy (`drawImage` of the
    * canvas itself, identity transform on the destination) — a pixel-for-
    * pixel snapshot of whatever strokeBaseCrisp just painted, DPR included,
    * so blitBase later needs no DPR math of its own (it draws through the
-   * SAME dpr-scaled ctx transform strokeBaseCrisp does). */
+   * SAME dpr-scaled ctx transform strokeBaseCrisp does). Also PUBLISHES the
+   * fresh bitmap to the shared cross-instance cache (§16.10 review round 2 —
+   * see that module comment) so a sibling panel with the identical
+   * fingerprint can adopt it instead of independently re-stroking. */
   private captureBaseCache(): void {
     if (!this.baseBitmap) this.baseBitmap = document.createElement("canvas");
     this.baseBitmap.width = this.baseCanvas.width;
@@ -1135,6 +1333,7 @@ export class MapView {
     }
     this.baseCacheView = this.store.get();
     this.baseCacheKey = this.currentBaseKey();
+    publishSharedBaseCache(this.baseCacheKey, this.baseCacheView, this.baseBitmap);
   }
 
   /** The cheap path: blits the cached bitmap into the base canvas under the

@@ -8,8 +8,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  assignStaggerSlots,
   baseBlitRect,
   baseCacheValid,
+  baseFingerprintKey,
   clampGeoView,
   createViewStore,
   decodeLine,
@@ -1006,5 +1008,88 @@ describe("baseCacheValid (§16.10 cache invalidation: theme, resize, and hierarc
     expect(baseCacheValid(key({ pctThreshold: null }), key({ pctThreshold: 50 }))).toBe(false);
     expect(baseCacheValid(key({ pctThreshold: 50 }), key({ pctThreshold: 60 }))).toBe(false);
     expect(baseCacheValid(key({ emphasize: false }), key({ emphasize: true }))).toBe(false);
+  });
+});
+
+// §16.10 review round 2 (polish round, findings 1 & 2): a page-lifetime
+// monotonic counter (MapView's own mapViewSequence) assigned each panel's
+// re-stroke stagger ONCE, at construction, and never revisited — so a
+// panel torn down and later REBUILT (home.ts's syncPanels is diff-based, a
+// racer toggled off then back on really does construct a brand-new
+// MapView) could land on the same slot a still-live sibling already held,
+// silently recreating the same-tick simultaneous-restroke spike the
+// stagger exists to prevent. assignStaggerSlots is the fix (see its own
+// comment in mapRenderer.ts): derive every slot fresh from the CURRENT live
+// roster's own order instead of a persisted counter.
+describe("assignStaggerSlots (the LIVE-roster-derived replacement for the page-lifetime mapViewSequence counter)", () => {
+  it("assigns 0..n-1 to n ids, in the order given", () => {
+    expect([...assignStaggerSlots(["a", "b", "c"]).values()]).toEqual([0, 1, 2]);
+  });
+
+  it("every concurrently-live id gets its own slot, distinct from every other live id's", () => {
+    const slots = assignStaggerSlots(["dijkstra", "astar", "bidi", "ch"]);
+    const values = [...slots.values()];
+    expect(new Set(values).size).toBe(values.length);
+  });
+
+  it("a single live id always lands on slot 0 (unstaggered) -- the common single-overlay-equivalent case", () => {
+    expect(assignStaggerSlots(["only"]).get("only")).toBe(0);
+  });
+
+  it("an empty live set is a harmless no-op (empty map, no throw)", () => {
+    expect(assignStaggerSlots([]).size).toBe(0);
+  });
+
+  // The property the OLD page-lifetime counter did NOT have (the exact
+  // review round 2 finding this function fixes): simulates arbitrary
+  // add/remove sequences (200 seeded trials, a random walk of toggles over
+  // this app's own 4-algo ROSTER pool -- exactly as many ids as
+  // BLIT_RATIO_MULTIPLIERS has slots, so the property is achievable, not a
+  // pigeonhole artifact -- including ids re-added after having been removed
+  // earlier in the SAME trial) and checks, after EVERY step, that whatever
+  // is live RIGHT NOW gets pairwise-distinct slots.
+  it("property: for any sequence of add/remove operations, the ids alive at any point always get pairwise-distinct slots (200 seeded random toggle sequences)", () => {
+    const rand = mulberry32(31337);
+    const pool = ["dijkstra", "astar", "bidi", "ch"];
+    for (let trial = 0; trial < 200; trial++) {
+      let live: string[] = [];
+      const steps = 3 + Math.floor(rand() * 20);
+      for (let s = 0; s < steps; s++) {
+        const id = pool[Math.floor(rand() * pool.length)];
+        live = live.includes(id) ? live.filter((x) => x !== id) : [...live, id];
+
+        const slots = assignStaggerSlots(live);
+        const values = live.map((x) => slots.get(x));
+        expect(new Set(values).size).toBe(live.length); // pairwise distinct among whatever's live RIGHT NOW
+      }
+    }
+  });
+});
+
+describe("baseFingerprintKey (the shared cross-instance base-cache key, §16.10 review round 2 finding 2)", () => {
+  const key: BaseCacheKey = {
+    theme: "dark", cssWidth: 900, cssHeight: 600, dpr: 1, pctThreshold: null, emphasize: false,
+  };
+  const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
+
+  it("identical inputs (even different object instances) produce the identical key", () => {
+    expect(baseFingerprintKey(key, view)).toBe(baseFingerprintKey({ ...key }, { ...view }));
+  });
+
+  it("any one differing BaseCacheKey field changes the key", () => {
+    const base = baseFingerprintKey(key, view);
+    expect(baseFingerprintKey({ ...key, theme: "light" }, view)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, cssWidth: 901 }, view)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, cssHeight: 601 }, view)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, dpr: 2 }, view)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, pctThreshold: 50 }, view)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, emphasize: true }, view)).not.toBe(base);
+  });
+
+  it("any one differing ViewState field changes the key -- two panels only ever stroke identical pixels at the identical view", () => {
+    const base = baseFingerprintKey(key, view);
+    expect(baseFingerprintKey(key, { ...view, cLon: 149.2 })).not.toBe(base);
+    expect(baseFingerprintKey(key, { ...view, cLat: -35.4 })).not.toBe(base);
+    expect(baseFingerprintKey(key, { ...view, span: 0.4 })).not.toBe(base);
   });
 });
