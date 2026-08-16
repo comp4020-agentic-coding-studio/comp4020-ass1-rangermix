@@ -1,8 +1,8 @@
 // Chapter 1 toy: press play (or just scroll it into view — see how.ts's
 // visibility gate) and watch Dijkstra's settle order bloom across a real
-// ANU-area street network from a default far pair — the exact same
-// dijkstra() that drives the real Canberra race, just 55 streets instead of
-// tens of thousands. The visitor can re-pick their own start/end pair by
+// Canberra city-centre street network from a default far pair — the exact
+// same dijkstra() that drives the real Canberra race, just 55 streets
+// instead of tens of thousands. The visitor can re-pick their own start/end pair by
 // clicking two intersections (toytownView's advancePick: first=start,
 // second=end+re-run, third=reset+new start); every re-pick calls the SAME
 // real dijkstra(), never a scripted replay.

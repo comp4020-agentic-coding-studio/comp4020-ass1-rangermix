@@ -174,12 +174,12 @@ describe.skipIf(!haveToytown)("toytown artifact (Northbourne-corridor /how/ subg
   // build.ts's toytownHierarchyStats and TOYTOWN_BBOX's own comment for the
   // tuning story). Cast locally rather than widening the shared type, since
   // nothing else needs the field.
-  it("is hierarchy-rich: at least one cls>=2 (secondary/primary/trunk/motorway) edge, and at least 50% cls-0 (local street) edges", () => {
+  it("is hierarchy-rich: at least one cls>=2 (secondary/primary/trunk/motorway) edge, and at least 60% cls-0 (local street) edges", () => {
     const edges = artifact.edges as unknown as { cls: number }[];
     expect(edges.length).toBeGreaterThan(0);
     expect(edges.some((e) => e.cls >= 2)).toBe(true);
     const cls0 = edges.filter((e) => e.cls === 0).length;
-    expect(cls0 / edges.length).toBeGreaterThanOrEqual(0.5);
+    expect(cls0 / edges.length).toBeGreaterThanOrEqual(0.6);
   });
 });
 

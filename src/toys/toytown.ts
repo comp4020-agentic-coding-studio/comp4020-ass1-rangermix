@@ -1,6 +1,7 @@
-// The ANU-area drivable subgraph every /how/ toy runs on — F5 rewired all
-// four toys onto this; minitown.ts's old hand-made 12-node graph is gone.
-// Cut from the SAME cached Overpass extract as the main Canberra graph
+// The toytown artifact area — a Canberra city-centre drivable subgraph
+// every /how/ toy runs on — F5 rewired all four toys onto this;
+// minitown.ts's old hand-made 12-node graph is gone. Cut from the SAME
+// cached Overpass extract as the main Canberra graph
 // (scripts/data/build.ts's emitToytown()), through the identical
 // drivable-filter -> largest-SCC -> chain-contraction pipeline, just
 // bboxed down first — see that function's own comment for the bbox tuning

@@ -608,7 +608,7 @@ export function emit(g: RoutingGraph, outDir: string): EmitResult {
 // into them — three hierarchy tiers in one small cut, not just one arterial
 // through a grid. Grid-searched box centers and sizes along the corridor
 // (scratch run, not committed — see the task report for the full candidate
-// table) for: 40-80 post-contraction nodes, >=1 edge with cls>=2, >=50%
+// table) for: 40-80 post-contraction nodes, >=1 edge with cls>=2, >=60%
 // edges cls 0, and the arterial spanning most of the CUT'S OWN shipped bbox
 // rather than clipping a corner (checked by projecting cls>=2 edges'
 // geometry extent over emitToytown's tight-fit bbox below, since that — not

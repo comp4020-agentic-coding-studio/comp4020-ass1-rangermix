@@ -62,9 +62,9 @@ export async function loadRouting(
 }
 
 /** The exact shape scripts/data/build.ts's emitToytown() writes to
- * public/data/toytown.json: a small ANU-area drivable subgraph (bboxed,
- * drivable-filtered, largest-SCC-kept, chain-contracted — same pipeline as
- * the main graph, just cut down) for the /how/ toys to run on. Coordinates
+ * public/data/toytown.json: a small Canberra city-centre drivable subgraph
+ * (bboxed, drivable-filtered, largest-SCC-kept, chain-contracted — same
+ * pipeline as the main graph, just cut down) for the /how/ toys to run on. Coordinates
  * are quantized ints on the same 1e-5-degree grid as routing.json, but
  * relative to THIS artifact's own bbox, not the main graph's. Each edge's
  * `geometry` is its full point list (endpoints included) as ABSOLUTE
@@ -82,9 +82,10 @@ export interface ToytownArtifact {
   edges: { from: number; to: number; w: number; geometry: [number, number][] }[];
 }
 
-/** Fetches public/data/toytown.json — the small ANU-area drivable subgraph
- * the /how/ toys run on (replacing the old hand-made 12-node mini-town,
- * src/toys/minitown.ts). Raw/undecoded: src/toys/toytown.ts's decodeToytown
+/** Fetches public/data/toytown.json — the small Canberra city-centre
+ * drivable subgraph the /how/ toys run on (replacing the old hand-made
+ * 12-node mini-town, src/toys/minitown.ts). Raw/undecoded:
+ * src/toys/toytown.ts's decodeToytown
  * does the dequantize + Graph-build + screen-projection step, same split as
  * loadRender/decodeLine. `base` is relative, same client-side-only contract
  * as every other loader in this file. */
