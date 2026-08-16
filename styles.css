@@ -579,7 +579,43 @@ a {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+}
+
+/* Route preset chips shrink (spec §17.1 — third build review: "route
+   preset buttons shrink... one line at 1920×1080"). A dedicated class
+   (index.html), not a `.group-chips .chip` descendant selector: that
+   selector shares its rightmost class with .site-head nav .chip/
+   .board-action .chip-style rules elsewhere in this file at a DIFFERENT
+   specificity, which stylelint's no-descending-specificity flags since it
+   can't know the two never actually target the same element — the same
+   conflict .board-action's own comment already documents and works
+   around the same way. Only the six route presets, which read as one
+   labelled GROUP of equivalent choices rather than independent primary
+   actions, compact down; the header theme toggle and board-action chips
+   keep their full 44px touch target. min-height drops to an explicit
+   24px rather than being removed outright: WCAG 2.5.8's AA minimum target
+   size, kept as a deliberate floor even though the chip now sits well
+   under the site's usual 44px.
+
+   390px choice (§17.1's "≤2 tight lines or horizontal scroll — your
+   call, document"): WRAP, not horizontal scroll. §16's own build review
+   already rejected a scroll strip here for route chips specifically
+   because it hides options with no affordance there's more to find; that
+   reasoning still holds, and this round's real constraint (the Algorithms
+   panel's top must land inside the initial 390×844 viewport) turns out
+   not to need giving it up. Measured with the real six place-name labels
+   at this compact size: three wrapped lines of two chips each, not two —
+   "Gungahlin → Capital Hill" and "Belconnen → Tuggeranong" are long
+   enough that no combination of six real labels was going to average two
+   per line. Verified empirically (agent-browser screenshot, fresh 390×844
+   load) that three lines is still short enough: the board's own
+   "ALGORITHMS" eyebrow and the Dijkstra row clear the fold regardless. */
+.route-chip {
+  gap: 5px;
+  min-height: 24px;
+  padding: 4px 10px;
+  font-size: 0.7rem;
 }
 
 .board {
@@ -598,101 +634,96 @@ a {
   text-transform: uppercase;
 }
 
-/* Flex, not grid, on .row itself (the name/val/ms grid lives one level
-   down now, on .row-main — see below): a core row (Dijkstra/CH) has only
-   ONE flex child, an optional row (A* / Bidirectional) has two (.row-main,
-   then its .row-toggle switch — build-review §16.1/§16.5, "algorithm
-   selection merges INTO the scoreboard itself"). Flex's column-gap only
-   inserts space BETWEEN items that actually exist, so a core row's
-   .row-main is never squeezed by a gap reserved for a toggle it doesn't
-   have, the way a fixed grid-template-columns (this row's old layout)
-   would reserve that column regardless of content. `.track` claims
-   flex-basis:100% (below) to force itself onto its own full-width line
-   under flex-wrap — the same "one item claims the whole row" trick grid's
-   old `grid-column:1/-1` did. */
+/* One grid per row (spec §17.1/17.2 — third build review: "algo name,
+   nodes number, time and toggle on the same line at 1920×1080"). Columns
+   are fixed regardless of row: [swatch][name, flexible][count][ms]
+   [toggle] — a core row (Dijkstra/CH) simply leaves the toggle cell empty
+   rather than reserving a different template, so every row shares one
+   layout. The OLD layout put .row-main (name+val) and .row-toggle side by
+   side as two FLEX children of .row: flexbox decides whether a line WRAPS
+   from each item's un-shrunk hypothetical size, before any flex-shrink is
+   applied — so the toggle's ~44px could get pushed onto its own line even
+   though shrinking .row-main would have let it fit (found live: the
+   Bidirectional toggle dropping below its name/count line at 1920×1080,
+   and separately "Contraction Hierarchies" wrapping to two lines). A
+   single grid has no such hypothetical-size wrapping step: .name's
+   `minmax(0, 1fr)` track is squeezed directly by the other (content-sized)
+   columns, all the way to 0 if it must — nothing "decides" to wrap
+   independently of whether it actually fits, so a wrapped row is now
+   structurally impossible, not just unlikely at today's numbers. */
 .board .row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto auto auto;
+  column-gap: 6px;
   align-items: center;
-  column-gap: 10px;
   margin: 0 0 16px;
 }
 
-/* name + val (+ the .ms node RaceUi.setTime inserts after .val once a race
-   reports a wall-clock time) — the grid that used to live on .row itself:
-   a MINIMUM column-gap that the long "Contraction Hierarchies" label's 1fr
-   track shrinks (and wraps) below before it can ever collide with its
-   neighbors (found live at 1920: "Contraction Hierarchies238 2.7 ms", no
-   gap before the count — space-between's leftover-only gap is what caused
-   that; grid's gap is a floor, guaranteed at every width). */
-.board .row .row-main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  column-gap: 10px;
-  align-items: baseline;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.board .row .name,
-.board .row .val {
-  font-family: var(--mono);
-  font-size: 0.85rem;
-}
-
-.board .row .name {
-  /* min-width:0 lets the grid track shrink the label below its intrinsic
-     width instead of forcing overflow into the count/time columns; the
-     text wraps at its own word boundary (or breaks one if it ever has to)
-     rather than colliding. */
-  min-width: 0;
-  overflow-wrap: break-word;
-  color: var(--ink);
-}
-
-.board .row .name::before {
-  content: "";
-  display: inline-block;
+.board .row .swatch {
+  grid-column: 1;
   width: 9px;
   height: 9px;
-  margin-right: 8px;
   border-radius: 50%;
 }
 
-.board .row[data-algo="dijkstra"] .name::before {
+.board .row[data-algo="dijkstra"] .swatch {
   background: var(--c-dijkstra);
 }
 
-.board .row[data-algo="astar"] .name::before {
+.board .row[data-algo="astar"] .swatch {
   background: var(--c-astar);
 }
 
-.board .row[data-algo="bidi"] .name::before {
+.board .row[data-algo="bidi"] .swatch {
   background: var(--c-bidi);
 }
 
-.board .row[data-algo="ch"] .name::before {
+.board .row[data-algo="ch"] .swatch {
   background: var(--c-ch);
 }
 
+.board .row .name,
+.board .row .val,
+.board .row .ms {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.board .row .name {
+  /* min-width:0 (belt-and-braces alongside the track's own minmax(0, …) —
+     overflow:hidden below already resolves the item's automatic minimum
+     to 0) lets this column shrink under pressure instead of forcing
+     overflow into the count/time columns; text-overflow:ellipsis is the
+     visible result once it's genuinely out of room — permitted by spec
+     §17.1, never a wrap. */
+  grid-column: 2;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+}
+
 .board .row .val {
+  grid-column: 3;
   color: var(--muted);
   text-align: right;
+  font-size: 0.7rem;
   font-variant-numeric: tabular-nums;
 }
 
 .board .row .ms {
   /* No margin-left: the grid's column-gap already guarantees the same
-     minimum gap here as between name/val, uniformly. */
+     minimum gap here as between every other column, uniformly. */
+  grid-column: 4;
   color: var(--muted);
-  font-family: var(--mono);
-  font-size: 0.78rem;
   text-align: right;
+  font-size: 0.68rem;
   font-variant-numeric: tabular-nums;
 }
 
 .board .row .track {
-  flex: 1 1 100%;
+  grid-column: 1 / -1;
   height: 8px;
   margin-top: 6px;
   overflow: hidden;
@@ -761,16 +792,16 @@ a {
   display: none;
 }
 
-.board .row.row-optional[data-active="false"] .name::before {
+.board .row.row-optional[data-active="false"] .swatch {
   background: transparent;
   border: 1.5px solid var(--muted);
 }
 
-.board .row[data-algo="astar"][data-active="false"] .name::before {
+.board .row[data-algo="astar"][data-active="false"] .swatch {
   border-color: var(--c-astar);
 }
 
-.board .row[data-algo="bidi"][data-active="false"] .name::before {
+.board .row[data-algo="bidi"][data-active="false"] .swatch {
   border-color: var(--c-bidi);
 }
 
@@ -781,10 +812,11 @@ a {
    visible text (the row's own .name already names the racer) — aria-label
    carries the accessible name, aria-pressed the on/off state, the same
    toggle-button pattern the old .algo-toggle chip used before this section
-   replaced it. */
+   replaced it. Fixed to the row grid's own 5th column (§17.1/17.2) — see
+   .board .row's own comment for why a grid, not flex, is what makes this
+   never wrap onto its own line. */
 .row-toggle {
   display: inline-flex;
-  flex: none;
   align-items: center;
   justify-content: center;
   padding: 14px 7px;
@@ -797,6 +829,10 @@ a {
 .row-toggle:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.board .row .row-toggle {
+  grid-column: 5;
 }
 
 .row-toggle-track {
@@ -842,6 +878,27 @@ a {
 .board .row[data-algo="bidi"] .row-toggle[aria-pressed="true"] .row-toggle-track {
   background: color-mix(in srgb, var(--c-bidi) 35%, var(--panel-2));
   border-color: var(--c-bidi);
+}
+
+/* A*'s heuristic, disclosed in its own muted line while the row is active
+   (spec §17.4 — third build review: "discloses A*'s heuristic in one
+   muted line when A* is enabled"). Real static text in index.html (not a
+   ::before/pseudo-element), so it's screen-reader reachable the same way
+   the row's own .name already is; shown/hidden purely by the SAME
+   [data-active] attribute wireAlgoToggle already flips in home.ts — the
+   exact mechanism that already hides .val/.ms/.track above, so no
+   separate JS is needed for this element. */
+.board .row[data-algo="astar"] .astar-note {
+  display: none;
+  grid-column: 1 / -1;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.board .row[data-algo="astar"][data-active="true"] .astar-note {
+  display: block;
 }
 
 .board .fineprint {

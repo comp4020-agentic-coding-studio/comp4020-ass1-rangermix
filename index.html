@@ -48,12 +48,12 @@
           <div class="control-group" role="group" aria-labelledby="routes-label">
             <p class="group-label" id="routes-label">Routes</p>
             <div class="group-chips">
-              <button data-testid="preset-hill" type="button" class="chip">Gungahlin → Capital Hill</button>
-              <button data-preset="anu-airport" type="button" class="chip">ANU → Airport</button>
-              <button data-preset="diagonal" type="button" class="chip">Belconnen → Tuggeranong</button>
-              <button data-preset="dickson-woden" type="button" class="chip">Dickson → Woden</button>
-              <button data-preset="kingston-belconnen" type="button" class="chip">Kingston → Belconnen</button>
-              <button data-preset="surprise" type="button" class="chip">Surprise me</button>
+              <button data-testid="preset-hill" type="button" class="chip route-chip">Gungahlin → Capital Hill</button>
+              <button data-preset="anu-airport" type="button" class="chip route-chip">ANU → Airport</button>
+              <button data-preset="diagonal" type="button" class="chip route-chip">Belconnen → Tuggeranong</button>
+              <button data-preset="dickson-woden" type="button" class="chip route-chip">Dickson → Woden</button>
+              <button data-preset="kingston-belconnen" type="button" class="chip route-chip">Kingston → Belconnen</button>
+              <button data-preset="surprise" type="button" class="chip route-chip">Surprise me</button>
             </div>
           </div>
           <span class="load-note" id="load-note">loading the road network…</span>
@@ -63,33 +63,30 @@
         <p class="board-eyebrow">Algorithms</p>
         <p class="headline" id="board-headline"></p>
         <div class="row" data-algo="dijkstra">
-          <div class="row-main">
-            <span class="name">Dijkstra</span><span class="val"></span>
-          </div>
+          <span class="swatch" aria-hidden="true"></span>
+          <span class="name">Dijkstra</span><span class="val"></span>
           <div class="track"><div class="fill"></div></div>
         </div>
         <div class="row row-optional" data-algo="astar" data-active="false">
-          <div class="row-main">
-            <span class="name">A*</span><span class="val"></span>
-          </div>
+          <span class="swatch" aria-hidden="true"></span>
+          <span class="name">A*</span><span class="val"></span>
           <button data-testid="algo-astar" type="button" class="row-toggle" aria-pressed="false" aria-label="Toggle A*" disabled>
             <span class="row-toggle-track"><span class="row-toggle-thumb"></span></span>
           </button>
           <div class="track"><div class="fill"></div></div>
+          <p class="astar-note" data-testid="astar-note">guided by a straight-line travel-time estimate (great-circle distance ÷ the network's fastest road speed).</p>
         </div>
         <div class="row row-optional" data-algo="bidi" data-active="false">
-          <div class="row-main">
-            <span class="name">Bidirectional</span><span class="val"></span>
-          </div>
+          <span class="swatch" aria-hidden="true"></span>
+          <span class="name">Bidirectional</span><span class="val"></span>
           <button data-testid="algo-bidi" type="button" class="row-toggle" aria-pressed="false" aria-label="Toggle Bidirectional" disabled>
             <span class="row-toggle-track"><span class="row-toggle-thumb"></span></span>
           </button>
           <div class="track"><div class="fill"></div></div>
         </div>
         <div class="row" data-algo="ch">
-          <div class="row-main">
-            <span class="name">Contraction Hierarchies</span><span class="val"></span>
-          </div>
+          <span class="swatch" aria-hidden="true"></span>
+          <span class="name">Contraction Hierarchies</span><span class="val"></span>
           <div class="track"><div class="fill"></div></div>
         </div>
         <p class="fineprint">Times and counts are measured in your browser.

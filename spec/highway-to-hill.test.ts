@@ -41,9 +41,15 @@ export const CONTRACTS = {
     raceLive: "race-live",
     presetHill: "preset-hill",
     howCta: "how-cta",
+    astarNote: "astar-note",
     toys: ["toy-flood", "toy-hierarchy", "toy-climb", "toy-contraction", "toy-order"],
   },
   attribution: "OpenStreetMap contributors",
+  // §17.4 (third build review): the Algorithms panel discloses A*'s
+  // heuristic in one muted line when A* is enabled.
+  astarHeuristic:
+    "guided by a straight-line travel-time estimate (great-circle " +
+    "distance ÷ the network's fastest road speed).",
 } as const;
 
 function pageDoc(name: string): Document | undefined {
@@ -145,6 +151,18 @@ describe("spec: home page (/) contracts", () => {
       expect(board?.querySelector('[data-algo="ch"] .name')?.textContent?.trim()).toBe(
         "Contraction Hierarchies",
       );
+    },
+  );
+
+  it(
+    `A* heuristic note [data-testid=${CONTRACTS.testids.astarNote}] sits under the A* row with the spec §17.4 copy, verbatim`,
+    () => {
+      const doc = pageDoc("index.html");
+      const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
+      const astarRow = board?.querySelector('[data-algo="astar"]');
+      const note = astarRow?.querySelector(`[data-testid="${CONTRACTS.testids.astarNote}"]`);
+      expect(note, "note must live inside the A* row").toBeTruthy();
+      expect(note?.textContent?.trim()).toBe(CONTRACTS.astarHeuristic);
     },
   );
 
