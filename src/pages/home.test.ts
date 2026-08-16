@@ -1,15 +1,48 @@
-// Pure-function test only. home.ts's `boot()` is the DOM-wiring half (real
-// canvas/Worker/matchMedia/timers) — untested here by design, same
-// rationale as controller.ts's stateful class and mapRenderer.ts's MapView
-// (verified by eye once wired into the page, per those files' own
-// comments). `autoRunPins` and `shouldArmAutoRun` are the pieces of the
-// auto-run decision that ARE pure — no DOM, no matchMedia, no timer — so
-// they're the only things pulled out and exported for direct testing; the
-// DOM-observing glue that feeds them live values (boot()'s
+// Mostly pure-function tests. home.ts's `boot()` itself is the DOM-wiring
+// half (real canvas/Worker/matchMedia/timers) — untested here by design,
+// same rationale as controller.ts's stateful class and mapRenderer.ts's
+// MapView (verified by eye once wired into the page, per those files' own
+// comments). `autoRunPins`, `shouldArmAutoRun`, and `diffPanels` are pure
+// (no DOM, no matchMedia, no timer) so they're tested below with plain
+// values — the DOM-observing glue that feeds them live values (boot()'s
 // maybeArmAutoRun) stays untested here like the rest of boot().
+// `applyControlsEnabled`/`applySplashInert` (H2 gate fix) are the one
+// exception: they DO mutate real DOM elements — that's the whole point of
+// the review finding they fix — but are still parameterized (no closure
+// over boot()'s own mutable state), so a plain constructed DOM tree is
+// enough to exercise them directly, no canvas/Worker/fetch needed.
+// Deliberately NOT switched to a jsdom test environment file-wide (the
+// docblock idiom theme.test.ts/controller.test.ts use — naming it plainly
+// here rather than spelling out that exact magic comment, since Vitest's
+// own scanner for it isn't scoped to a leading comment block and will
+// arm on the phrase anywhere in the file, comments included, which is
+// it self a trap worth flagging for the next person tempted to paste
+// that idiom into this particular file): that would stamp a real
+// `document` onto this file's global scope, which would trip home.ts's
+// own `if (typeof document !== "undefined") boot()` at the bottom of the
+// file — the exact guard that exists so this module stays safely
+// importable from a plain Node test environment (see that line's own
+// comment) — and run the FULL page boot (matchMedia, canvas, fetch,
+// Worker, none of it mocked here) as a side effect of merely importing
+// "./home" up above. Instead, the one block below that needs real
+// elements builds its own throwaway document via the `jsdom` package
+// directly (already a devDependency; same technique
+// spec/highway-to-hill.test.ts already uses for parsing built HTML) — a
+// `Document` that home.ts's own module-level code never sees or touches,
+// so the global environment here stays exactly what it was before this
+// test existed: plain Node, no ambient `document`.
 
-import { describe, expect, it } from "vitest";
-import { autoRunPins, diffPanels, shouldArmAutoRun } from "./home";
+import { JSDOM } from "jsdom";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  applyControlsEnabled,
+  applySplashInert,
+  autoRunPins,
+  diffPanels,
+  shouldArmAutoRun,
+  type GatedControls,
+  type SplashInertTargets,
+} from "./home";
 
 describe("autoRunPins (the auto-run timer's fire condition — motion-preference independent, per design spec §5.1)", () => {
   it("returns the pinned pair once both pins are placed", () => {
@@ -52,6 +85,118 @@ describe("shouldArmAutoRun (the auto-run gate's page-readiness half — data loa
 
   it("won't re-arm once already armed, even if asked again with every other condition true", () => {
     expect(shouldArmAutoRun(true, true, true, true)).toBe(false);
+  });
+});
+
+// H2 gate fix: the review finding this covers — "`.splash` only covers
+// `.map-frame`, so Routes chips and — once data loads — the Algorithms
+// toggles/View-toggle/Race-again stay visible and enabled regardless of
+// splash state" and "with no focus trap, a keyboard user can Tab straight
+// past Explore to a live 'Race again'". Real DOM elements (jsdom), built
+// fresh per test from a minimal fragment of index.html's own shape —
+// enough for applyControlsEnabled/applySplashInert to have real targets to
+// mutate, none of boot()'s canvas/Worker/fetch machinery.
+describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board panel + routes group, gated on dataReady AND splashDismissed, with a real focus/accessibility-tree trap while the splash is up)", () => {
+  let controls: GatedControls;
+  let inertTargets: SplashInertTargets;
+  let howCta: HTMLElement | null;
+
+  beforeEach(() => {
+    // A fresh throwaway Document per test (see the file-header comment for
+    // why this is a local JSDOM instance rather than the file's own global
+    // `document`). how-cta is included specifically because it must NOT be
+    // touched by either function (build-review ruling: leaving to /how/
+    // while the splash is up is legitimate) — these tests assert that
+    // directly rather than just trusting the source comment. It sits
+    // INSIDE `.board-actions` alongside two controls that must be gated,
+    // matching the real markup's structure — the exact reason
+    // applyControlsEnabled/applySplashInert target leaf controls directly
+    // instead of `.board` as a whole (`inert` has no per-descendant
+    // opt-out once set on an ancestor).
+    const doc = new JSDOM(`<!doctype html><body>
+      <div class="controls">
+        <button class="chip route-chip" data-testid="preset-hill">Gungahlin → Capital Hill</button>
+        <button class="chip route-chip" data-preset="surprise">Surprise me</button>
+      </div>
+      <aside class="board">
+        <button data-testid="algo-astar">Toggle A*</button>
+        <button data-testid="algo-bidi">Toggle Bidirectional</button>
+        <div class="board-actions">
+          <button data-testid="view-toggle">View: overlay</button>
+          <button data-testid="race-run">Race again</button>
+          <a data-testid="how-cta" href="./how/">How is that possible?</a>
+        </div>
+      </aside>
+      <div class="zoom-controls">
+        <button data-testid="zoom-fit">Map</button>
+        <button data-testid="zoom-in">+</button>
+        <button data-testid="zoom-out">−</button>
+      </div>
+    </body>`).window.document;
+    controls = {
+      raceRun: doc.querySelector<HTMLButtonElement>('[data-testid="race-run"]'),
+      astarToggle: doc.querySelector<HTMLButtonElement>('[data-testid="algo-astar"]'),
+      bidiToggle: doc.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]'),
+      viewToggle: doc.querySelector<HTMLButtonElement>('[data-testid="view-toggle"]'),
+      zoomIn: doc.querySelector<HTMLButtonElement>('[data-testid="zoom-in"]'),
+      zoomOut: doc.querySelector<HTMLButtonElement>('[data-testid="zoom-out"]'),
+      zoomFit: doc.querySelector<HTMLButtonElement>('[data-testid="zoom-fit"]'),
+      routeChips: [...doc.querySelectorAll<HTMLButtonElement>(".route-chip")],
+    };
+    inertTargets = {
+      raceRun: controls.raceRun,
+      astarToggle: controls.astarToggle,
+      bidiToggle: controls.bidiToggle,
+      viewToggle: controls.viewToggle,
+      routesContainer: doc.querySelector<HTMLElement>(".controls"),
+    };
+    howCta = doc.querySelector<HTMLElement>('[data-testid="how-cta"]');
+  });
+
+  // Every control in `controls`/`inertTargets` is meant to move together —
+  // a per-control loop (rather than one combined assertion) catches a
+  // single wrong field/element that a copy-pasted bug might miss if it
+  // happened to be wrong in the same direction as whatever's under test.
+  function expectAllGated(disabled: boolean, inert: boolean): void {
+    expect(controls.raceRun?.disabled).toBe(disabled);
+    expect(controls.astarToggle?.disabled).toBe(disabled);
+    expect(controls.bidiToggle?.disabled).toBe(disabled);
+    expect(controls.viewToggle?.disabled).toBe(disabled);
+    expect(controls.zoomIn?.disabled).toBe(disabled);
+    expect(controls.zoomOut?.disabled).toBe(disabled);
+    expect(controls.zoomFit?.disabled).toBe(disabled);
+    expect(controls.routeChips.length).toBeGreaterThan(0); // sanity: the fixture's chips were actually found
+    for (const chip of controls.routeChips) expect(chip.disabled).toBe(disabled);
+    expect(controls.raceRun?.inert).toBe(inert);
+    expect(controls.astarToggle?.inert).toBe(inert);
+    expect(controls.bidiToggle?.inert).toBe(inert);
+    expect(controls.viewToggle?.inert).toBe(inert);
+    expect(inertTargets.routesContainer?.inert).toBe(inert);
+  }
+
+  it("splash visible + dataReady=true: every gated control is disabled AND inert, and how-cta is untouched (the exact review finding — these used to stay enabled regardless of splash state)", () => {
+    applyControlsEnabled(controls, true, false);
+    applySplashInert(inertTargets, false);
+    expectAllGated(true, true);
+    expect(howCta?.hasAttribute("disabled")).toBe(false);
+    expect(howCta?.inert).toBeFalsy();
+  });
+
+  it("dismissal (splashDismissed flips true): every gated control re-enables and the focus trap releases", () => {
+    applyControlsEnabled(controls, true, false);
+    applySplashInert(inertTargets, false);
+    expectAllGated(true, true); // sanity: starts gated, same as the previous test
+
+    applyControlsEnabled(controls, true, true);
+    applySplashInert(inertTargets, true);
+    expectAllGated(false, false);
+    expect(howCta?.inert).toBeFalsy();
+  });
+
+  it("boot-with-predismissed-session (splashDismissed=true before dataReady=true): stays disabled (data isn't ready yet) but is already NOT inert — the two gates are independent, not the same predicate", () => {
+    applyControlsEnabled(controls, false, true);
+    applySplashInert(inertTargets, true);
+    expectAllGated(true, false);
   });
 });
 

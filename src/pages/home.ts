@@ -70,6 +70,95 @@ export function shouldArmAutoRun(
   return dataReady && splashDismissed && !alreadyArmed && isDesktopWidth;
 }
 
+/** The full set of controls gated by (dataReady AND splashDismissed) --
+ * everything that OPERATES the hidden map/race (H2 gate fix, a build-review
+ * finding against the splash this subsumes into: ".splash only covers
+ * .map-frame, so Routes chips and -- once data loads -- the Algorithms
+ * toggles/View-toggle/Race-again stay visible and enabled regardless of
+ * splash state"). Previously only the zoom trio routed through the AND of
+ * both flags (updateMapControlsEnabled, replaced by applyControlsEnabled
+ * below); Race-again and the two optional-racer toggles flipped
+ * `disabled=false` on `dataReady` alone, and the route-preset chips had NO
+ * `disabled` gating at all -- they relied purely on their own click
+ * handler's silent `if (!graph) return` guard, which says nothing about
+ * whether the splash is still covering the map. how-cta and the header nav
+ * are deliberately NOT part of this set (build-review ruling): leaving to
+ * /how/ or toggling the theme while the splash is up is legitimate, since
+ * neither one operates the hidden map/race. */
+export interface GatedControls {
+  raceRun: HTMLButtonElement | null;
+  astarToggle: HTMLButtonElement | null;
+  bidiToggle: HTMLButtonElement | null;
+  viewToggle: HTMLButtonElement | null;
+  zoomIn: HTMLButtonElement | null;
+  zoomOut: HTMLButtonElement | null;
+  zoomFit: HTMLButtonElement | null;
+  routeChips: readonly HTMLButtonElement[];
+}
+
+/** Applies the (dataReady AND splashDismissed) gate's native `disabled`
+ * state to every control in `GatedControls` -- ONE function so a control
+ * can never again be wired to `dataReady` alone (the bug this fixes).
+ * boot() calls this from three places -- the data-ready success path, once
+ * at boot for an already-dismissed session, and dismiss() -- see each call
+ * site's own comment for why that particular recompute is needed.
+ * Parameterized (no closure over boot()'s own mutable state), same reason
+ * autoRunPins/shouldArmAutoRun above are pulled out of boot() as plain
+ * exports: this one isn't pure (it mutates the elements it's given), but
+ * it's still fully deterministic from its three arguments alone, so it's
+ * unit-testable against a plain constructed DOM without any of boot()'s
+ * canvas/Worker/fetch machinery. */
+export function applyControlsEnabled(controls: GatedControls, dataReady: boolean, splashDismissed: boolean): void {
+  const ready = dataReady && splashDismissed;
+  if (controls.raceRun) controls.raceRun.disabled = !ready;
+  if (controls.astarToggle) controls.astarToggle.disabled = !ready;
+  if (controls.bidiToggle) controls.bidiToggle.disabled = !ready;
+  if (controls.viewToggle) controls.viewToggle.disabled = !ready;
+  if (controls.zoomIn) controls.zoomIn.disabled = !ready;
+  if (controls.zoomOut) controls.zoomOut.disabled = !ready;
+  if (controls.zoomFit) controls.zoomFit.disabled = !ready;
+  for (const chip of controls.routeChips) chip.disabled = !ready;
+}
+
+/** Focus containment while the splash is visible (H2 gate fix): with no
+ * trap, review found a keyboard user could Tab straight past Explore to a
+ * live Race-again and fire a real race whose map result is hidden behind
+ * the still-open splash. `inert` -- stronger than `disabled` alone, since a
+ * screen reader's own browse-mode cursor can still land on (and announce) a
+ * merely-disabled control -- removes each target from the Tab order AND the
+ * accessibility tree entirely while `splashDismissed` is false, restored
+ * the instant it's true.
+ *
+ * Targets the four board-panel leaf controls directly, NOT `.board` as a
+ * whole: `.board` also contains how-cta, which the same build-review ruling
+ * keeps reachable while the splash is up, and `inert` has no per-descendant
+ * opt-out once set on an ancestor -- inerting `.board` would trap how-cta
+ * too. `routesContainer` (`.controls`, the routes-chip group's own wrapper)
+ * has no such exception, so it's inerted as one whole container instead of
+ * listing every chip. The zoom trio and the splash's own content are
+ * deliberately left out here: the zoom trio is already correctly gated
+ * (via applyControlsEnabled above) and, like the splash's own reachable
+ * content (Explore, the copy), lives inside `.map-frame` where a careless
+ * container-level inert would trap the splash itself -- out of scope for
+ * the reported finding, which named the board panel and the routes group
+ * specifically. */
+export interface SplashInertTargets {
+  raceRun: HTMLButtonElement | null;
+  astarToggle: HTMLButtonElement | null;
+  bidiToggle: HTMLButtonElement | null;
+  viewToggle: HTMLButtonElement | null;
+  routesContainer: HTMLElement | null;
+}
+
+export function applySplashInert(targets: SplashInertTargets, splashDismissed: boolean): void {
+  const gated = !splashDismissed;
+  if (targets.raceRun) targets.raceRun.inert = gated;
+  if (targets.astarToggle) targets.astarToggle.inert = gated;
+  if (targets.bidiToggle) targets.bidiToggle.inert = gated;
+  if (targets.viewToggle) targets.viewToggle.inert = gated;
+  if (targets.routesContainer) targets.routesContainer.inert = gated;
+}
+
 export interface PanelDiff {
   keep: Algo[];
   add: Algo[];
@@ -228,6 +317,13 @@ function boot(): void {
   const zoomOutBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-out"]');
   const zoomFitBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-fit"]');
   const viewToggleBtn = document.querySelector<HTMLButtonElement>('[data-testid="view-toggle"]');
+  // H2 gate fix: the routes/controls wrapper (the inert target below) and
+  // every route-preset chip (a disabled-gate target) -- one shared class
+  // (`.route-chip`, index.html) picks up all six regardless of whether each
+  // ships a `data-testid` or a `data-preset` attribute, same convention
+  // presetButton() below already relies on for click wiring.
+  const controlsEl = document.querySelector<HTMLElement>(".controls");
+  const routeChipEls = [...document.querySelectorAll<HTMLButtonElement>(".route-chip")];
 
   if (
     !(baseCanvas instanceof HTMLCanvasElement) ||
@@ -326,9 +422,18 @@ function boot(): void {
   // or Escape anywhere, dismisses it for the rest of THIS session
   // (sessionStorage, not localStorage — a fresh tab sees it again,
   // matching a "welcome screen" rather than a permanent preference). The
-  // map-frame's zoom buttons and the desktop auto-run both stay gated
-  // until dismissal too, so nothing the splash visually covers is
-  // reachable by mouse OR keyboard while it's up.
+  // desktop auto-run, the map-frame's zoom buttons, and — since a
+  // build-review gate pass (H2 fix) found they weren't — every other
+  // control that OPERATES the hidden map/race (Race-again, the two
+  // optional-racer toggles, the view-mode toggle, every route-preset chip)
+  // all stay gated until dismissal too: `disabled` (applyControlsEnabled)
+  // removes each from the Tab order and click reach, and `inert`
+  // (applySplashInert) additionally removes the board-panel/routes-group
+  // subset from the accessibility tree for the same window, a focus trap
+  // with no manual keydown cycling needed. how-cta and the header nav are
+  // the deliberate exception — leaving to /how/ or toggling the theme
+  // under the splash is legitimate (build-review ruling), so neither is
+  // gated or inerted.
   // ------------------------------------------------------------------
 
   const SPLASH_KEY = "hth-splash";
@@ -353,16 +458,36 @@ function boot(): void {
     }
   }
 
-  // Shared by the data-ready success path AND dismiss() below: the zoom
-  // buttons live INSIDE .map-frame, spatially under the splash, so they
-  // stay disabled (native `disabled` — skipped by Tab, not just visually
-  // dimmed) until BOTH the graph has loaded AND the splash is out of the
-  // way, instead of the plain data-only gate every other control uses.
-  function updateMapControlsEnabled(): void {
-    const ready = dataReady && splashDismissed;
-    if (zoomInBtn) zoomInBtn.disabled = !ready;
-    if (zoomOutBtn) zoomOutBtn.disabled = !ready;
-    if (zoomFitBtn) zoomFitBtn.disabled = !ready;
+  // Shared control set for the two gate functions above (H2 gate fix):
+  // built once here, since none of these element references ever change
+  // for the life of the page — only their `disabled`/`inert` state does,
+  // via the two thin wrapper functions below, called wherever `dataReady`
+  // or `splashDismissed` changes (three call sites — see each one's own
+  // comment for why that particular recompute is needed).
+  const gatedControls: GatedControls = {
+    raceRun: raceRunBtn,
+    astarToggle,
+    bidiToggle,
+    viewToggle: viewToggleBtn,
+    zoomIn: zoomInBtn,
+    zoomOut: zoomOutBtn,
+    zoomFit: zoomFitBtn,
+    routeChips: routeChipEls,
+  };
+  const splashInertTargets: SplashInertTargets = {
+    raceRun: raceRunBtn,
+    astarToggle,
+    bidiToggle,
+    viewToggle: viewToggleBtn,
+    routesContainer: controlsEl,
+  };
+
+  function updateControlsEnabled(): void {
+    applyControlsEnabled(gatedControls, dataReady, splashDismissed);
+  }
+
+  function updateSplashInert(): void {
+    applySplashInert(splashInertTargets, splashDismissed);
   }
 
   // Reads the live DOM/timer state into shouldArmAutoRun's four pure
@@ -384,7 +509,8 @@ function boot(): void {
     splashEl.hidden = true;
     splashDismissed = true;
     safeSessionSet(SPLASH_KEY, "1");
-    updateMapControlsEnabled();
+    updateControlsEnabled(); // H2 gate fix: was updateMapControlsEnabled() (zoom-only) -- now the full gated set
+    updateSplashInert(); // H2 gate fix: releases focus containment now that the splash is actually gone
     maybeArmAutoRun();
     // Moves focus to the map region it just uncovered (§17.3's own "focus
     // moves to the map region") — race-canvas carries a static
@@ -398,7 +524,7 @@ function boot(): void {
     // or flash — index.html's own inline head script already stamped
     // `data-splash-dismissed` on <html> before first paint for the CSS
     // half of that; setting `hidden` here is the JS-observable half that
-    // updateMapControlsEnabled/maybeArmAutoRun actually read.
+    // updateControlsEnabled/updateSplashInert/maybeArmAutoRun actually read.
     splashDismissed = true;
     if (splashEl) splashEl.hidden = true;
   } else {
@@ -407,6 +533,20 @@ function boot(): void {
     // starts right where a mouse visitor's eye lands.
     exploreBtn?.focus();
   }
+  // H2 gate fix: recompute both gates right away too (boot-with-
+  // predismissed-session), not only at data-ready or inside dismiss() — a
+  // session that starts already-dismissed (splashDismissed=true above,
+  // before dataReady is ever true) must release the inert trap immediately
+  // rather than wait for a call site that may never fire this pageview
+  // (dismiss() can't — the splash is already gone) or fires much later
+  // (data-ready). On the OTHER branch (fresh splash) updateControlsEnabled
+  // is a no-op (matches what index.html already ships disabled) but
+  // updateSplashInert still does real first-time work, since `inert` —
+  // unlike `disabled` — isn't part of the static markup (see
+  // applySplashInert's own comment for why: no pre-paint flash to guard
+  // against the way the theme/splash-dismissed CSS stamps need).
+  updateControlsEnabled();
+  updateSplashInert();
 
   exploreBtn?.addEventListener("click", dismiss);
   document.addEventListener("keydown", (e) => {
@@ -1071,20 +1211,20 @@ function boot(): void {
       if (!view || !graph) return;
       controller = new RaceController(view, ui);
       if (loadNote) loadNote.hidden = true;
-      if (raceRunBtn) raceRunBtn.disabled = false;
-      // Ship disabled (index.html) so a pre-load click can't flip
-      // aria-pressed / light up a scoreboard row that has nothing to show
-      // yet (unlike the preset buttons, which no-op silently on their own
-      // `if (!graph) return` guard, a toggle's own click handler has a
-      // visible side effect — aria-pressed, the row's data-active dimming
-      // — before it ever checks whether `controller` exists, so disabling
-      // until ready is the honest fix here, not a redundant
-      // belt-and-braces one).
-      if (astarToggle) astarToggle.disabled = false;
-      if (bidiToggle) bidiToggle.disabled = false;
       dataReady = true;
-      updateMapControlsEnabled(); // zoom buttons: gated on the splash too — see that function's own comment
-      if (viewToggleBtn) viewToggleBtn.disabled = false;
+      // H2 gate fix: ONE call now gates race-run, the two optional-racer
+      // toggles, the view-mode toggle, every route-preset chip, and the
+      // zoom trio together on (dataReady AND splashDismissed) — previously
+      // these flipped `disabled=false` on `dataReady` alone (the exact
+      // review finding this fixes: a keyboard user could Tab past Explore
+      // straight to a live Race-again while the splash was still up).
+      // Route chips get real `disabled` gating for the first time here
+      // too, not just their own click handler's silent `if (!graph)
+      // return` guard, which never accounted for the splash at all. See
+      // GatedControls/applyControlsEnabled's own comment for the full
+      // reasoning (why toggle buttons specifically can't rely on a silent
+      // guard the way a preset's OWN handler used to).
+      updateControlsEnabled();
 
       // Pins pre-placed on the signature preset (design spec's "Ready /
       // idle" state) as soon as routing lets us snap them — independent of
