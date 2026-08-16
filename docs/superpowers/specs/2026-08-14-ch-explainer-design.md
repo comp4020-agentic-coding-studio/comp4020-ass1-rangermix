@@ -653,6 +653,12 @@ colour of its own.
    semantics unchanged (instant finals). No cap — long honest replays
    (e.g. bidirectional greedy) are the point; the cancellation paths
    (new race, preset, toggle) must remain instant.
+5. Splash on/off control (added mid-round): a small ⓘ button in the
+   header nav re-opens the splash at any time (the intro doubles as the
+   About surface); the splash gains a "don't show this again" preference
+   (guarded persistent storage) that disables auto-show on future visits;
+   the Explore/Escape dismissal semantics and control gating are
+   unchanged.
 
 ## 15. References
 
