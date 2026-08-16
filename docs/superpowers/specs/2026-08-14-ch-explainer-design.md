@@ -632,6 +632,28 @@ chart hue, map-dots only, never sole identity). The retired "bidirectional
 racer" hue assignment disappears with the racer; the ⇄ modifier carries no
 colour of its own.
 
+## 19. Fifth build review (user, 2026-08-17 — binding)
+
+1. The size button HIDES when the viewport is too small for adaptive mode
+   to extend the map (static markup keeps the element; visibility is
+   responsive).
+2. Adaptive size extends the map BOTH horizontally and vertically; the
+   vertical stretch must keep the Routes section visible (map height ≈
+   viewport minus header minus routes strip — no fold-loss of Routes).
+3. Panning must not reveal empty (unstroked) area while the pointer keeps
+   moving: the interaction-time base cache renders with overscan margin,
+   and during sustained interaction the crisp base refreshes at least
+   every 0.5 s (user-authorized cost) so uncovered regions fill without
+   waiting for pan-end.
+4. Replay pacing becomes PER-ALGORITHM and proportional to measured
+   compute: each racer's replay duration = its own measured wall time ×
+   2000 (0.5 ms → 1 s, 2.5 ms → 5 s). Rows finalize when their own replay
+   completes; race-end effects (aria announcement, CTA emphasis, stored
+   echo) fire when the LAST active replay completes; reduced-motion
+   semantics unchanged (instant finals). No cap — long honest replays
+   (e.g. bidirectional greedy) are the point; the cancellation paths
+   (new race, preset, toggle) must remain instant.
+
 ## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
