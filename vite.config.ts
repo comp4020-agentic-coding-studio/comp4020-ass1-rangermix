@@ -1,6 +1,6 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
-import { defineConfig } from "vite";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // Every .html file in the repo is a page and a build entry, so a multi-page
 // hand-written site needs no build config: add pages, link them, ship.
@@ -25,5 +25,11 @@ export default defineConfig({
     rollupOptions: {
       input: htmlEntries(),
     },
+  },
+  test: {
+    // Agent worktrees live under .claude/worktrees/ while parallel subagent
+    // tasks run; without this the roster sweeps every worktree's suite and
+    // reports their in-progress reds as ours.
+    exclude: [...configDefaults.exclude, "**/.claude/**"],
   },
 });
