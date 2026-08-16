@@ -2,12 +2,14 @@
 // canvas/Worker/matchMedia/timers) — untested here by design, same
 // rationale as controller.ts's stateful class and mapRenderer.ts's MapView
 // (verified by eye once wired into the page, per those files' own
-// comments). `autoRunPins` is the one piece of the auto-run decision that's
-// pure — no DOM, no matchMedia, no timer — so it's the only thing pulled
-// out and exported for direct testing.
+// comments). `autoRunPins` and `shouldArmAutoRun` are the pieces of the
+// auto-run decision that ARE pure — no DOM, no matchMedia, no timer — so
+// they're the only things pulled out and exported for direct testing; the
+// DOM-observing glue that feeds them live values (boot()'s
+// maybeArmAutoRun) stays untested here like the rest of boot().
 
 import { describe, expect, it } from "vitest";
-import { autoRunPins, diffPanels } from "./home";
+import { autoRunPins, diffPanels, shouldArmAutoRun } from "./home";
 
 describe("autoRunPins (the auto-run timer's fire condition — motion-preference independent, per design spec §5.1)", () => {
   it("returns the pinned pair once both pins are placed", () => {
@@ -23,6 +25,33 @@ describe("autoRunPins (the auto-run timer's fire condition — motion-preference
   it("does not special-case pin index 0 (falsy but a valid node id)", () => {
     expect(autoRunPins(0, 1)).toEqual([0, 1]);
     expect(autoRunPins(1, 0)).toEqual([1, 0]);
+  });
+});
+
+// The auto-run gate's OTHER half (third build review §17.3): whether the
+// page itself is ready to arm the timer, independent of whether the pins
+// are placed (autoRunPins, above, covers that). All four inputs must hold
+// simultaneously — each test flips exactly one away from "go" to pin down
+// that every condition is actually load-bearing, not just decorative.
+describe("shouldArmAutoRun (the auto-run gate's page-readiness half — data loaded, splash dismissed, not already armed, desktop width)", () => {
+  it("arms once every condition is met", () => {
+    expect(shouldArmAutoRun(true, true, false, true)).toBe(true);
+  });
+
+  it("withholds while the splash hasn't been dismissed yet, even once data is ready", () => {
+    expect(shouldArmAutoRun(true, false, false, true)).toBe(false);
+  });
+
+  it("withholds while data hasn't loaded yet, even once the splash is dismissed", () => {
+    expect(shouldArmAutoRun(false, true, false, true)).toBe(false);
+  });
+
+  it("never arms on a narrow (non-desktop) viewport, regardless of the other two", () => {
+    expect(shouldArmAutoRun(true, true, false, false)).toBe(false);
+  });
+
+  it("won't re-arm once already armed, even if asked again with every other condition true", () => {
+    expect(shouldArmAutoRun(true, true, true, true)).toBe(false);
   });
 });
 
