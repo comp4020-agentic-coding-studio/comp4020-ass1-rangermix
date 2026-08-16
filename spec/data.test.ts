@@ -8,7 +8,7 @@ import { dijkstraCsr } from "../src/algos/dijkstra";
 import { chQuery } from "../src/algos/chQuery";
 import { chFromArtifact, graphFromArtifact, type RoutingArtifact } from "../src/data-node";
 import { decodeToytown, type Toytown, type ToytownArtifact } from "../src/toys/toytown";
-import { findDefaultClimbPair } from "../src/toys/climb";
+import { countArterialSegments, findDefaultClimbPair } from "../src/toys/climb";
 import { findFarPair } from "../src/toys/flood";
 
 // The data-layer contracts: CH<->Dijkstra equivalence on the SHIPPED
@@ -167,19 +167,32 @@ describe.skipIf(!haveToytown)("toytown artifact (Northbourne-corridor /how/ subg
   // ANU-campus cut this one replaced (user feedback: "use a place with
   // clear hierarchy of roads... [ANU is] all small streets, no visible
   // arterial spine"). Pinned here so a future re-cut can't regress it back
-  // to an all-local box. `cls` isn't declared on ToytownArtifact (src/data.ts)
-  // since no toy reads it — it rides along on each edge purely so this
-  // sensor can check the cut against the SHIPPED artifact in CI, which
-  // never has the gitignored cache a re-derivation would need (see
-  // build.ts's toytownHierarchyStats and TOYTOWN_BBOX's own comment for the
-  // tuning story). Cast locally rather than widening the shared type, since
-  // nothing else needs the field.
+  // to an all-local box. `cls` started as a ride-along field on
+  // ToytownArtifact (src/data.ts) that no toy read; task G5 promoted it to a
+  // declared field once climb's map view (toytownView's isArterial/
+  // roadPolylineMarkup) and default-pair scoring (countArterialSegments)
+  // actually started reading it, so no local cast is needed here anymore.
   it("is hierarchy-rich: at least one cls>=2 (secondary/primary/trunk/motorway) edge, and at least 60% cls-0 (local street) edges", () => {
-    const edges = artifact.edges as unknown as { cls: number }[];
+    const { edges } = artifact;
     expect(edges.length).toBeGreaterThan(0);
     expect(edges.some((e) => e.cls >= 2)).toBe(true);
     const cls0 = edges.filter((e) => e.cls === 0).length;
     expect(cls0 / edges.length).toBeGreaterThanOrEqual(0.6);
+  });
+
+  // G5 sensor (design spec §16.13): the climb toy's default pair now
+  // additionally PREFERS a qualifying pair whose winning route rides the
+  // arterial (countArterialSegments) over one that merely qualifies but
+  // stays entirely local — checked here against the SHIPPED artifact,
+  // mirroring the unscored sensor above, so a re-cut that broke the
+  // preference (not just the base qualification) fails in CI too.
+  it("the arterial-aware default-pair search also finds a real, non-null pair on the shipped artifact", () => {
+    const ch = buildCh(toytown.graph);
+    const pair = findDefaultClimbPair(ch, undefined, (result) => countArterialSegments(toytown, result.path));
+    expect(pair).not.toBeNull();
+    if (!pair) return;
+    const result = chQuery(ch, pair.from, pair.to);
+    expect(result.usesShortcut).toBe(true);
   });
 });
 

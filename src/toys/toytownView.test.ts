@@ -3,9 +3,12 @@ import { decodeToytown, type ToytownArtifact } from "./toytown";
 import {
   advancePick,
   declutterXY,
+  edgeClsOf,
   IDLE_PICK,
+  isArterial,
   physicalEdges,
   roadPolylineMarkup,
+  unorderedKey,
 } from "./toytownView";
 
 // A tiny synthetic 3-node fixture, deliberately mixing a TWO-WAY pair
@@ -13,16 +16,19 @@ import {
 // asymmetric travel times, so the dedup must not assume symmetry) with a
 // ONE-WAY-only pair (1->2, no reverse edge at all) — the exact shape
 // contraction.ts's F4 review risk-list flagged: MINITOWN was always
-// undirected, so a bug in this dedup would never show up against it.
+// undirected, so a bug in this dedup would never show up against it. The
+// two physical streets also deliberately differ in road class (0-1 local,
+// 1-2 arterial — task G5) so the cls-passthrough/styling tests below have
+// both cases to check.
 const ARTIFACT: ToytownArtifact = {
   bbox: [149.1, -35.3, 149.11, -35.29],
   n: 3,
   lon: [0, 500, 1000],
   lat: [0, 0, 500],
   edges: [
-    { from: 0, to: 1, w: 50, geometry: [[0, 0], [500, 0]] },
-    { from: 1, to: 0, w: 60, geometry: [[500, 0], [0, 0]] },
-    { from: 1, to: 2, w: 70, geometry: [[500, 0], [1000, 500]] },
+    { from: 0, to: 1, w: 50, cls: 0, geometry: [[0, 0], [500, 0]] },
+    { from: 1, to: 0, w: 60, cls: 0, geometry: [[500, 0], [0, 0]] },
+    { from: 1, to: 2, w: 70, cls: 3, geometry: [[500, 0], [1000, 500]] },
   ],
 };
 
@@ -55,6 +61,13 @@ describe("physicalEdges: collapses real directed edges to one line per street", 
   it("every returned geometry is a real edge's geometry (non-empty point list)", () => {
     for (const e of edges) expect(e.geometry.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("carries through the physical street's cls (task G5)", () => {
+    const local = edges.find((e) => (e.a === 0 && e.b === 1) || (e.a === 1 && e.b === 0));
+    const arterial = edges.find((e) => (e.a === 1 && e.b === 2) || (e.a === 2 && e.b === 1));
+    expect(local?.cls).toBe(0);
+    expect(arterial?.cls).toBe(3);
+  });
 });
 
 describe("roadPolylineMarkup", () => {
@@ -80,6 +93,60 @@ describe("roadPolylineMarkup", () => {
       .split("<polyline")
       .find((chunk) => chunk.includes(`data-a="${twoway?.a}" data-b="${twoway?.b}"`));
     expect(twowayLine).not.toContain("edge-oneway");
+  });
+
+  it("tags the arterial street (cls 3) with edge-arterial, and the local street (cls 0) without it", () => {
+    const arterial = edges.find((e) => e.cls === 3);
+    const local = edges.find((e) => e.cls === 0);
+    const arterialLine = markup
+      .split("<polyline")
+      .find((chunk) => chunk.includes(`data-a="${arterial?.a}" data-b="${arterial?.b}"`));
+    expect(arterialLine).toContain("edge-arterial");
+    const localLine = markup
+      .split("<polyline")
+      .find((chunk) => chunk.includes(`data-a="${local?.a}" data-b="${local?.b}"`));
+    expect(localLine).not.toContain("edge-arterial");
+  });
+});
+
+describe("isArterial: the cls>=2 arterial threshold (design spec §16.12/13)", () => {
+  it("cls 0 (residential/unclassified) and 1 (tertiary) are locals, not arterial", () => {
+    expect(isArterial(0)).toBe(false);
+    expect(isArterial(1)).toBe(false);
+  });
+
+  it("cls 2 (secondary) and up are arterial", () => {
+    expect(isArterial(2)).toBe(true);
+    expect(isArterial(3)).toBe(true);
+    expect(isArterial(4)).toBe(true);
+  });
+});
+
+describe("edgeClsOf: looks up a single directed edge's cls by (u, v)", () => {
+  const t = decodeToytown(ARTIFACT);
+
+  it("finds the real cls for an existing directed edge", () => {
+    expect(edgeClsOf(t, 0, 1)).toBe(0);
+    expect(edgeClsOf(t, 1, 2)).toBe(3);
+  });
+
+  it("the two directions of a two-way street can carry independently-looked-up (here equal) cls", () => {
+    expect(edgeClsOf(t, 1, 0)).toBe(0);
+  });
+
+  it("returns -1 for a pair with no direct edge at all", () => {
+    expect(edgeClsOf(t, 0, 2)).toBe(-1);
+    expect(edgeClsOf(t, 2, 1)).toBe(-1); // 1->2 exists, but toytown's edge is one-way: no 2->1
+  });
+});
+
+describe("unorderedKey: the a<->b lookup key shared by contraction's witness-flash and climb's touched-street highlighting", () => {
+  it("is the same key regardless of argument order", () => {
+    expect(unorderedKey(3, 9)).toBe(unorderedKey(9, 3));
+  });
+
+  it("distinguishes different pairs", () => {
+    expect(unorderedKey(1, 2)).not.toBe(unorderedKey(1, 3));
   });
 });
 

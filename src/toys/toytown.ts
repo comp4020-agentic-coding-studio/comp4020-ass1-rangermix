@@ -37,11 +37,15 @@ const COORD_SCALE = 1e5; // matches scripts/data/build.ts's emitToytown + routin
  * position you'd index the original artifact's `edges` array, i.e. this
  * mirrors `graph`'s edges 1:1 in the ORIGINAL (pre-CSR-reordering) order),
  * and the geographic `bbox` the layout was fitted from (so a caller can
- * re-derive the same projection, e.g. to place a click target). */
+ * re-derive the same projection, e.g. to place a click target). `edgeCls`
+ * is the same per-edge road-class bucket (0-3), same indexing as
+ * `edgeGeometry` — task G5 added it so toytownView's physicalEdges can style
+ * the arterial heavier/brighter than local streets (design spec §16.12/13). */
 export interface Toytown {
   graph: Graph;
   xy: [number, number][];
   edgeGeometry: [number, number][][];
+  edgeCls: number[];
   bbox: [number, number, number, number];
 }
 
@@ -75,8 +79,9 @@ export function decodeToytown(a: ToytownArtifact): Toytown {
   const xy: [number, number][] = [];
   for (let i = 0; i < a.n; i++) xy.push(toScreen(a.lon[i], a.lat[i]));
   const edgeGeometry: [number, number][][] = a.edges.map((e) => e.geometry.map(([qx, qy]) => toScreen(qx, qy)));
+  const edgeCls: number[] = a.edges.map((e) => e.cls);
 
-  return { graph, xy, edgeGeometry, bbox: a.bbox };
+  return { graph, xy, edgeGeometry, edgeCls, bbox: a.bbox };
 }
 
 /** Fetches + decodes public/data/toytown.json in one call — the loader F5's

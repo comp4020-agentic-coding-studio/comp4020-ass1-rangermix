@@ -13,7 +13,8 @@ import { mountFlood } from "../toys/flood";
 import { mountContraction } from "../toys/contraction";
 import { mountOrder } from "../toys/order";
 import { mountHierarchy } from "../toys/hierarchy";
-import { mountClimb, mountClosingEcho } from "../toys/climb";
+import { mountClosingEcho } from "../toys/climb";
+import { mountClimb } from "../toys/climbLinked";
 import { loadToytown } from "../toys/toytown";
 
 const VISIBILITY_THRESHOLD = 0.4;

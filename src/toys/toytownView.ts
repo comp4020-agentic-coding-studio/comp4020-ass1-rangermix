@@ -1,20 +1,26 @@
 // Shared, pure, tested helpers every toytown-based /how/ toy (flood,
-// contraction, order; climb reuses only the (a,b,oneway) shape, not the
-// geometry) draws on top of. F5 replaced the hand-made, always-undirected
-// 12-node mini-town with a real ANU-area subgraph (src/toys/toytown.ts) —
-// this module holds the two pieces of toy logic that are both genuinely
+// contraction, order, and — since task G5 gave climb a real-geometry MAP
+// view alongside its schematic hierarchy view — climb too now) draws on top
+// of. F5 replaced the hand-made, always-undirected 12-node mini-town with a
+// real ANU-area subgraph (src/toys/toytown.ts); G5 re-cut that subgraph onto
+// a real arterial (design spec §16.12/13) and taught this module to style
+// it. This module holds the pieces of toy logic that are both genuinely
 // shared AND correctness-sensitive enough to be worth pinning with tests
-// once, instead of risking four slightly-different reimplementations:
+// once, instead of risking several slightly-different reimplementations:
 //
-//  - physicalEdges: collapsing the graph's real DIRECTED edges into one
-//    entry per physical street for the base-road illustration. Toytown is
-//    36% one-way (no reverse counterpart) — a naive per-CSR-slot draw would
-//    render every two-way street TWICE (once per direction, same curve
-//    stacked on itself); this collapses that back to one line per street
-//    while never fabricating a reverse direction that isn't really there
-//    (see the risk this replaces: src/toys/contraction.ts used to
-//    symmetrize MINITOWN's edge list by hand, which was only safe because
-//    MINITOWN itself was built undirected).
+//  - physicalEdges/roadPolylineMarkup: collapsing the graph's real DIRECTED
+//    edges into one entry per physical street for the base-road
+//    illustration, styled by road class. Toytown is 36% one-way (no reverse
+//    counterpart) — a naive per-CSR-slot draw would render every two-way
+//    street TWICE (once per direction, same curve stacked on itself); this
+//    collapses that back to one line per street while never fabricating a
+//    reverse direction that isn't really there (see the risk this replaces:
+//    src/toys/contraction.ts used to symmetrize MINITOWN's edge list by
+//    hand, which was only safe because MINITOWN itself was built
+//    undirected). isArterial/edgeClsOf are the cls>=2 threshold and a
+//    single-edge cls lookup, both reused by climbLinked's default-pair
+//    scoring (design spec §16.13's "prefer a pair whose route rides the
+//    arterial").
 //  - declutterXY: nudges near-coincident node positions apart before they
 //    become button centers (see its own doc comment — live verification
 //    found real pairs of toytown intersections under 2px apart on screen,
@@ -25,6 +31,11 @@
 //    the exact cycle behavior (including the "third click IS the next
 //    first click" reading, not a dead reset requiring a fourth click) is
 //    pinned once rather than re-derived by eye in two DOM-wiring files.
+//  - unorderedKey: the a<->b lookup key contraction.ts's witness-flash and
+//    climbLinked's touched/route street highlighting both use to go from a
+//    real (u, v) node pair back to the ONE physical road element that pair
+//    shares — moved here (from a private copy in contraction.ts) once a
+//    second file needed the exact same key.
 
 import type { Toytown } from "./toytown";
 
@@ -33,6 +44,7 @@ export interface PhysicalEdge {
   b: number;
   geometry: [number, number][];
   oneway: boolean;
+  cls: number;
 }
 
 /** Every real directed edge in `t.graph`, collapsed to ONE entry per
@@ -40,11 +52,12 @@ export interface PhysicalEdge {
  * regardless of how many travel directions it supports. `oneway` is true
  * iff only ONE of the two directions actually exists in the graph; it is
  * DETECTED from the real CSR, never assumed or fabricated. When both
- * directions exist, the first-encountered direction's geometry is used —
+ * directions exist, the first-encountered direction's geometry (and `cls`,
+ * which describes the physical road either direction shares) is used —
  * they trace the same physical curve (just point-order-reversed), so which
  * one "wins" never changes what gets drawn. */
 export function physicalEdges(t: Toytown): PhysicalEdge[] {
-  const { graph, edgeGeometry } = t;
+  const { graph, edgeGeometry, edgeCls } = t;
   const present = new Set<string>();
   for (let u = 0; u < graph.n; u++) {
     for (let s = graph.fwd.firstOut[u]; s < graph.fwd.firstOut[u + 1]; s++) {
@@ -58,26 +71,65 @@ export function physicalEdges(t: Toytown): PhysicalEdge[] {
       const key = u < v ? `${u}-${v}` : `${v}-${u}`;
       if (seen.has(key)) continue;
       const oneway = !present.has(`${v}>${u}`);
-      seen.set(key, { a: u, b: v, geometry: edgeGeometry[graph.fwd.edge[s]], oneway });
+      const edgeIdx = graph.fwd.edge[s];
+      seen.set(key, { a: u, b: v, geometry: edgeGeometry[edgeIdx], oneway, cls: edgeCls[edgeIdx] });
     }
   }
   return [...seen.values()];
 }
 
+/** The road-class threshold (design spec §16.12/13) an edge counts as
+ * "arterial" at: secondary, primary, trunk or motorway (build.ts's CLS
+ * table) — cls 0 (residential/unclassified) and 1 (tertiary) are locals.
+ * One predicate, reused by roadPolylineMarkup's styling AND climbLinked's
+ * default-pair scoring, so the threshold can't drift between "how the
+ * arterial is drawn" and "what counts as riding it". */
+export function isArterial(cls: number): boolean {
+  return cls >= 2;
+}
+
+/** The cls of the real directed edge u -> v, found by scanning u's CSR
+ * out-edges for v. Returns -1 if the graph has no direct u -> v edge (never
+ * happens for a chQuery-unpacked path — see chQuery.ts's own `expand` — but
+ * a caller should treat that as "not arterial" rather than assume one
+ * exists). Directed (not the unordered `physicalEdges`/`unorderedKey` view)
+ * because callers here — climbLinked's default-pair scoring — are walking
+ * an already-directed route, one real hop at a time. */
+export function edgeClsOf(t: Toytown, u: number, v: number): number {
+  const { fwd } = t.graph;
+  for (let s = fwd.firstOut[u]; s < fwd.firstOut[u + 1]; s++) {
+    if (fwd.head[s] === v) return t.edgeCls[fwd.edge[s]];
+  }
+  return -1;
+}
+
+/** The lookup key for "the one physical road element node pair (a, b)
+ * shares", independent of which direction it's currently being visited
+ * from — a<b always sorts first, so `unorderedKey(a, b) === unorderedKey(b,
+ * a)`. Shared by every toy that needs to go from a real (u, v) hop back to
+ * ONE road DOM element: contraction.ts's witness-flash and climbLinked's
+ * touched/route street highlighting both key their road-element maps by
+ * this (see roadPolylineMarkup's own `data-a`/`data-b` attributes, which
+ * this key matches). */
+export function unorderedKey(a: number, b: number): string {
+  return a < b ? `${a}-${b}` : `${b}-${a}`;
+}
+
 /** SVG `<polyline>` markup for every physical edge — real street geometry,
  * one line per road, one-ways carrying `.edge-oneway` (a dash treatment in
- * CSS; see styles.css) instead of a fabricated second line. Shared by every
- * toytown toy that shows the road network as its backdrop (flood,
- * contraction, order); climb draws its OWN straight rank-lifted lines
- * instead (see climb.ts — the whole point of that diagram is that its
- * y-axis is rank, not geography, so real street curves there would imply a
- * geographic meaning the picture doesn't have). */
+ * CSS; see styles.css) instead of a fabricated second line, arterials
+ * (cls>=2 — isArterial) carrying `.edge-arterial` (heavier, brighter —
+ * design spec §16.12/13's "the arterial should be visibly 'the big road'
+ * everywhere"). Shared by every toytown toy that shows the road network as
+ * its backdrop (flood, contraction, order, and climb's map view). */
 export function roadPolylineMarkup(edges: PhysicalEdge[]): string {
   return edges
     .map((e) => {
-      const cls = e.oneway ? "edge-line edge-oneway" : "edge-line";
+      const classes = ["edge-line"];
+      if (e.oneway) classes.push("edge-oneway");
+      if (isArterial(e.cls)) classes.push("edge-arterial");
       const points = e.geometry.map(([x, y]) => `${x},${y}`).join(" ");
-      return `<polyline class="${cls}" data-a="${e.a}" data-b="${e.b}" points="${points}" />`;
+      return `<polyline class="${classes.join(" ")}" data-a="${e.a}" data-b="${e.b}" points="${points}" />`;
     })
     .join("");
 }

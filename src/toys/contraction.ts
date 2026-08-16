@@ -20,7 +20,7 @@ import { createContractor } from "../algos/chBuild";
 import { dijkstra } from "../algos/dijkstra";
 import { buildCsr, type Graph } from "../algos/graph";
 import { VIEWBOX, VIEWBOX_H, VIEWBOX_W, type Toytown } from "./toytown";
-import { declutterXY, MIN_NODE_DIST, physicalEdges, roadPolylineMarkup } from "./toytownView";
+import { declutterXY, MIN_NODE_DIST, physicalEdges, roadPolylineMarkup, unorderedKey } from "./toytownView";
 
 const FLASH_MS = 800;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -35,10 +35,6 @@ const LABEL_RADIUS = 3;
 
 function orderedKey(a: number, b: number): string {
   return `${a}->${b}`;
-}
-
-function unorderedKey(a: number, b: number): string {
-  return a < b ? `${a}-${b}` : `${b}-${a}`;
 }
 
 // Unit normal of the (a, b) chord, pointed away from `via` so a curve (or a

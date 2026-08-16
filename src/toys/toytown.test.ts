@@ -19,11 +19,11 @@ const ARTIFACT: ToytownArtifact = {
   lon: [0, 1000, 1000, 0],
   lat: [0, 0, 1000, 1000],
   edges: [
-    { from: 0, to: 1, w: 100, geometry: [[0, 0], [1000, 0]] },
-    { from: 1, to: 2, w: 100, geometry: [[1000, 0], [1000, 1000]] },
-    { from: 2, to: 3, w: 100, geometry: [[1000, 1000], [0, 1000]] },
-    { from: 3, to: 0, w: 100, geometry: [[0, 1000], [0, 0]] },
-    { from: 0, to: 2, w: 141, geometry: [[0, 0], [500, 500], [1000, 1000]] },
+    { from: 0, to: 1, w: 100, cls: 0, geometry: [[0, 0], [1000, 0]] },
+    { from: 1, to: 2, w: 100, cls: 0, geometry: [[1000, 0], [1000, 1000]] },
+    { from: 2, to: 3, w: 100, cls: 0, geometry: [[1000, 1000], [0, 1000]] },
+    { from: 3, to: 0, w: 100, cls: 0, geometry: [[0, 1000], [0, 0]] },
+    { from: 0, to: 2, w: 141, cls: 2, geometry: [[0, 0], [500, 500], [1000, 1000]] },
   ],
 };
 
@@ -122,5 +122,21 @@ describe("decodeToytown: edge geometry", () => {
 describe("decodeToytown: bbox passthrough", () => {
   it("returns the same bbox the artifact shipped", () => {
     expect(decodeToytown(ARTIFACT).bbox).toEqual(ARTIFACT.bbox);
+  });
+});
+
+// Task G5 (design spec §16.12/13): edgeCls rides along the same index
+// scheme as edgeGeometry, unpacked verbatim from each artifact edge's own
+// `cls` — no derivation, no reordering — so toytownView's arterial styling
+// reads the road class the pipeline actually assigned.
+describe("decodeToytown: edge cls", () => {
+  const { edgeCls } = decodeToytown(ARTIFACT);
+
+  it("has one cls entry per edge, in the artifact's edge order", () => {
+    expect(edgeCls).toHaveLength(ARTIFACT.edges.length);
+  });
+
+  it("passes through each edge's cls verbatim, unchanged", () => {
+    ARTIFACT.edges.forEach((e, i) => expect(edgeCls[i]).toBe(e.cls));
   });
 });

@@ -1161,10 +1161,27 @@ a {
 .edge-line {
   fill: none;
   stroke: var(--road);
-  stroke-width: 2;
+  stroke-width: 1.2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: stroke 200ms ease;
+  opacity: 0.7;
+  transition:
+    stroke 200ms ease,
+    opacity 200ms ease;
+}
+
+/* The arterial (cls>=2: secondary/primary/trunk/motorway — toytownView's
+   isArterial) draws heavier and fully opaque against the thin, faded
+   locals above — the same major/local split src/viz/mapRenderer.ts's real
+   map already uses (roadMajor token, 1.6 vs 1 lineWidth, 0.9 vs 0.55
+   alpha), mirrored here at the toy's own scale so "the big road" reads
+   consistently everywhere (design spec §16.12/13). Applied in
+   toytownView's roadPolylineMarkup, so every toytown toy inherits it, not
+   just climb's map view. */
+.edge-line.edge-arterial {
+  stroke: var(--road-major);
+  stroke-width: 2.5;
+  opacity: 1;
 }
 
 /* One-way streets draw with a dash instead of a fabricated second line for
@@ -1177,6 +1194,26 @@ a {
 
 .edge-line.flash {
   stroke: var(--witness);
+}
+
+/* ch3 (climb) map view: a street a "fwd"/"bwd" step's climb actually
+   touches (climbLinked's touchedFirstIdx) lights up CH-blue over the base
+   road colour; once the winning route unpacks onto it (routeFirstIdx) it
+   switches to the same bold --route treatment the hierarchy's own
+   schematic route-path and flood's route use, so "this is the answer"
+   reads the same way in every picture on the page. Declared after
+   .edge-arterial/.edge-oneway so an arterial-and-touched (or one-way) real
+   street still shows the climb state on top of its base road styling. */
+.edge-line.touched {
+  stroke: var(--c-ch);
+  stroke-width: 2.5;
+  opacity: 0.75;
+}
+
+.edge-line.on-route {
+  stroke: var(--route);
+  stroke-width: 3;
+  opacity: 1;
 }
 
 .shortcut-path {
@@ -1222,8 +1259,15 @@ a {
    scale (design spec §14.8), but the clickable box stays >=24px (a padded
    transparent hit-circle) even though the visible mark is much smaller,
    via a ::before pseudo-element instead of stretching the whole button to
-   the dot's size. */
-.node-btn {
+   the dot's size. .node-mark is .node-btn's non-interactive twin (task G5):
+   same box geometry and dot look, but a plain <div> — no button role, no
+   focus, no pointer events — used by climb's hierarchy view, which is
+   display-only (design spec §16.13: the visitor picks A/B on the MAP; the
+   hierarchy just mirrors state). One shared base (not a full copy) so every
+   state class below (.climb-node-btn.ghost/.touched-fwd/.touched-bwd,
+   .endpoint-a/-b) paints identically on both. */
+.node-btn,
+.node-mark {
   position: absolute;
   width: 24px;
   height: 24px;
@@ -1232,16 +1276,24 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  background: transparent;
   color: var(--ink);
   font-family: var(--mono);
   font-size: 0.6rem;
   font-weight: 700;
+}
+
+.node-btn {
+  border: none;
+  background: transparent;
   cursor: pointer;
 }
 
-.node-btn::before {
+.node-mark {
+  pointer-events: none;
+}
+
+.node-btn::before,
+.node-mark::before {
   content: "";
   display: block;
   width: 9px;
@@ -1275,9 +1327,13 @@ a {
 }
 
 /* The two active endpoints draw as bigger lettered discs — the same "A"/"B"
-   convention the home page's own map pins use — instead of the small dot. */
+   convention the home page's own map pins use — instead of the small dot.
+   .node-mark variants included so climb's hierarchy marks show the same A/B
+   discs as the map's real buttons. */
 .node-btn.endpoint-a,
-.node-btn.endpoint-b {
+.node-btn.endpoint-b,
+.node-mark.endpoint-a,
+.node-mark.endpoint-b {
   width: 22px;
   height: 22px;
   border: 2px solid var(--ink);
@@ -1286,15 +1342,19 @@ a {
 }
 
 .node-btn.endpoint-a::before,
-.node-btn.endpoint-b::before {
+.node-btn.endpoint-b::before,
+.node-mark.endpoint-a::before,
+.node-mark.endpoint-b::before {
   display: none;
 }
 
-.node-btn.endpoint-a {
+.node-btn.endpoint-a,
+.node-mark.endpoint-a {
   border-color: var(--c-dijkstra);
 }
 
-.node-btn.endpoint-b {
+.node-btn.endpoint-b,
+.node-mark.endpoint-b {
   border-color: var(--c-ch);
 }
 
@@ -1543,7 +1603,47 @@ a {
   }
 }
 
-/* ---------- ch3 toy: the climb (2.5-D rank-lifted upward query) ---------- */
+/* ---------- ch3 toy: the climb (linked hierarchy + street-map query, design
+   spec §16.13, task G5) ---------- */
+
+/* Two stacked views in one toy root, hierarchy on top (climb-hierarchy-stage
+   is the 2.5-D rank-lifted graph, unchanged from F5) and the real street map
+   below (climb-map-stage — the visitor's click target). Each .toy-stage
+   keeps its own 460x300 aspect-ratio/hit-circle sizing untouched (a plain
+   column stack, not a shared coordinate system), so declutter/hit-area math
+   tuned per-stage stays correct and phone (390px) just stacks the two
+   full-width instead of overflowing. */
+.climb-views {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.climb-view-label {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Headroom for the meet star: .climb-meet's own transform (below) lifts it
+   ~2.3x its own rendered height above whichever node it's pinned to, so a
+   meet near the TOP of either stage's coordinate space — the common case,
+   not an edge case: both climbs converge near the top of the hierarchy by
+   design (design spec's "meet near the top") — pushes the star above the
+   stage's own top edge. Found live (agent-browser, 390px): the star/"MEET"
+   label collided with .climb-view-label's text by ~40px without this.
+   Sized to the worst case (a touched node at TOP_Y, the highest rank the
+   layout allows — see climb.ts's rankStep/rankY) rather than tuned to one
+   query's numbers, so it holds for any pair, not just the default one;
+   verified live by re-picking several pairs (not just the default) and
+   re-measuring the label/star gap each time — comfortable slack past the
+   computed worst case, not shaved to the exact pixel. */
+.climb-view .toy-stage {
+  margin-top: 80px;
+}
 
 .climb-nodes {
   position: absolute;
@@ -1565,12 +1665,16 @@ a {
   stroke-dasharray: 5 4;
 }
 
-/* Climb's node buttons reuse the shared .node-btn base plus three extra
-   states: touched by the forward search (solid fill), touched by the
-   backward search (dashed ring), and ghost — untouched by this query,
-   drawn small and faint at the baseline instead of lifted (the rank-lift
-   layout draws ONLY touched nodes lifted, everything else stays on the
-   ground — design spec §14.8). */
+/* Climb's node buttons (map view) and node marks (hierarchy view) both
+   carry .climb-node-btn and share these three extra states: touched by the
+   forward search (solid fill), touched by the backward search (dashed
+   ring), and ghost — untouched by this query. On the hierarchy view, ghost
+   nodes also draw small and faint at the baseline instead of lifted (the
+   rank-lift layout draws ONLY touched nodes lifted — design spec §14.8); on
+   the map view the same ghost treatment just dims/shrinks the dot in place
+   (every real intersection stays visible — there's no "baseline" on a real
+   street map), which doubles as the "barely touching the map" cue the
+   chapter's caption calls out. */
 .climb-node-btn.ghost {
   opacity: 0.32;
 }

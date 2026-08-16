@@ -70,16 +70,23 @@ export async function loadRouting(
  * `geometry` is its full point list (endpoints included) as ABSOLUTE
  * quantized [x, y] pairs — not delta-encoded like render.json's lines, a
  * deliberate simplicity-over-density choice at this artifact's tiny scale
- * (see build.ts's emitToytown for the full rationale). Decoding (dequantize
- * + build a Graph + project to screen space) lives in src/toys/toytown.ts's
- * decodeToytown, not here — this interface only describes the fetched
- * shape, same division of labor as RenderData/loadRender above. */
+ * (see build.ts's emitToytown for the full rationale). `cls` is the same 0-3
+ * road-class bucket as render.json's lines (build.ts's CLS table): it always
+ * rode along in the shipped JSON (emitToytown has written it since G4), but
+ * this type only started DECLARING it in task G5, once the /how/ map view
+ * started reading it to style the arterial heavier/brighter than local
+ * streets (src/toys/toytownView.ts's isArterial/roadPolylineMarkup) — see
+ * spec/data.test.ts's hierarchy-rich sensor for the artifact-level check.
+ * Decoding (dequantize + build a Graph + project to screen space) lives in
+ * src/toys/toytown.ts's decodeToytown, not here — this interface only
+ * describes the fetched shape, same division of labor as RenderData/
+ * loadRender above. */
 export interface ToytownArtifact {
   bbox: [number, number, number, number];
   n: number;
   lon: number[];
   lat: number[];
-  edges: { from: number; to: number; w: number; geometry: [number, number][] }[];
+  edges: { from: number; to: number; w: number; cls: number; geometry: [number, number][] }[];
 }
 
 /** Fetches public/data/toytown.json — the small Canberra city-centre
