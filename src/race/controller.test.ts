@@ -48,6 +48,7 @@ import {
   pathKm,
   RaceController,
   rejectAllPending,
+  replayDurationMs,
   routeDeltaPct,
   sliceForFrame,
   type PendingRace,
@@ -101,12 +102,19 @@ class FakeWorker {
 
 /** A minimal, wire-shaped AlgoResult — every field renderAt/reportResults
  * actually reads (settledCount, settled node-index buffer, path) with
- * placeholder-but-valid values for the rest (dist/ms/relaxed: unchecked by
- * this test). */
-function fakeAlgoResult(settled: number[], path: number[]) {
+ * placeholder-but-valid values for the rest (relaxed: unchecked by this
+ * test). `ms` and `dist` default to this fixture's original hardcoded
+ * values, so every pre-§19.4 call site that only passes settled/path is
+ * unaffected — but both are now overridable: spec §19.4's per-layer pacing
+ * tests need DIFFERENT racers to carry DIFFERENT measured times within the
+ * SAME race (that's the entire behavior under test), and the
+ * first-exact-completion route test needs a `dist` provably longer than
+ * another racer's to exercise `dashed`/`deltaPct` (spec §18.4's honesty
+ * rule) on a fast-but-inexact layer. */
+function fakeAlgoResult(settled: number[], path: number[], ms = 5, dist = 100) {
   return {
-    dist: 100,
-    ms: 5,
+    dist,
+    ms,
     relaxed: settled.length,
     settledCount: settled.length,
     settled: Uint32Array.from(settled).buffer,
@@ -148,6 +156,49 @@ describe("sliceForFrame", () => {
   it("handles a zero total (nothing settled) without going negative", () => {
     expect(sliceForFrame(0, 1250, 2500)).toBe(0);
     expect(sliceForFrame(0, 2500, 2500)).toBe(0);
+  });
+});
+
+describe("replayDurationMs (spec §19.4: THIS racer's own measured wall time × 2000, floored, never capped)", () => {
+  it("scales measured ms by 2000 — the pinned examples from the build review", () => {
+    expect(replayDurationMs(0.5)).toBe(1000);
+    expect(replayDurationMs(2.5)).toBe(5000);
+  });
+
+  it("floors a near-zero measurement at 200 ms rather than an unwatchable sub-frame flash", () => {
+    expect(replayDurationMs(0.05)).toBe(200);
+    expect(replayDurationMs(0)).toBe(200);
+  });
+
+  it("does not touch a measurement already comfortably above the floor — pure scaling takes over", () => {
+    expect(replayDurationMs(1)).toBe(2000);
+    expect(replayDurationMs(10)).toBe(20_000);
+  });
+
+  it("has no upper cap — a slow measured racer earns an honestly long replay", () => {
+    expect(replayDurationMs(50)).toBe(100_000); // 50 ms measured -> 100 s replay, uncapped
+  });
+});
+
+describe("per-layer fraction math at a fixed timestamp (spec §19.4 — different racers, different durations, one shared clock)", () => {
+  it("a fast (small-ms) layer reads fully settled while a slow (large-ms) layer in the SAME race, at the SAME elapsedMs, is still partial", () => {
+    const chDuration = replayDurationMs(0.3); // 600 ms
+    const dijDuration = replayDurationMs(5); // 10,000 ms
+    const elapsedMs = 650; // past ch's own duration; nowhere near dijkstra's
+
+    expect(sliceForFrame(214, elapsedMs, chDuration)).toBe(214); // CH: done
+    const dijUp = sliceForFrame(21_480, elapsedMs, dijDuration);
+    expect(dijUp).toBeGreaterThan(0);
+    expect(dijUp).toBeLessThan(21_480); // Dijkstra: still mid-flood, same instant
+  });
+
+  it("the same elapsedMs against the same total gives different reveal fractions once the two durations differ — proof the racers no longer share one clock", () => {
+    const total = 1000;
+    const elapsedMs = 1000;
+    const fastFrac = sliceForFrame(total, elapsedMs, replayDurationMs(0.4)); // 800 ms duration -> already done
+    const slowFrac = sliceForFrame(total, elapsedMs, replayDurationMs(4)); // 8,000 ms duration -> 12.5% in
+    expect(fastFrac).toBe(1000);
+    expect(slowFrac).toBe(125);
   });
 });
 
@@ -544,5 +595,215 @@ describe("RaceController.run() — bidi request/response key regression (I3)", (
     expect(ui.setHeadline).toHaveBeenCalled();
     expect(ui.announce).toHaveBeenCalled();
     expect(ui.setRow).toHaveBeenCalledWith("dijkstra", expect.any(Number), expect.any(Number));
+  });
+});
+
+// spec §19.4 (fifth build review): replay pacing is now per-algorithm and
+// proportional to each racer's own measured wall time — this file's
+// FILE-WIDE matchMedia stub (top of file) forces `prefers-reduced-motion:
+// reduce` to always read true, which is exactly right for every describe
+// block above (they want the instant-final path, not a rAF loop) and
+// exactly wrong for what THIS block needs to exercise: the per-layer
+// ANIMATED path itself, where different racers visibly complete at
+// different real times. Each test below locally overrides matchMedia (via
+// vi.stubGlobal, restored in afterEach — same idiom the file already uses
+// for the Worker global) to force reduced motion OFF, then drives the
+// resulting rAF loop with a hand-rolled clock/queue rather than
+// vi.useFakeTimers(): animate() only ever calls performance.now() and
+// requestAnimationFrame(), so spying on exactly those two gives full,
+// explicit control over when a queued frame callback fires and what
+// elapsed time it observes, without leaning on assumptions about how
+// vitest's built-in fake timers interleave with a recursive rAF-driven
+// Promise chain.
+describe("RaceController — per-layer replay pacing (spec §19.4, the animated path)", () => {
+  function mockUi(): RaceUi {
+    return { setRow: vi.fn(), setTime: vi.fn(), setHeadline: vi.fn(), announce: vi.fn(), setRowDelta: vi.fn() };
+  }
+
+  function mockView() {
+    return { clearOverlay: vi.fn(), drawDots: vi.fn(), drawRoute: vi.fn(), drawPin: vi.fn() };
+  }
+
+  /** A fully manual stand-in for the browser's frame clock: `advance(ms)`
+   * moves the fake `performance.now()` forward and synchronously invokes
+   * every callback CURRENTLY queued via requestAnimationFrame (draining the
+   * queue first, so a callback that reschedules itself — animate()'s own
+   * `step`, on every frame but the last — lands in the NEXT batch, never
+   * re-entered within the same `advance()` call, exactly like a real
+   * browser never re-runs this frame's callback list mid-frame). */
+  function fakeClock() {
+    let now = 0;
+    let queue: FrameRequestCallback[] = [];
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb: FrameRequestCallback) => {
+      queue.push(cb);
+      return queue.length;
+    });
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+    return {
+      advance(ms: number) {
+        now += ms;
+        const due = queue;
+        queue = [];
+        for (const cb of due) cb(now);
+      },
+      restore() {
+        rafSpy.mockRestore();
+        nowSpy.mockRestore();
+      },
+    };
+  }
+
+  beforeEach(() => {
+    FakeWorker.instances = [];
+    vi.stubGlobal("Worker", FakeWorker);
+    vi.stubGlobal(
+      "matchMedia",
+      ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof matchMedia,
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("rows finalize individually, and race-end effects (announce/setHeadline/the localStorage echo) wait for the LAST active layer, not the first", async () => {
+    const ui = mockUi();
+    const controller = new RaceController(mockView() as unknown as MapView, ui);
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const clock = fakeClock();
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          ch: fakeAlgoResult([0, 1], [0, 1], 0.3), // duration 600 ms
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [0, 1], 5), // duration 10,000 ms
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+    // Drain the routing/request microtask chain up to animate()'s first
+    // requestAnimationFrame registration — a real macrotask boundary
+    // (unlike a bare `await Promise.resolve()`) reliably flushes every
+    // pending .then() hop regardless of how many are chained ahead of it.
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Past ch's own 600 ms duration, nowhere near dijkstra's 10,000 ms one.
+    clock.advance(650);
+    expect(ui.setTime).toHaveBeenCalledWith("ch", 0.3);
+    expect(ui.setTime).not.toHaveBeenCalledWith("dijkstra", expect.anything());
+    expect(ui.announce).not.toHaveBeenCalled();
+    expect(ui.setHeadline).not.toHaveBeenCalled();
+    expect(setItemSpy).not.toHaveBeenCalled();
+
+    // Past dijkstra's own 10,000 ms duration too — the LAST active layer —
+    // which is what lets animate()'s promise (and so run() itself) resolve.
+    clock.advance(10_000);
+    expect(ui.setTime).toHaveBeenCalledWith("dijkstra", 5);
+    expect(ui.setTime).toHaveBeenCalledTimes(2); // exactly once per racer — RaceUi.setTime's own contract
+
+    await runPromise;
+    expect(ui.announce).toHaveBeenCalledTimes(1);
+    expect(ui.setHeadline).toHaveBeenCalledTimes(1);
+    expect(setItemSpy).toHaveBeenCalledWith("hth-last-race", expect.any(String));
+
+    clock.restore();
+    setItemSpy.mockRestore();
+  });
+
+  it("the shared route reveals at the FIRST EXACT racer's own completion — not the first racer to finish at all (an inexact one may finish earlier), and not every racer finishing", async () => {
+    const ui = mockUi();
+    const view = mockView();
+    const controller = new RaceController(view as unknown as MapView, ui);
+    controller.setRacerActive("astar-greedy", true);
+    const clock = fakeClock();
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+    expect(req?.algos).toContain("astar-greedy");
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          ch: fakeAlgoResult([0, 1], [0, 1], 0.3, 100), // duration 600 ms, exact this race (matches optimal)
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [0, 1], 5, 100), // duration 10,000 ms, exact this race
+          "astar-greedy": fakeAlgoResult([0], [0, 2], 0.02, 130), // duration 200 ms (floor); 30% longer -> disclosed/inexact
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Past astar-greedy's 200 ms — the FIRST racer to finish overall, but
+    // INEXACT this race (its own route is 30% longer than optimal). The
+    // shared route must not appear yet.
+    clock.advance(250);
+    expect(view.drawRoute).not.toHaveBeenCalled();
+
+    // Past ch's 600 ms — the FIRST *exact* racer to finish. The route
+    // appears now even though dijkstra (also exact, but far slower to both
+    // compute and replay) is barely 6.5% through its own replay.
+    clock.advance(400); // total elapsed ~650 ms
+    expect(view.drawRoute).toHaveBeenCalled();
+
+    clock.advance(10_000);
+    await runPromise;
+    clock.restore();
+  });
+
+  it("cancellation stops a still-animating multi-duration race instantly — the superseded race's slower layer never finalizes and its race-end effects never fire, even once enough time has passed that they otherwise would have", async () => {
+    const ui = mockUi();
+    const controller = new RaceController(mockView() as unknown as MapView, ui);
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const clock = fakeClock();
+
+    void controller.run(0, 1); // race 1 — deliberately not awaited, it's about to be superseded
+    const worker = FakeWorker.instances.at(-1);
+    const req1 = worker?.sent[0];
+    expect(req1).toBeDefined();
+    worker?.onmessage?.({
+      data: {
+        id: req1!.id,
+        results: {
+          ch: fakeAlgoResult([0, 1], [0, 1], 0.3), // duration 600 ms
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [0, 1], 5), // duration 10,000 ms
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Race 1's fast layer finishes and finalizes normally...
+    clock.advance(650);
+    expect(ui.setTime).toHaveBeenCalledWith("ch", 0.3);
+
+    // ...then a NEW race supersedes it (any of run()'s real callers: a new
+    // pin, a preset click, "R") while race 1's dijkstra layer is still only
+    // ~6.5% settled. Race 2's own request is deliberately left unanswered —
+    // that isolates "race 1 never gets to report" from "race 2 eventually
+    // reports its own results": if ANY race-end effect fires below, it can
+    // only be race 1's, since race 2 can structurally never reach that
+    // point (its own Promise.all never settles).
+    void controller.run(0, 1); // race 2
+    const req2 = worker?.sent[1];
+    expect(req2).toBeDefined(); // the request itself still goes out synchronously — only its reply never arrives
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Advance well past where race 1's dijkstra (10,000 ms) would have
+    // completed had it not been cancelled.
+    clock.advance(12_000);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(ui.setTime).not.toHaveBeenCalledWith("dijkstra", expect.anything());
+    expect(ui.announce).not.toHaveBeenCalled();
+    expect(ui.setHeadline).not.toHaveBeenCalled();
+    expect(setItemSpy).not.toHaveBeenCalled();
+
+    clock.restore();
+    setItemSpy.mockRestore();
   });
 });

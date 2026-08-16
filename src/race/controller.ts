@@ -57,7 +57,19 @@ export interface ComparePanel {
   view: MapView;
 }
 
-const REPLAY_MS = 2500;
+// spec §19.4 (fifth build review): replay pacing is PER-ALGORITHM and
+// proportional to what was actually measured — there is no longer one
+// shared duration for the whole race (the pre-§19.4 `REPLAY_MS` constant
+// this replaces). REPLAY_SCALE is the "2000x slow motion" factor stated in
+// the review verbatim (0.5 ms measured -> 1 s replay, 2.5 ms -> 5 s);
+// REPLAY_FLOOR_MS keeps a near-zero measurement (an adjacent-node query,
+// or a machine fast enough that performance.now() barely ticks between
+// start and end) from collapsing into a replay shorter than a single rAF
+// frame, which would read as a jump-cut, not a replay. Both constants are
+// private to replayDurationMs below — nothing else in this file reads
+// them directly.
+const REPLAY_SCALE = 2000;
+const REPLAY_FLOOR_MS = 200;
 const DOT_RADIUS = 1.8;
 const DRAW_CAP = 4000; // see mapRenderer.strideFor: visual sampling cap per frame
 
@@ -113,11 +125,30 @@ export function routeDeltaPct(racerDist: number, optimalDist: number): number {
   return Math.round(Math.max(0, pct) * 10) / 10;
 }
 
+/** spec §19.4: THIS racer's own replay duration, derived from its own
+ * measured wall time (`AlgoResult.ms`) — never a race-wide constant.
+ * `measuredMs * REPLAY_SCALE` is the literal rule from the build review
+ * (0.5 ms -> 1000 ms, 2.5 ms -> 5000 ms — see controller.test.ts's pinned
+ * cases); `REPLAY_FLOOR_MS` only ever RAISES a near-zero result, never
+ * lowers one, and there is deliberately no upper clamp — a slow measured
+ * racer (bidirectional greedy losing badly on an adversarial pair) earns
+ * an honestly long replay, because the length of the replay IS part of
+ * the honesty (spec §19.4: "long honest replays are the point"). Pure and
+ * exported so the scaling law is unit-testable without a real race; run()
+ * calls this once per active racer to build that racer's AlgoLayer.duration. */
+export function replayDurationMs(measuredMs: number): number {
+  return Math.max(REPLAY_FLOOR_MS, measuredMs * REPLAY_SCALE);
+}
+
 /** How many of `total` items should be visible at `elapsedMs` into a
  * `durationMs` replay: 0 before the replay starts, `total` once it's done,
  * a linear (floored, so it only ever grows) fraction in between. Pure and
  * exported so replay timing is unit-testable without a real rAF loop or
- * Worker — the class below just feeds it real clock/settle-count numbers. */
+ * Worker — the class below just feeds it real clock/settle-count numbers.
+ * Called once PER LAYER per frame since spec §19.4 (each against ITS OWN
+ * `replayDurationMs`-derived duration), never once per race against a
+ * shared constant — this function's own signature/contract is unchanged,
+ * only what callers pass as `durationMs` differs. */
 export function sliceForFrame(total: number, elapsedMs: number, durationMs: number): number {
   const frac = Math.min(1, Math.max(0, durationMs > 0 ? elapsedMs / durationMs : 1));
   return Math.min(total, Math.floor(total * frac));
@@ -282,8 +313,42 @@ interface AlgoLayer {
    * mapRenderer.ts's drawRoute doc). Always false on the overlay's single
    * shared route (it's always the true optimal path — see run()'s own
    * comment on `path` — so renderAt's overlay branch never reads this
-   * field, only the Compare branch does). */
+   * field, only the Compare branch does). Also doubles, from spec §19.4 on,
+   * as renderAt's "is this racer exact THIS race" test for the shared
+   * route's own reveal gate — see the `showRoute` comment in renderAt. */
   dashed: boolean;
+  /** The exact number `dashed` collapses to a boolean — `routeDeltaPct`'s
+   * own return, computed once here (same call as `dashed`, see run()'s
+   * layers construction) and reused by this layer's own finalization
+   * (below) to hand `ui.setRowDelta` the identical value reportResults
+   * used to recompute fresh at race end, pre-§19.4. */
+  deltaPct: number;
+  /** This racer's own measured wall time (`AlgoResult.ms`), carried onto
+   * the layer so finalization (below) can hand it to `ui.setTime` without
+   * a second parallel lookup back into the original AlgoResult array from
+   * inside renderAt's per-frame hot path. */
+  ms: number;
+  /** spec §19.4: THIS racer's own replay duration (`replayDurationMs(ms)`
+   * — see that function's own doc), computed once at race start and never
+   * re-derived per frame. Different layers in the SAME race very likely
+   * carry different durations — that is the entire point of §19.4 (CH's
+   * tiny settled count means a tiny measured `ms` means a tiny replay;
+   * Dijkstra's flood takes visibly longer to both compute AND replay) —
+   * so `sliceForFrame` is now called once per layer per frame, each
+   * against ITS OWN duration, never a single race-wide constant. */
+  duration: number;
+  /** Mutable one-shot gate: flips true on the first frame `elapsedMs`
+   * reaches/exceeds this layer's own `duration` — the instant renderAt
+   * calls `ui.setTime`/`ui.setRowDelta` for this racer (spec §19.4:
+   * "rows finalize individually... lock its row"). Needed because renderAt
+   * runs on every rAF tick for as long as OTHER, slower layers keep
+   * animating, and again on every redraw for the rest of the page's life
+   * (resize, theme change, Compare/Overlay toggle) — without this gate a
+   * finished row's setTime/setRowDelta would refire on all of those,
+   * breaking RaceUi.setTime's own "called once per algo" contract. Always
+   * starts false; only ever flips once, never resets — a new race builds
+   * a fresh AlgoLayer (run()), it never mutates an old one. */
+  finalized: boolean;
 }
 
 interface Frame {
@@ -292,6 +357,14 @@ interface Frame {
   path: number[];
   pinA: number;
   pinB: number;
+  /** spec §19.4: the OVERALL replay length for this race — the MAX of
+   * every active layer's own `duration` ("the overall rAF loop runs until
+   * the LONGEST active duration completes"), computed once in run() and
+   * used only to drive animate()'s stop condition and the reduced-motion
+   * instant-final elapsedMs. No longer a fixed constant (the pre-§19.4
+   * `REPLAY_MS` this replaces) and no longer what any individual layer's
+   * own dot-reveal fraction is measured against — see AlgoLayer.duration
+   * for that. */
   duration: number;
   elapsed: number;
 }
@@ -300,10 +373,13 @@ function isReducedMotion(): boolean {
   return matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-/** Owns the race Worker, replays its results onto `view` over ~2.5 s, and
- * reports progress/results through `ui`. One instance per page — home.ts
- * constructs it once routing is ready and calls `run()` per race (pin
- * change, preset click, "R", or the one-time auto-run). */
+/** Owns the race Worker, replays its results onto `view`, and reports
+ * progress/results through `ui`. Since spec §19.4 each racer replays over
+ * ITS OWN duration (its measured wall time × 2000, see replayDurationMs)
+ * rather than one shared ~2.5 s for the whole race — see renderAt/animate
+ * for how. One instance per page — home.ts constructs it once routing is
+ * ready and calls `run()` per race (pin change, preset click, "R", or the
+ * one-time auto-run). */
 export class RaceController {
   private readonly view: MapView;
   private readonly ui: RaceUi;
@@ -488,7 +564,7 @@ export class RaceController {
     // contract (moot in Compare mode: each racer already has its own
     // panel, nothing to layer on top of).
     for (const layer of c.layers) {
-      const up = sliceForFrame(layer.total, elapsedMs, c.duration);
+      const up = sliceForFrame(layer.total, elapsedMs, layer.duration);
       const color = dark ? colors[`${layer.algo}Glow`] : colors[layer.algo];
       // Which view(s) get THIS layer's dots: every target in overlay mode
       // (the whole point of "overlay" — every cloud shares one canvas),
@@ -512,8 +588,37 @@ export class RaceController {
         );
       }
       this.ui.setRow(layer.algo, up, maxTotal);
+      // spec §19.4: rows finalize INDIVIDUALLY — the moment THIS layer's
+      // own elapsed crosses ITS OWN duration (never the race's overall,
+      // longest-active `c.duration`), lock its wall time and honesty
+      // disclosure exactly once (AlgoLayer.finalized's own doc explains
+      // why the gate is needed, not just the threshold check).
+      if (!layer.finalized && elapsedMs >= layer.duration) {
+        layer.finalized = true;
+        this.ui.setTime(layer.algo, layer.ms);
+        this.ui.setRowDelta(layer.algo, layer.deltaPct);
+      }
     }
-    const showRoute = elapsedMs >= c.duration && c.path.length >= 2;
+    // spec §19.4: the shared route draws the moment the FIRST EXACT
+    // racer's OWN replay completes — never "every racer done" (the
+    // pre-§19.4 `elapsedMs >= c.duration` this replaces) and never merely
+    // "first racer done" regardless of correctness. `!l.dashed` is exactly
+    // "this racer's own route equals the true optimal this race" (the same
+    // predicate the Compare-mode branch below already reads off each
+    // layer — see AlgoLayer.dashed's own doc); dijkstra and ch are always
+    // exact (run()'s own comment on why optimalDist is their shared
+    // distance), so this can never get permanently stuck false, only wait
+    // on whichever of the two has the longer measured time. In practice CH
+    // is almost always the FIRST exact racer to finish (few settled nodes
+    // -> small measured ms -> small replayDurationMs) — a deliberate
+    // pedagogical choice, not an accident: the answer appears on screen
+    // fast, while slower and/or inexact racers are still visibly churning
+    // behind it. A pure function of `elapsedMs` and each layer's own
+    // immutable `duration`, so "keep it drawn" falls out for free —
+    // elapsedMs only grows within one race's replay, and a new race
+    // replaces `this.current` outright, so nothing ever un-satisfies this
+    // once it's true.
+    const showRoute = c.path.length >= 2 && c.layers.some((l) => !l.dashed && elapsedMs >= l.duration);
     for (const v of targets) {
       v.drawPin(c.graph.lon[c.pinA], c.graph.lat[c.pinA], "A");
       v.drawPin(c.graph.lon[c.pinB], c.graph.lat[c.pinB], "B");
@@ -663,13 +768,22 @@ export class RaceController {
     // chip (see RaceUi.setRowDelta's own doc).
     const layers: AlgoLayer[] = active.map(({ algo, result }) => {
       const order = new Uint32Array(result.settled);
+      // Computed once, reused for both this layer's Compare-mode dashing
+      // AND its own finalization's ui.setRowDelta call (below) — one
+      // source of truth, never two accumulators that could drift apart
+      // (same reasoning run()'s own optimalDist comment already gives).
+      const deltaPct = routeDeltaPct(result.dist, optimalDist);
       return {
         algo,
         order,
         total: result.settledCount,
         stride: strideFor(order.length, DRAW_CAP),
         path: result.path,
-        dashed: routeDeltaPct(result.dist, optimalDist) > 0,
+        dashed: deltaPct > 0,
+        deltaPct,
+        ms: result.ms,
+        duration: replayDurationMs(result.ms), // spec §19.4 — THIS racer's own replay length
+        finalized: false,
       };
     });
     const path = ch.path.length >= 2 ? ch.path : dij.path; // THE shared optimal route — see the comment above
@@ -679,41 +793,62 @@ export class RaceController {
     // no race was in flight (so no onThemeChange redraw was needed at the
     // time) landing correctly on the NEXT race regardless.
     this.colors = themeColors();
-    this.current = { graph, layers, path, pinA: fromNode, pinB: toNode, duration: REPLAY_MS, elapsed: 0 };
+    // spec §19.4: the OVERALL replay length is the LONGEST active racer's
+    // own duration — dijkstra and ch are always present (core), so this is
+    // never Math.max of an empty array. Individual layers still race
+    // against their OWN duration inside renderAt; this number only bounds
+    // the rAF loop below (and the reduced-motion instant-final elapsedMs).
+    const duration = Math.max(...layers.map((l) => l.duration));
+    this.current = { graph, layers, path, pinA: fromNode, pinB: toNode, duration, elapsed: 0 };
 
-    if (isReducedMotion()) this.renderAt(REPLAY_MS);
-    else await this.animate(token, REPLAY_MS);
+    if (isReducedMotion()) this.renderAt(duration);
+    else await this.animate(token, duration);
     if (token !== this.raceToken) return;
 
     this.reportResults(active, dij, ch, graph, path, optimalDist);
   }
 
+  /** spec §19.4: the race-WIDE effects — the ones with no single racer to
+   * attach to — fired ONCE, at the LAST active layer's completion. Called
+   * exactly once per race, from run(), right after the whole replay
+   * finishes (either instantly under reduced motion, or once animate()'s
+   * promise resolves — which by construction only happens once elapsed has
+   * reached the LONGEST active duration, i.e. every layer has already
+   * finalized — see Frame.duration's own doc): that single call site is
+   * what satisfies "fire once at last completion" structurally, with no
+   * separate "have I already reported?" flag needed here. Per-racer
+   * finalization (wall time, honesty disclosure) no longer happens here —
+   * renderAt fires ui.setTime/ui.setRowDelta itself, per layer, the instant
+   * THAT layer's own duration elapses (see AlgoLayer.finalized) — so by the
+   * time this runs, every active row is already locked. */
   private reportResults(
     active: { algo: RacerId; label: string; result: AlgoResult }[],
     dij: AlgoResult, ch: AlgoResult, graph: Graph, path: number[], optimalDist: number,
   ): void {
-    for (const a of active) this.ui.setTime(a.algo, a.result.ms);
     // The headline stat is always Dijkstra-vs-CH specifically (the site's
     // core claim), independent of which optional racers also ran or
     // whether the family bidi modifier is on (dij/ch here are always the
     // plain, always-exact core keys — see run()'s own comment on why the
-    // shared overlay route is anchored to them the same way).
+    // shared overlay route is anchored to them the same way). This is also
+    // the single point where a completed race turns up the /how/ CTA's
+    // emphasis (home.ts's setHeadline implementation) — a race-wide effect,
+    // not a per-row one, so it belongs here rather than in any layer's own
+    // finalization.
     this.ui.setHeadline(headlineText(dij.settledCount, ch.settledCount));
     const km = pathKm(graph, path);
     // `optimalDist` is run()'s own computation, passed through rather than
     // re-derived here — see that call site's comment for why (also feeds
-    // AlgoLayer.dashed). Reused for both the aria sentence and each row's
-    // live disclosure below — one source of truth, never two accumulators
-    // that could drift apart.
-    const deltas = active.map((a) => ({ algo: a.algo, pct: routeDeltaPct(a.result.dist, optimalDist) }));
-    const deltaByAlgo = new Map(deltas.map((d) => [d.algo, d.pct] as const));
+    // AlgoLayer.dashed/deltaPct). Only needed here for the aria sentence's
+    // own per-racer disclosure clause — each row's live "+X% longer route"
+    // text already got the identical number from AlgoLayer.deltaPct, at
+    // that row's own finalization, not from this recomputation.
+    const deltaByAlgo = new Map(active.map((a) => [a.algo, routeDeltaPct(a.result.dist, optimalDist)] as const));
     this.ui.announce(
       formatRosterAnnouncement(
         active.map((a) => ({ label: a.label, settled: a.result.settledCount, deltaPct: deltaByAlgo.get(a.algo) })),
         km,
       ),
     );
-    for (const d of deltas) this.ui.setRowDelta(d.algo, d.pct);
     // /how/'s closing echo reads this back — same numbers the scoreboard
     // just showed, so the two can never disagree. try/catch: private-mode
     // browsers throw on localStorage access. Keys stay dj/ch only (not
