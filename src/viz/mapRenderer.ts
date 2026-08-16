@@ -409,6 +409,129 @@ export function zoomToBounds(
   return { cLon: (lonA + lonB) / 2, cLat: (latA + latB) / 2, span: clampSpan(frac / (1 - 2 * pad)) };
 }
 
+// Interaction-time base-layer caching (§16.10 — user-reported: "overlay view
+// have acceptable but not perfectly smooth frame rate, and compare view lags
+// significantly"). Re-stroking every road line (drawBase, tens of thousands
+// of points) on EVERY pan/zoom tick is the cost — MapView instead blits its
+// last crisply-stroked bitmap under the delta between the geo state it was
+// stroked at and the current one WHILE the view is actively changing, then
+// re-strokes crisply once it settles (see MapView.drawBase/strokeBaseCrisp/
+// blitBase). The three functions below are the pure decision layer that
+// makes this correct rather than a source of stale/wrong frames: WHERE to
+// blit (baseBlitRect), how far the cache may have drifted before blitting
+// stops being worth it (withinBlitRange), and what invalidates the cache
+// outright (baseCacheValid). MapView itself (which owns the actual bitmap,
+// the recency timer, and the real canvas calls) is untested here, same
+// jsdom-has-no-canvas rationale as the rest of this file.
+
+const INTERACTION_IDLE_MS = 150; // design spec's own "~150ms" idle debounce before a crisp re-stroke
+
+export const BLIT_SPAN_RATIO_LIMIT = 2; // "zoom deltas beyond the cache's useful range (>2x away) may re-stroke immediately"
+
+/** Whether a base-layer bitmap cached at `cachedSpan` is still close enough
+ * to the CURRENT `currentSpan` to blit instead of paying for a full crisp
+ * re-stroke (§16.10's own ">2x away" allowance). Past that ratio in either
+ * direction the blit would be a very blurry upscale (zoomed in a lot since
+ * the cache) or a wastefully tiny downscale (zoomed out a lot since the
+ * cache) — re-stroking crisply instead reads better AND leaves a fresh
+ * cache that resets the ratio to 1 for the next tick, so a fast continuous
+ * zoom gesture only pays for a re-stroke when it crosses another threshold,
+ * not on every frame. Boundary is inclusive at exactly `ratioLimit` (same
+ * "inclusive at the boundary" convention as visibleLines/strideFor above).
+ *
+ * `ratioLimit` defaults to `BLIT_SPAN_RATIO_LIMIT` (the spec's own "say
+ * >2x") but is a parameter, not hardcoded, so MapView can pass a small
+ * per-instance jitter around it (see MapView's own `blitRatioLimit` field
+ * comment) — Compare mode's panels all share ONE ViewStore, so during a
+ * sustained zoom every panel's cache would otherwise cross the SAME fixed
+ * threshold on the SAME tick, turning one frame into an N-panel-simultaneous
+ * crisp-restroke spike instead of N single-panel ones spread across a few
+ * consecutive frames (found via the §16.10 honest measurement itself — see
+ * the G3 report). */
+export function withinBlitRange(cachedSpan: number, currentSpan: number, ratioLimit = BLIT_SPAN_RATIO_LIMIT): boolean {
+  const ratio = cachedSpan / currentSpan;
+  return ratio >= 1 / ratioLimit && ratio <= ratioLimit;
+}
+
+/** Where to `drawImage` a cached base-layer bitmap (its own [0,0]-[w,h] CSS
+ * rect, crisply stroked at `cachedView`) so the SAME geographic content it
+ * shows reprojects correctly under the panel's CURRENT view (`currentView`)
+ * — the pure geometry behind interaction-time blitting (§16.10). Both the
+ * cached and current transforms are plain uniform-scale + offset (no
+ * rotation — see deriveTransform), so the cached rect's two opposite
+ * corners individually reprojecting through (unproject under the cached
+ * transform) -> (project under the current transform) is exactly enough to
+ * define the single other axis-aligned rect the WHOLE bitmap maps to.
+ * Deliberately goes via geo space (the one frame both transforms agree on)
+ * rather than an algebraic scale/offset delta: this is provably exactly
+ * what `unprojectPoint`/`projectPoint` themselves define "correct" to mean,
+ * so a regression in either of those two functions would show up here too,
+ * not just be silently re-derived alongside it. `fit`/`bbox`/`w`/`h` are the
+ * SAME panel-specific inputs every other view-derivation function in this
+ * module takes (see deriveTransform) — this only ever compares two
+ * ViewStates against the panel's own current geometry, never a stale one.
+ *
+ * Guards `fit.scale <= 0` (same defensive reasoning as zoomAbout/panGeo/
+ * clampGeoView — a hidden panel's resize() is a real, reachable source of a
+ * degenerate fit, see clampGeoView's own comment for the concrete scenario)
+ * by returning a 1:1 "the bitmap covers the whole viewport" rect instead of
+ * letting unprojectPoint divide by zero. Unlike those three functions this
+ * one never writes to the shared store — a bad result here can only mis-draw
+ * ONE panel's own (in practice invisible, since fit.scale=0 only happens
+ * behind display:none) canvas, not corrupt a sibling's view state — but it
+ * guards anyway rather than hand a caller's drawImage an Infinity/NaN rect. */
+export function baseBlitRect(
+  cachedView: ViewState, currentView: ViewState, bbox: [number, number, number, number], fit: Transform, w: number, h: number,
+): { dx: number; dy: number; dw: number; dh: number } {
+  if (!(fit.scale > 0)) return { dx: 0, dy: 0, dw: w, dh: h };
+  const cachedT = deriveTransform(cachedView, bbox, fit, w, h);
+  const currentT = deriveTransform(currentView, bbox, fit, w, h);
+  const [lon0, lat0] = unprojectPoint(bbox, cachedT, 0, 0);
+  const [lon1, lat1] = unprojectPoint(bbox, cachedT, w, h);
+  const [x0, y0] = projectPoint(bbox, currentT, lon0, lat0);
+  const [x1, y1] = projectPoint(bbox, currentT, lon1, lat1);
+  return { dx: x0, dy: y0, dw: x1 - x0, dh: y1 - y0 };
+}
+
+/** The fingerprint a cached base-layer bitmap was stroked under — every
+ * field is one of MapView.strokeBaseCrisp's own inputs (theme, this
+ * instance's own css size + device pixel ratio, and the hierarchy-filter
+ * state), so a real difference in ANY of them means the cached pixels no
+ * longer reflect what a fresh crisp stroke would paint. */
+export interface BaseCacheKey {
+  theme: "light" | "dark";
+  cssWidth: number;
+  cssHeight: number;
+  dpr: number;
+  pctThreshold: number | null;
+  emphasize: boolean;
+}
+
+/** Whether a cached base-layer bitmap stroked under `cached` is still usable
+ * under the CURRENT fingerprint `current` — §16.10's three named
+ * invalidation triggers (theme change, resize, hierarchy-filter/"data"
+ * change) all fall out of this one field-by-field comparison rather than
+ * each needing its own explicit "invalidate the cache" call site: a theme
+ * flip changes `theme`, a resize changes `cssWidth`/`cssHeight`/`dpr`, and
+ * the hierarchy toy's slider changes `pctThreshold`/`emphasize` — whichever
+ * it is, the fingerprint no longer matches and MapView.drawBase falls back
+ * to a crisp re-stroke structurally, the same way this module already
+ * prefers "derive fresh, don't cache separately" over ad hoc invalidation
+ * flags elsewhere (see deriveTransform's own class-comment history, §16.9).
+ * `cached === null` (nothing has ever been crisply stroked yet) is never
+ * valid. */
+export function baseCacheValid(cached: BaseCacheKey | null, current: BaseCacheKey): boolean {
+  if (!cached) return false;
+  return (
+    cached.theme === current.theme &&
+    cached.cssWidth === current.cssWidth &&
+    cached.cssHeight === current.cssHeight &&
+    cached.dpr === current.dpr &&
+    cached.pctThreshold === current.pctThreshold &&
+    cached.emphasize === current.emphasize
+  );
+}
+
 /** Reverses render.json's per-line encoding: `line[0]` is `cls`, `line[1]`
  * is `pct` (both metadata, not coordinates), `line[2..3]` is the first
  * point in absolute quantized units, and every following pair is a delta
@@ -458,6 +581,31 @@ const PAD = 24; // px of margin fitTransform keeps around the fitted bbox
 // (0.55, used for the unfiltered base layer) would still swamp the
 // emphasis; this sits an order of magnitude fainter, per spec (0.05-0.08).
 const GHOST_ALPHA = 0.07;
+
+// Light-mode density compositing (§16.8 — user-reported: "in dark mode when
+// there are overlap of nodes they are brightened. I want similar effect on
+// light mode too"): MapView.drawDots composites settled dots with `multiply`
+// in light theme (the non-additive analogue of dark's `lighter` glow — see
+// that method's own comment for why multiply, not lighter). Raw full-alpha
+// multiply overdarkens a dense cluster to flat black well before the
+// settle-flood visually finishes, because every dot past the first one or
+// two AT A GIVEN PIXEL is already multiplying against near-black there.
+// 0.55 keeps late-arriving overlap still visibly deepening instead of
+// clipping to black — picked by eye against a real dense race on the
+// deployed light palette (see the G3 report for the comparison).
+const LIGHT_MULTIPLY_ALPHA = 0.55;
+
+// How many separate Path2D/fill() calls MapView.drawDots splits an
+// ADDITIVE (lighter/multiply) dot cloud across — see that method's own
+// comment for why a single batched fill() can't express per-dot
+// compositing at all (canvas's nonzero winding rule unions overlapping
+// subpaths into one flat-alpha shape). 12 keeps the call count trivial
+// (12 fill()s, not thousands) while still giving genuine cross-bucket
+// accumulation: two overlapping dots share a bucket only 1-in-12 of the
+// time. Not exposed as a tuning knob (no evidence a different value reads
+// better — picked once, alongside LIGHT_MULTIPLY_ALPHA, against a real
+// dense race).
+const DENSITY_BUCKETS = 12;
 
 /** Owns the two stacked canvases the home page's race (and /how/'s
  * hierarchy toy, which reuses the same data) paint into: `base` is the
@@ -511,6 +659,35 @@ const GHOST_ALPHA = 0.07;
  * overlay redraws still run from two separately-registered subscriptions
  * (home.ts's overlay one and this class's own base one) — that ordering no
  * longer matters, because there's nothing left for the order to make stale. */
+
+// Round-robin source for MapView's own `blitRatioLimit` field (§16.10) —
+// see that field's own comment for why it exists (desynchronizing Compare
+// mode's panels' re-stroke thresholds). Deterministic and monotonically
+// increasing rather than random: an EARLIER version of this used
+// `Math.random()`, and live measurement (see the G3 report's before/after
+// table) showed real run-to-run variance — a 4-of-4 random draw sometimes
+// clusters two panels' thresholds close together by chance, which is
+// exactly the failure mode this exists to avoid. Module-level mutable
+// state, same established pattern as theme.ts's own `listeners` array —
+// every MapView on the page shares this one counter.
+//
+// BLIT_RATIO_MULTIPLIERS[0] is exactly 1 (i.e. this instance's own limit is
+// exactly BLIT_SPAN_RATIO_LIMIT, unstaggered) DELIBERATELY: the FIRST
+// MapView constructed on any page is, in the overwhelming common case, the
+// SOLE overlay view — home.ts constructs it before any Compare-mode panel
+// can exist — and a single panel has no sibling to desynchronize FROM, so
+// it should see exactly the spec's own default, not an arbitrarily
+// narrower (more re-stroke-happy) or wider (blurrier) one. An earlier
+// version of this array happened to put its narrowest value first, which
+// live measurement caught as a real regression: the plain single-overlay
+// case (the MOST common one) got MORE frequent re-strokes than before this
+// fix existed at all, for a desync benefit that case doesn't even need.
+// Only the 2nd/3rd/4th SIMULTANEOUS instance (Compare mode's additional
+// panels) drift away from the default, spread widely enough that a batch of
+// up to 4 panels built together (the common case: an initial Compare-mode
+// build, or a racer-toggle rebuild) gets 4 clearly distinct thresholds.
+const BLIT_RATIO_MULTIPLIERS = [1, 1.3, 0.75, 1.15];
+let mapViewSequence = 0;
 export class MapView {
   private readonly baseCanvas: HTMLCanvasElement;
   private readonly overlayCanvas: HTMLCanvasElement;
@@ -536,6 +713,41 @@ export class MapView {
   private dpr = 1;
   private cssWidth = 0;
   private cssHeight = 0;
+  // Interaction-time base-layer cache (§16.10) — see drawBase/strokeBaseCrisp/
+  // blitBase/currentBaseKey below for how these are used. All three are only
+  // ever written together, in captureBaseCache, right after a crisp stroke;
+  // null until the first one ever happens (this constructor's own resize()
+  // call), so the very first paint has nothing to blit and is always crisp.
+  private baseBitmap: HTMLCanvasElement | null = null;
+  private baseCacheView: ViewState | null = null;
+  private baseCacheKey: BaseCacheKey | null = null;
+  // performance.now() of the last PAN/ZOOM-driven redraw (markViewChanged,
+  // called only from the store subscription below — never from resize()'s,
+  // setPctThreshold()'s, or the theme callback's OWN drawBase() calls), so
+  // "recently changed" tracks gesture activity specifically, matching the
+  // design spec's own "~150ms of the last view change" wording. -Infinity so
+  // a fresh instance starts idle (never spuriously "recent").
+  private lastViewChangeAt = -Infinity;
+  // The trailing debounce that forces a crisp re-stroke + cache refresh once
+  // a gesture settles (reset on every pan/zoom tick — see markViewChanged).
+  // Its callback calls strokeBaseCrisp() directly rather than drawBase()
+  // (which would have to re-derive "am I still within the idle window"):
+  // setTimeout fires AT OR AFTER its delay, never exactly at it, so leaving
+  // the branch decision to elapsed-time comparison alone would be one
+  // scheduling-jitter away from occasionally blitting a stale cache forever.
+  private idleRestrokeTimer: ReturnType<typeof setTimeout> | undefined;
+  // This instance's own zoom-delta re-stroke threshold, assigned
+  // deterministically at construction from BLIT_RATIO_MULTIPLIERS' own
+  // round-robin (see that module-level comment for the full reasoning,
+  // including why its first entry is exactly 1 — the common single-overlay
+  // case must see exactly BLIT_SPAN_RATIO_LIMIT, unstaggered). Exists at all
+  // because Compare mode's panels share ONE ViewStore, so during a
+  // sustained zoom every panel would otherwise cross the exact SAME fixed
+  // threshold on the exact SAME tick, turning one frame into an
+  // N-panel-simultaneous full re-stroke spike — found via this task's own
+  // honest before/after measurement (see the G3 report).
+  private readonly blitRatioLimit =
+    BLIT_SPAN_RATIO_LIMIT * BLIT_RATIO_MULTIPLIERS[mapViewSequence++ % BLIT_RATIO_MULTIPLIERS.length];
 
   constructor(base: HTMLCanvasElement, overlay: HTMLCanvasElement, render: RenderData, store?: ViewStore) {
     this.baseCanvas = base;
@@ -552,8 +764,13 @@ export class MapView {
     // `store.set` too, see below) — so drawBase has exactly one call site
     // regardless of who originated the change. No transform to refresh
     // first (see the class doc comment) — drawBase derives its own fresh.
+    // markViewChanged() runs ONLY here (§16.10) — this is specifically the
+    // "a pan/zoom just happened" signal, not "drawBase needs to run for any
+    // reason", which is why resize()/setPctThreshold()/the theme callback
+    // below call drawBase() directly without it.
     this.unsubscribeStore = this.store.subscribe(() => {
       if (this.disposed) return;
+      this.markViewChanged();
       this.drawBase();
     });
     // NOTE (ledger, carried from an earlier review): onThemeChange has no
@@ -587,10 +804,18 @@ export class MapView {
    * included, not being garbage-collected) for the rest of the page's
    * life. A complete fix needs a small theme.ts change (onThemeChange
    * returning its own unsubscribe, same shape as the store's); that file
-   * isn't in this task's edit list. */
+   * isn't in this task's edit list.
+   *
+   * Also clears the §16.10 idle-restroke timer (if one is pending): without
+   * this, a disposed panel mid-gesture would still fire its trailing
+   * strokeBaseCrisp() ~150ms later, into a canvas nobody's looking at —
+   * harmless visually (same "wasted work on a discarded instance" class the
+   * rest of this method already exists to stop) but there's no reason to
+   * leave it running once `disposed` already guards everything else. */
   dispose(): void {
     this.disposed = true;
     this.unsubscribeStore();
+    if (this.idleRestrokeTimer !== undefined) clearTimeout(this.idleRestrokeTimer);
   }
 
   /** Re-reads each canvas's CSS box size, re-allocates its backing store at
@@ -733,17 +958,79 @@ export class MapView {
     return true;
   }
 
-  /** Paints the static road network: ground fill, then (once a pct
+  /** Records "a pan/zoom just happened" and (re)arms the idle-settle timer
+   * that forces a crisp re-stroke + cache refresh ~150ms after the LAST such
+   * change (§16.10). Called only from the constructor's store subscription —
+   * see that call site's own comment for why resize/setPctThreshold/theme
+   * changes deliberately do NOT call this. */
+  private markViewChanged(): void {
+    this.lastViewChangeAt = performance.now();
+    if (this.idleRestrokeTimer !== undefined) clearTimeout(this.idleRestrokeTimer);
+    this.idleRestrokeTimer = setTimeout(() => {
+      this.idleRestrokeTimer = undefined;
+      if (!this.disposed) this.strokeBaseCrisp();
+    }, INTERACTION_IDLE_MS);
+  }
+
+  /** This panel's CURRENT base-layer cache fingerprint (see BaseCacheKey) —
+   * every field is one of strokeBaseCrisp's own inputs, so comparing this
+   * against `baseCacheKey` (baseCacheValid) is exactly "would a fresh crisp
+   * stroke right now paint different pixels than what's cached". */
+  private currentBaseKey(): BaseCacheKey {
+    return {
+      theme: effectiveTheme(),
+      cssWidth: this.cssWidth,
+      cssHeight: this.cssHeight,
+      dpr: this.dpr,
+      pctThreshold: this.pctThreshold,
+      emphasize: this.emphasize,
+    };
+  }
+
+  /** Paints the static road network — ground fill, then (once a pct
    * threshold is filtering the view — the hierarchy toy's "top k%" steps)
    * an ultra-faint ghost pass of the FULL, unfiltered network so the
    * retained lines read as a highlighted subset of the remembered whole
    * city rather than fragments in a void, then every visible line (per the
    * current pct threshold), class-weighted width/alpha, major roads
    * (cls >= 2) in `roadMajor`, the rest in `road` (or the CH-blue emphasis
-   * family when `emphasize` is set). Called on construction, resize,
-   * threshold change, and automatically on every theme change (subscribed
-   * in the constructor). */
+   * family when `emphasize` is set) — choosing between two strategies
+   * (§16.10, perf): blit the last crisply-stroked bitmap under the delta
+   * between ITS geo state and the current one (cheap, "slightly soft while
+   * moving" per the design spec — used WHILE a pan/zoom gesture is actively
+   * changing the view) via blitBase, or re-stroke every road line from
+   * scratch via strokeBaseCrisp (always correct; what construction/resize/
+   * threshold-change/theme-change get, and what the idle-settle timer
+   * forces once a gesture has settled). The choice is a plain fingerprint +
+   * recency + zoom-delta check — not a separate "interacting" mode flag —
+   * so every trigger that must invalidate the cache (theme, resize,
+   * hierarchy-filter change) does so structurally, via baseCacheValid's
+   * fingerprint no longer matching, rather than needing its own explicit
+   * "invalidate" call (see BaseCacheKey/baseCacheValid's own comments).
+   * Called on construction, resize, threshold change, every theme change,
+   * and every pan/zoom (all four wire into this same method — see each
+   * call site's own comment). */
   drawBase(): void {
+    const view = this.store.get();
+    const key = this.currentBaseKey();
+    const recentlyChanged = performance.now() - this.lastViewChangeAt < INTERACTION_IDLE_MS;
+    const canBlit =
+      recentlyChanged &&
+      this.baseBitmap !== null &&
+      this.baseCacheView !== null &&
+      baseCacheValid(this.baseCacheKey, key) &&
+      withinBlitRange(this.baseCacheView.span, view.span, this.blitRatioLimit);
+    if (canBlit) this.blitBase(view);
+    else this.strokeBaseCrisp();
+  }
+
+  /** The full-cost path: strokes every visible road line from scratch
+   * (identical painting logic to before §16.10 — ground fill, optional
+   * ghost pass, class-weighted lines) and then captures the freshly-painted
+   * canvas as the new interaction-time cache (captureBaseCache) — see
+   * drawBase's own comment for when this runs vs. the cheap blitBase path.
+   * The ONLY place `baseBitmap`/`baseCacheView`/`baseCacheKey` are written. */
+  private strokeBaseCrisp(): void {
     const ctx = this.baseCtx;
     const colors = themeColors();
     const t = this.currentTransform(); // one derivation for this whole repaint — see currentTransform's own comment
@@ -770,6 +1057,50 @@ export class MapView {
       ctx.stroke();
     }
     ctx.restore();
+    this.captureBaseCache();
+  }
+
+  /** Copies the base canvas's just-stroked pixels into `baseBitmap`
+   * (allocating it on first use) and records the geo ViewState + fingerprint
+   * that produced them. A plain device-pixel copy (`drawImage` of the
+   * canvas itself, identity transform on the destination) — a pixel-for-
+   * pixel snapshot of whatever strokeBaseCrisp just painted, DPR included,
+   * so blitBase later needs no DPR math of its own (it draws through the
+   * SAME dpr-scaled ctx transform strokeBaseCrisp does). */
+  private captureBaseCache(): void {
+    if (!this.baseBitmap) this.baseBitmap = document.createElement("canvas");
+    this.baseBitmap.width = this.baseCanvas.width;
+    this.baseBitmap.height = this.baseCanvas.height;
+    const cacheCtx = this.baseBitmap.getContext("2d");
+    if (cacheCtx) {
+      cacheCtx.setTransform(1, 0, 0, 1, 0, 0);
+      cacheCtx.clearRect(0, 0, this.baseBitmap.width, this.baseBitmap.height);
+      cacheCtx.drawImage(this.baseCanvas, 0, 0);
+    }
+    this.baseCacheView = this.store.get();
+    this.baseCacheKey = this.currentBaseKey();
+  }
+
+  /** The cheap path: blits the cached bitmap into the base canvas under the
+   * delta between the geo state it was stroked at and `view` (baseBlitRect —
+   * the pure geometry, unit-tested in mapRenderer.test.ts), backdropped with
+   * a flat ground fill for any margin the cached bitmap doesn't cover this
+   * frame (e.g. this tick has zoomed OUT since the cache was taken, so the
+   * blit rect is smaller than the viewport). */
+  private blitBase(view: ViewState): void {
+    if (!this.baseBitmap || !this.baseCacheView) return; // defensive; drawBase's canBlit already checked both
+    const ctx = this.baseCtx;
+    const colors = themeColors();
+    const rect = baseBlitRect(this.baseCacheView, view, this.render.bbox, this.fit, this.cssWidth, this.cssHeight);
+    ctx.save();
+    ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
+    ctx.fillStyle = colors.ground;
+    ctx.fillRect(0, 0, this.cssWidth, this.cssHeight);
+    ctx.drawImage(
+      this.baseBitmap, 0, 0, this.baseBitmap.width, this.baseBitmap.height,
+      rect.dx, rect.dy, rect.dw, rect.dh,
+    );
+    ctx.restore();
   }
 
   clearOverlay(): void {
@@ -780,11 +1111,59 @@ export class MapView {
    * strideFor) as filled dots at `opts.radius`, in `color` — the caller
    * picks `color` per algorithm+theme (e.g. themeColors().dijkstraGlow in
    * dark, .dijkstra in light) since MapView has no notion of "which
-   * algorithm". The theme recipe MapView itself owns: dark blends dots
-   * additively ("lighter", if the caller asked for it via opts.additive —
-   * light NEVER blends additively, since glow washes out on paper per the
-   * design spec) and light nudges the radius up by 0.3 (opaque dots read
-   * smaller on paper than glowing ones do at night). */
+   * algorithm". The theme recipe MapView itself owns, when the caller opts
+   * in via `opts.additive` ("this cloud should read its own overlap
+   * density"): dark composites `lighter` (additive — brighter where dots
+   * overlap) at full alpha; light composites `multiply` at a reduced
+   * `LIGHT_MULTIPLY_ALPHA` (§16.8 — the light-theme ANALOGUE of dark's glow:
+   * overlap reads as DEEPER, not brighter, since an additive `lighter` blend
+   * would wash out on a pale ground instead of popping). Light still NEVER
+   * blends additively — that half of the original rule is unchanged;
+   * `multiply` is a different, non-additive composite chosen specifically
+   * because a paper-toned surface darkens legibly under repeated overlap
+   * instead of blowing out to white the way `lighter` would. The reduced
+   * alpha exists because raw full-alpha multiply overdarkens fast: every dot
+   * after the first one or two AT A GIVEN PIXEL is already multiplying
+   * against near-black there, so a dense cluster would clip to a flat black
+   * blob well before the flood visually finishes — `LIGHT_MULTIPLY_ALPHA`
+   * was picked by eye against a real dense race so late-arriving overlap is
+   * still visibly deepening instead of clipped (see the G3 report for the
+   * comparison this was tuned against). `opts.additive === false` draws
+   * plain opaque dots via `source-over`, same as always. Independent of the
+   * theme recipe, light nudges the radius up by 0.3 (opaque dots read
+   * smaller on paper than glowing ones do at night).
+   *
+   * Batching (§16.10, perf) is per-composite-mode, not a single blanket
+   * "one Path2D for everything": `source-over` (opts.additive === false)
+   * really is drawn as ONE Path2D + ONE fill() — a settle-flood is
+   * thousands of points per algorithm per frame, and it's the repeated
+   * fill() calls that cost, not the path-building, and opaque-over-opaque
+   * looks identical whether the overlapping circles are one fill() call or
+   * many. `lighter`/`multiply` do NOT get that same one-call treatment: a
+   * SINGLE Path2D containing overlapping circles rasterizes them as one
+   * UNIONED shape (canvas fill()'s nonzero winding rule doesn't count HOW
+   * MANY subpaths cover a pixel, only whether it's covered at all) and
+   * composites that one shape against the backdrop exactly ONCE — so a
+   * fully-batched `lighter`/`multiply` fill would paint every dot at the
+   * SAME flat alpha regardless of overlap, silently deleting the entire
+   * density effect this method exists to produce (dark mode's original
+   * per-dot brightening depended on EVERY dot getting its OWN fill() call,
+   * compositing against whatever earlier dots had already painted there —
+   * found by directly sampling rendered pixel data while verifying §16.8,
+   * see the G3 report). `additive` dots are instead split across
+   * DENSITY_BUCKETS separate Path2Ds/fill() calls (round-robin by draw
+   * order — settle order is spatially clustered in short runs, so
+   * consecutive, likely-overlapping dots land in DIFFERENT buckets), which
+   * keeps the call count small and fixed (DENSITY_BUCKETS per algorithm per
+   * frame, not thousands) while restoring real cross-bucket compositing:
+   * two overlapping dots land in the same bucket only 1-in-DENSITY_BUCKETS
+   * of the time, so most genuine overlap still visibly compounds across the
+   * other buckets' fill() calls. `moveTo` before each `arc` starts a fresh
+   * subpath per dot (a bare chained `arc()` would implicitly connect the
+   * previous dot's end to this one's start with a straight line — since
+   * that connector has zero width it wouldn't actually fill any extra
+   * pixels either way, but starting fresh is the standard, unambiguous way
+   * to batch unrelated circles into one path). */
   drawDots(
     order: Uint32Array, upto: number, lon: Float64Array, lat: Float64Array,
     color: string, opts: { additive: boolean; radius: number; stride: number },
@@ -792,18 +1171,37 @@ export class MapView {
     const ctx = this.overlayCtx;
     const t = this.currentTransform(); // one derivation for this whole batch — see currentTransform's own comment
     const dark = effectiveTheme() === "dark";
-    ctx.save();
-    ctx.globalCompositeOperation = dark && opts.additive ? "lighter" : "source-over";
-    ctx.fillStyle = color;
     const radius = dark ? opts.radius : opts.radius + 0.3;
     const stride = Math.max(1, opts.stride);
     const n = Math.min(upto, order.length);
-    for (let i = 0; i < n; i += stride) {
-      const node = order[i];
-      const [x, y] = projectPoint(this.render.bbox, t, lon[node], lat[node]);
-      ctx.beginPath();
-      ctx.arc(x, y, radius, 0, Math.PI * 2);
-      ctx.fill();
+    ctx.save();
+    ctx.fillStyle = color;
+    if (opts.additive) {
+      ctx.globalCompositeOperation = dark ? "lighter" : "multiply";
+      ctx.globalAlpha = dark ? 1 : LIGHT_MULTIPLY_ALPHA;
+      const buckets: Path2D[] = [];
+      for (let b = 0; b < DENSITY_BUCKETS; b++) buckets.push(new Path2D());
+      let b = 0;
+      for (let i = 0; i < n; i += stride) {
+        const node = order[i];
+        const [x, y] = projectPoint(this.render.bbox, t, lon[node], lat[node]);
+        const bucket = buckets[b % DENSITY_BUCKETS];
+        bucket.moveTo(x + radius, y);
+        bucket.arc(x, y, radius, 0, Math.PI * 2);
+        b++;
+      }
+      for (const bucket of buckets) ctx.fill(bucket);
+    } else {
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = 1;
+      const path = new Path2D();
+      for (let i = 0; i < n; i += stride) {
+        const node = order[i];
+        const [x, y] = projectPoint(this.render.bbox, t, lon[node], lat[node]);
+        path.moveTo(x + radius, y);
+        path.arc(x, y, radius, 0, Math.PI * 2);
+      }
+      ctx.fill(path);
     }
     ctx.restore();
   }

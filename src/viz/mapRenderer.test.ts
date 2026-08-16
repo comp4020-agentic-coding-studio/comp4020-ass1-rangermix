@@ -8,6 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  baseBlitRect,
+  baseCacheValid,
   clampGeoView,
   createViewStore,
   decodeLine,
@@ -19,8 +21,10 @@ import {
   unprojectPoint,
   visibleLines,
   wholeMapView,
+  withinBlitRange,
   zoomAbout,
   zoomToBounds,
+  type BaseCacheKey,
   type Transform,
   type ViewState,
 } from "./mapRenderer";
@@ -754,5 +758,187 @@ describe("project/unproject round trip through a derived (geo view) transform", 
       expect(lon2).toBeCloseTo(lon, 9);
       expect(lat2).toBeCloseTo(lat, 9);
     }
+  });
+});
+
+// Interaction-time base-layer caching (§16.10 — perf: "overlay view should
+// be smooth; compare view currently lags significantly"). MapView itself
+// (the class that actually decides blit-vs-crisp-restroke and owns the
+// cached bitmap) is untested here, same jsdom-has-no-canvas rationale as the
+// rest of this file — what's exercised below is the pure math/decision
+// layer it's built on: where to blit the cached bitmap (baseBlitRect), how
+// far the cache's own zoom may drift from the current view before a blit
+// isn't worth it (withinBlitRange), and what invalidates the cache
+// (baseCacheValid).
+describe("baseBlitRect (where to drawImage the cached base bitmap under the CURRENT transform)", () => {
+  it("identity: cached and current view are the same -> the cached bitmap covers the viewport exactly (dx=dy=0, full size)", () => {
+    const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.4 };
+    const rect = baseBlitRect(view, view, bbox, fit, 900, 600);
+    // toBeCloseTo, not toEqual: this round-trips through project/unproject
+    // twice (real irrational scale/cos values), so it lands at ~1e-12, not
+    // bit-exact zero — same tolerance the project/unproject round-trip
+    // tests above already use for the same reason.
+    expect(rect.dx).toBeCloseTo(0, 6);
+    expect(rect.dy).toBeCloseTo(0, 6);
+    expect(rect.dw).toBeCloseTo(900, 6);
+    expect(rect.dh).toBeCloseTo(600, 6);
+  });
+
+  it("a 2x zoom-in about the SAME center doubles the blit rect, centered on the viewport (hand-checked: cosMid=1, zero-slack square bbox/fit)", () => {
+    // Same bbox/fit shape as clampGeoView's own "flush fit" hand-checked
+    // cases above: midLat 0 -> cosMid exactly 1, square bbox in map units,
+    // zero pad -> fit.scale is a round number with no aspect slack.
+    const bbox: [number, number, number, number] = [0, -0.5, 1, 0.5];
+    const fit = fitTransform(bbox, 800, 800, 0);
+    expect(fit).toEqual({ scale: 800, ox: 0, oy: 0 }); // sanity: genuinely zero slack
+    const cached = wholeMapView(bbox); // span 1, centered — the cached bitmap IS the whole bbox
+    const current: ViewState = { cLon: cached.cLon, cLat: cached.cLat, span: 0.5 }; // 2x zoom in, same center
+    const rect = baseBlitRect(cached, current, bbox, fit, 800, 800);
+    // The cached bitmap's own corners (the whole bbox, at scale 800) sit at
+    // screen (0,0)-(800,800) under the CACHED transform; unprojecting those
+    // through the cached transform recovers the bbox corners exactly, and
+    // reprojecting the bbox corners through the NEW (2x) transform doubles
+    // their distance from the viewport center (400,400) -- corners land at
+    // (-400,-400) and (1200,1200), i.e. a 1600x1600 rect centered on (400,400).
+    expect(rect.dx).toBeCloseTo(-400, 6);
+    expect(rect.dy).toBeCloseTo(-400, 6);
+    expect(rect.dw).toBeCloseTo(1600, 6);
+    expect(rect.dh).toBeCloseTo(1600, 6);
+  });
+
+  it("a pure pan (span unchanged) shifts the blit rect by exactly the screen-space delta panGeo would produce, size unchanged", () => {
+    const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const cached: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
+    const dx = -37;
+    const dy = 84;
+    const current = panGeo(cached, bbox, fit, 900, 600, dx, dy);
+    const rect = baseBlitRect(cached, current, bbox, fit, 900, 600);
+    expect(rect.dx).toBeCloseTo(dx, 6);
+    expect(rect.dy).toBeCloseTo(dy, 6);
+    expect(rect.dw).toBeCloseTo(900, 6);
+    expect(rect.dh).toBeCloseTo(600, 6);
+  });
+
+  it("equals the direct projection of the cached bitmap's own two corners under the CURRENT transform, for random cached/current view pairs (property, 200 seeded) -- this IS what \"correct blit rect\" means, so a regression in the corner math would show up here even though it shares projectPoint/unprojectPoint with the implementation", () => {
+    const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+    const fit = fitTransform(bbox, 1016, 778, 24);
+    const rand = mulberry32(160817);
+    for (let i = 0; i < 200; i++) {
+      const randomView = (): ViewState => ({
+        cLon: bbox[0] + rand() * (bbox[2] - bbox[0]),
+        cLat: bbox[1] + rand() * (bbox[3] - bbox[1]),
+        span: 1 / 8 + rand() * (1 - 1 / 8),
+      });
+      const cached = randomView();
+      const current = randomView();
+      const rect = baseBlitRect(cached, current, bbox, fit, 1016, 778);
+
+      const cachedT = deriveTransform(cached, bbox, fit, 1016, 778);
+      const currentT = deriveTransform(current, bbox, fit, 1016, 778);
+      const [lon0, lat0] = unprojectPoint(bbox, cachedT, 0, 0);
+      const [lon1, lat1] = unprojectPoint(bbox, cachedT, 1016, 778);
+      const [ex0, ey0] = projectPoint(bbox, currentT, lon0, lat0);
+      const [ex1, ey1] = projectPoint(bbox, currentT, lon1, lat1);
+      expect(rect.dx).toBeCloseTo(ex0, 6);
+      expect(rect.dy).toBeCloseTo(ey0, 6);
+      expect(rect.dw).toBeCloseTo(ex1 - ex0, 6);
+      expect(rect.dh).toBeCloseTo(ey1 - ey0, 6);
+    }
+  });
+
+  // Regression (same defect class G2 fixed — see clampGeoView/zoomAbout/
+  // panGeo's own regression tests): a hidden panel's resize() can produce a
+  // genuinely degenerate fit.scale === 0 (a display:none canvas floors to a
+  // 1x1 css size, starving fitTransform's availW/availH to 0). Unlike
+  // clampGeoView/zoomAbout/panGeo, this function never WRITES to the shared
+  // store — a bad result here can't corrupt another panel the way the G2 bug
+  // did — but it still shouldn't divide by zero (unprojectPoint's own
+  // `(x - ox) / (scale * cosMid)`) and hand Infinity/NaN to a caller's
+  // drawImage. Guarded the same way: fit.scale <= 0 returns a 1:1 "blit
+  // covers the whole viewport" rect instead.
+  it("regression: fit.scale === 0 (degenerate/hidden panel) returns a full-viewport rect instead of dividing by zero", () => {
+    const bbox: [number, number, number, number] = [148.9179634, -35.6505443, 149.3332927, -35.0450695];
+    const hiddenFit = fitTransform(bbox, 1, 1, 24); // MapView.resize()'s own floor for a display:none canvas
+    expect(hiddenFit.scale).toBe(0); // sanity: genuinely the degenerate case
+    const cached = wholeMapView(bbox);
+    const current: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
+    const rect = baseBlitRect(cached, current, bbox, hiddenFit, 1, 1);
+    expect(rect).toEqual({ dx: 0, dy: 0, dw: 1, dh: 1 });
+    expect(Number.isFinite(rect.dx)).toBe(true);
+    expect(Number.isFinite(rect.dy)).toBe(true);
+    expect(Number.isFinite(rect.dw)).toBe(true);
+    expect(Number.isFinite(rect.dh)).toBe(true);
+  });
+});
+
+describe("withinBlitRange (the \">2x away\" boundary past which a blit isn't worth it)", () => {
+  it("the same span (no zoom change) is always in range", () => {
+    expect(withinBlitRange(0.5, 0.5)).toBe(true);
+  });
+
+  it("exactly 2x zoomed IN since the cache (cachedSpan / currentSpan === 2) is still in range (boundary inclusive)", () => {
+    expect(withinBlitRange(0.5, 0.25)).toBe(true);
+  });
+
+  it("just past 2x zoomed in is out of range", () => {
+    expect(withinBlitRange(0.5, 0.24)).toBe(false);
+  });
+
+  it("exactly 2x zoomed OUT since the cache (cachedSpan / currentSpan === 0.5) is still in range (boundary inclusive, symmetric)", () => {
+    expect(withinBlitRange(0.4, 0.8)).toBe(true);
+  });
+
+  it("just past 2x zoomed out is out of range", () => {
+    expect(withinBlitRange(0.4, 0.81)).toBe(false);
+  });
+
+  // A custom ratioLimit (MapView's own per-instance jitter, §16.10 — see
+  // that field's own comment: Compare-mode panels share one ViewStore, so
+  // without this every panel would cross the exact same fixed threshold on
+  // the exact same tick during a sustained zoom, spiking one frame to an
+  // N-panel-simultaneous re-stroke instead of spreading it across a few) is
+  // honored instead of the BLIT_SPAN_RATIO_LIMIT default.
+  it("a custom ratioLimit overrides the default boundary", () => {
+    expect(withinBlitRange(0.5, 0.2, 2)).toBe(false); // ratio 2.5 -- past the DEFAULT 2x limit
+    expect(withinBlitRange(0.5, 0.2, 3)).toBe(true); // same inputs, wider custom limit -- now in range
+  });
+});
+
+describe("baseCacheValid (§16.10 cache invalidation: theme, resize, and hierarchy-filter changes each force a crisp re-stroke)", () => {
+  const key = (overrides: Partial<BaseCacheKey> = {}): BaseCacheKey => ({
+    theme: "dark",
+    cssWidth: 900,
+    cssHeight: 600,
+    dpr: 1,
+    pctThreshold: null,
+    emphasize: false,
+    ...overrides,
+  });
+
+  it("no cached key yet (nothing stroked) is never valid", () => {
+    expect(baseCacheValid(null, key())).toBe(false);
+  });
+
+  it("an identical key is valid", () => {
+    expect(baseCacheValid(key(), key())).toBe(true);
+  });
+
+  it("a theme change invalidates", () => {
+    expect(baseCacheValid(key({ theme: "dark" }), key({ theme: "light" }))).toBe(false);
+  });
+
+  it("a resize (css size or device-pixel-ratio change) invalidates", () => {
+    expect(baseCacheValid(key({ cssWidth: 900 }), key({ cssWidth: 901 }))).toBe(false);
+    expect(baseCacheValid(key({ cssHeight: 600 }), key({ cssHeight: 599 }))).toBe(false);
+    expect(baseCacheValid(key({ dpr: 1 }), key({ dpr: 2 }))).toBe(false);
+  });
+
+  it("a hierarchy-filter change (pctThreshold or emphasize) invalidates", () => {
+    expect(baseCacheValid(key({ pctThreshold: null }), key({ pctThreshold: 50 }))).toBe(false);
+    expect(baseCacheValid(key({ pctThreshold: 50 }), key({ pctThreshold: 60 }))).toBe(false);
+    expect(baseCacheValid(key({ emphasize: false }), key({ emphasize: true }))).toBe(false);
   });
 });

@@ -329,6 +329,23 @@ export class RaceController {
     if (this.current) this.renderAt(this.current.elapsed);
   }
 
+  // §16.10 (compare-view perf): renderAt below only ever calls
+  // clearOverlay/drawDots/drawRoute/drawPin on its targets — the OVERLAY
+  // half of MapView's API — never drawBase, in EITHER overlay mode (one
+  // target) or Compare mode (comparePanels means N targets, still only ever
+  // drawn to through those same four calls). Replay (the animate() rAF loop
+  // below) redraws every active view's overlay on every frame by design —
+  // that's the settle-flood animation — but the base road-network layer is
+  // untouched by any of it: base only repaints from a MapView's OWN pan/
+  // zoom/resize/theme/threshold triggers (mapRenderer.ts's own store
+  // subscription and onThemeChange callback), never from this class. A
+  // replay therefore never pays base-layer cost — crisp-stroke or the
+  // §16.10 interaction-time cache/blit alike — regardless of how many
+  // panels are active, which is what makes MapView's own base-layer caching
+  // (mapRenderer.ts) the whole fix for "compare view lags significantly":
+  // N panels each blitting instead of each fully re-stroking on every pan/
+  // zoom tick, with replay's per-frame cost unchanged (and already batched —
+  // see MapView.drawDots) on top.
   private renderAt(elapsedMs: number): void {
     const c = this.current;
     if (!c) return;
@@ -380,7 +397,15 @@ export class RaceController {
       for (const v of drawTo) {
         v.drawDots(
           layer.order, up, c.graph.lon, c.graph.lat, color,
-          { additive: dark, radius: DOT_RADIUS, stride: layer.stride },
+          // additive: true UNCONDITIONALLY (§16.8 — was `dark` until this fix,
+          // which meant "wants the density treatment" was silently only ever
+          // true when the theme was ALREADY dark, so MapView's own light-mode
+          // `multiply` branch could never fire from this, the only real call
+          // site). Every settle-flood cloud wants overlap density to read in
+          // EITHER theme; which blend (`lighter` in dark, `multiply` in
+          // light) is MapView's own call, not this caller's — see
+          // drawDots's own doc comment.
+          { additive: true, radius: DOT_RADIUS, stride: layer.stride },
         );
       }
       this.ui.setRow(layer.algo, up, maxTotal);
