@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Watch Contraction Hierarchies race Dijkstra across Canberra's real road network, then learn exactly why it wins." />
+    <meta name="description" content="Drop two pins on Canberra's real street network and watch Contraction Hierarchies race Dijkstra to the same shortest route — one barely looks, the other searches almost everywhere." />
     <title>Highway to Hill — Contraction Hierarchies on Canberra's streets</title>
     <script>
       // pre-paint theme stamp: no flash in either theme
@@ -56,7 +56,7 @@
             </div>
           </div>
         </div>
-        <div class="compare-grid is-loading" data-testid="compare-panels" hidden></div>
+        <div class="compare-grid is-loading" data-testid="compare-panels" tabindex="-1" aria-label="Race comparison panels, one per algorithm" hidden></div>
         <div class="controls">
           <div class="control-group" role="group" aria-labelledby="routes-label">
             <p class="group-label" id="routes-label">Routes</p>

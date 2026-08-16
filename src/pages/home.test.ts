@@ -39,6 +39,7 @@ import {
   applySplashInert,
   autoRunPins,
   diffPanels,
+  effectiveViewMode,
   shouldArmAutoRun,
   type GatedControls,
   type SplashInertTargets,
@@ -85,6 +86,33 @@ describe("shouldArmAutoRun (the auto-run gate's page-readiness half — data loa
 
   it("won't re-arm once already armed, even if asked again with every other condition true", () => {
     expect(shouldArmAutoRun(true, true, true, true)).toBe(false);
+  });
+});
+
+// H5 gate fix: the persisted-Compare splash deadlock. A returning visitor
+// whose LAST session left `hth-view` persisted as "compare" would, on a
+// fresh session, have .map-frame (and the splash living inside it, per H2)
+// hidden by applyViewMode() before ever seeing it — Explore unreachable,
+// dismiss() never fires, splashDismissed stuck false forever, every gate
+// that depends on it (auto-run, applyControlsEnabled/applySplashInert)
+// withholding for the rest of the pageview. effectiveViewMode is the fix:
+// applyViewMode() routes through this instead of reading `viewMode`
+// directly, forcing Overlay while the splash is still pending regardless of
+// what's persisted, and releasing back to the real persisted mode the
+// instant splashDismissed flips true (home.ts's dismiss() calls
+// applyViewMode() again for exactly this).
+describe("effectiveViewMode (H5 gate fix — the persisted-Compare splash deadlock)", () => {
+  it("forces overlay when Compare is persisted but the splash hasn't been dismissed yet (the deadlock scenario itself)", () => {
+    expect(effectiveViewMode("compare", false)).toBe("overlay");
+  });
+
+  it("restores the persisted Compare mode the instant the splash is dismissed", () => {
+    expect(effectiveViewMode("compare", true)).toBe("compare");
+  });
+
+  it("leaves a persisted Overlay mode alone regardless of splash state (nothing to force — already the safe default)", () => {
+    expect(effectiveViewMode("overlay", false)).toBe("overlay");
+    expect(effectiveViewMode("overlay", true)).toBe("overlay");
   });
 });
 

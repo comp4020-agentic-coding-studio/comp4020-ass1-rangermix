@@ -45,6 +45,7 @@ import {
   SVG_ZOOM_MAX,
   SVG_ZOOM_MIN,
   unorderedKey,
+  vbPercentXY,
   type PickState,
   type ViewBoxRect,
 } from "./toytownView";
@@ -74,6 +75,15 @@ const STEP_MS = 500;
 const HIER_BASE_VB: ViewBoxRect = { x: 0, y: 0, w: VIEWBOX_W, h: VIEWBOX_H };
 const WHEEL_ZOOM_BASE = 1.0015;
 const BUTTON_ZOOM_FACTOR = 1.4;
+// H5 gate fix -- see vbPercentXY's own doc comment (toytownView.ts) for the
+// first-load right-edge clipping this margin closes. 4% comfortably covers
+// a .node-mark's 12px half-width at both reference stage widths this
+// codebase already measures against (MIN_NODE_DIST's own doc comment):
+// 12/324 ~= 3.7% at the 390px phone's ~324px rendered stage, 12/460 ~= 2.6%
+// at desktop's full 460px -- a small surplus at the wider size rather than
+// tuned to the exact pixel, same margin-of-safety convention MIN_NODE_DIST
+// itself uses.
+const HIER_EDGE_INSET_PCT = 4;
 
 function reducedMotion(): boolean {
   return matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -394,9 +404,8 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
   // this, zooming in visibly detached every node dot and the meet star from
   // the lines they're supposed to mark — see the H3 report).
   function hierPercentXY(x: number, y: number): [string, string] {
-    const left = (((x - hierVb.x) / hierVb.w) * 100).toFixed(3);
-    const top = (((y - hierVb.y) / hierVb.h) * 100).toFixed(3);
-    return [left, top];
+    const [left, top] = vbPercentXY(hierVb, x, y, HIER_EDGE_INSET_PCT);
+    return [left.toFixed(3), top.toFixed(3)];
   }
 
   // Re-positions the hierarchy's node marks and meet star at the CURRENT

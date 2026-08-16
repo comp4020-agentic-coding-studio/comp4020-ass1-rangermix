@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Five short chapters that unpack Contraction Hierarchies one toy at a time, on a real city-centre street grid — the same search code that just raced across Canberra, small enough to watch by hand." />
+    <meta name="description" content="Five interactive chapters on how Contraction Hierarchies really works — Dijkstra's blind search, the hierarchy it builds, the shortcuts it needs, and how a query only ever climbs to the answer." />
     <title>How it works — Highway to Hill</title>
     <script>
       // pre-paint theme stamp: no flash in either theme
@@ -33,10 +33,10 @@
 
       <section class="chapter" aria-labelledby="ch1-h">
         <h2 id="ch1-h">What Dijkstra actually does</h2>
-        <p>Dijkstra never guesses. It checks the closest unvisited
+        <p>Dijkstra never guesses. It settles the closest unvisited
           intersection first, every time, so it always finds the true
           shortest route. It can't tell which streets don't matter until
-          it's already checked them — press play and watch the orange dots
+          it's already reached them — press play and watch the orange dots
           spread out in every direction: perfect, and blind.</p>
         <div class="toy" data-testid="toy-flood"></div>
         <p class="caption">What to notice: the flood reaches streets nowhere
@@ -120,7 +120,7 @@
           heuristic yourself.</p>
         <div class="toy" data-testid="toy-order"></div>
         <p class="caption">What to notice: the smart order isn't luck — it
-          beats random and worst-case orders every time.</p>
+          never loses to random and worst-case orders, run after run.</p>
         <p class="closer-echo" data-testid="closer-echo">Loading your race numbers…</p>
         <p class="closer-cta" data-testid="closer-cta">Now go see it at full scale.
           <a class="cta-link" href="../">Back to the race →</a></p>

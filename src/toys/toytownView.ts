@@ -173,9 +173,18 @@ export interface DriftConnector {
  * see its own doc comment — so shrinking it risks reintroducing the
  * overlapping-buttons bug it fixed). Pure and order-preserving: index `i`
  * in the result corresponds 1:1 to node `i`, filtered to only the
- * displaced ones. */
+ * displaced ones.
+ *
+ * Threshold raised 6 -> 8 (H5 gate fix): at the congested hub the densest
+ * cluster of toytown nodes produces, 6 units flagged enough near-miss
+ * nudges to read as a starburst radiating out of the hub rather than a few
+ * legible "this one moved" cues — the opposite of the honest-position
+ * principle this feature exists for. 8 thins that cluster to the genuinely
+ * displaced nodes; styles.css's own `.drift-connector` opacity (0.5 -> 0.3,
+ * same gate fix) quiets whichever connectors still qualify, rather than
+ * hiding the mechanism entirely. */
 export function driftConnectors(
-  trueXY: [number, number][], shownXY: [number, number][], threshold = 6,
+  trueXY: [number, number][], shownXY: [number, number][], threshold = 8,
 ): DriftConnector[] {
   const out: DriftConnector[] = [];
   for (let i = 0; i < trueXY.length; i++) {
@@ -427,4 +436,31 @@ export function svgUserPoint(
 ): [number, number] {
   if (!(boxW > 0) || !(boxH > 0)) return [vb.x, vb.y];
   return [vb.x + (offsetX / boxW) * vb.w, vb.y + (offsetY / boxH) * vb.h];
+}
+
+/** Converts a point in `vb`'s own user-space into a left/top PERCENTAGE pair
+ * for a plain positioned HTML element — the inverse of svgUserPoint above,
+ * and the mechanism climbLinked.ts's hierarchy node marks/meet star ride
+ * (repositionHierOverlay) to stay lined up with the SVG content's own
+ * `preserveAspectRatio="none"` zoom/pan transform, which a plain `<div>`
+ * doesn't get for free (see that file's own comment on hierPercentXY).
+ *
+ * `insetPct` (H5 gate fix) reserves a margin on every edge of the projected
+ * [0,100] range: with `insetPct=0`, a point sitting exactly at `vb`'s own
+ * edge projects to 0% or 100%, and since every node mark is centered on its
+ * point via `transform: translate(-50%,-50%)` (styles.css), that leaves
+ * HALF the mark's own box outside [0,100]% — clipped by `.climb-nodes`'
+ * `overflow:hidden` (needed since H3 to contain a zoomed-out ghost node,
+ * not optional — see that rule's own comment). Found on FIRST LOAD, no
+ * zoom or re-pick needed: the toytown graph's own default climb pair has a
+ * node whose real-geography x sits right at the hierarchy's own decluttered
+ * right extent (H5 gate finding). A non-zero `insetPct` maps `vb`'s own
+ * span onto `[insetPct, 100-insetPct]` instead of `[0,100]` — the centre
+ * (50%) is unmoved, only the extremes pull inward — leaving room for the
+ * mark's own half-width regardless of which edge of `vb` a point lands on. */
+export function vbPercentXY(vb: ViewBoxRect, x: number, y: number, insetPct = 0): [number, number] {
+  const span = 100 - 2 * insetPct;
+  const left = ((x - vb.x) / vb.w) * span + insetPct;
+  const top = ((y - vb.y) / vb.h) * span + insetPct;
+  return [left, top];
 }

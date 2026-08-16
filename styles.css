@@ -1306,16 +1306,20 @@ html[data-splash-dismissed] .splash {
 
 /* Design spec §17.5 delta 3, task H3: a short, faint leader line from a
    node's TRUE geographic position to its declutterXY-nudged button, drawn
-   only when that nudge exceeds driftConnectors' threshold (~6 viewBox
-   units). Now that .context-line draws the TRUE street underneath, an
-   unflagged nudge reads as "this node is floating off its street" — the
-   connector makes the offset legible instead. Dashed (not solid) so it
-   never competes with a real road's own line style. */
+   only when that nudge exceeds driftConnectors' threshold (~8 viewBox
+   units, raised from 6 at the H5 gate — see that function's own comment).
+   Now that .context-line draws the TRUE street underneath, an unflagged
+   nudge reads as "this node is floating off its street" — the connector
+   makes the offset legible instead. Dashed (not solid) so it never competes
+   with a real road's own line style. Opacity dropped 0.5 -> 0.3 at the same
+   H5 gate: at the congested hub, several qualifying connectors together
+   read as a starburst radiating off the hub — quieter now, still legible
+   one at a time, honest position kept either way. */
 .drift-connector {
   stroke: var(--muted);
   stroke-width: 1;
   stroke-dasharray: 2 2;
-  opacity: 0.5;
+  opacity: 0.3;
   pointer-events: none;
 }
 

@@ -70,6 +70,36 @@ export function shouldArmAutoRun(
   return dataReady && splashDismissed && !alreadyArmed && isDesktopWidth;
 }
 
+/** H5 gate fix: the persisted-Compare splash deadlock. `.splash` lives
+ * inside `.map-frame` (H2's own placement — "inside the map frame, above
+ * the canvases"), and `applyViewMode()` hides `.map-frame` whenever Compare
+ * is the active view. A returning visitor whose PREVIOUS session left
+ * `hth-view` persisted as "compare" would, on a fresh session, have
+ * `.map-frame` — and the splash inside it — hidden before ever seeing it.
+ * Since the splash never shows, Explore can never be clicked, so
+ * `dismiss()` never fires: `splashDismissed` never becomes true, the
+ * auto-run gate withholds forever (shouldArmAutoRun above), and — since the
+ * H2 gate fix — every control gated on `splashDismissed` (applyControlsEnabled/
+ * applySplashInert below) stays disabled/inert for the rest of the session
+ * too. A silent, total deadlock for exactly the visitors who opted into
+ * Compare mode.
+ *
+ * The fix: while the splash hasn't been dismissed YET this pageview, the
+ * view forcibly renders as Overlay — regardless of what's persisted — so
+ * `.map-frame` (and the splash inside it) stays visible and reachable.
+ * `viewMode` itself is never overwritten and nothing is re-saved to
+ * localStorage: this only overrides what's APPLIED to the DOM while the
+ * splash is pending, never the visitor's actual stored preference. The
+ * instant `splashDismissed` flips true (dismiss(), below), calling
+ * `applyViewMode()` again re-evaluates this function and the real
+ * persisted mode takes over — Compare panels build for real at that point.
+ * Pure so the override (and its own release once dismissed) is unit-
+ * testable without any DOM/storage, same rationale as autoRunPins/
+ * shouldArmAutoRun above. */
+export function effectiveViewMode(mode: "overlay" | "compare", splashDismissed: boolean): "overlay" | "compare" {
+  return splashDismissed ? mode : "overlay";
+}
+
 /** The full set of controls gated by (dataReady AND splashDismissed) --
  * everything that OPERATES the hidden map/race (H2 gate fix, a build-review
  * finding against the splash this subsumes into: ".splash only covers
@@ -511,12 +541,20 @@ function boot(): void {
     safeSessionSet(SPLASH_KEY, "1");
     updateControlsEnabled(); // H2 gate fix: was updateMapControlsEnabled() (zoom-only) -- now the full gated set
     updateSplashInert(); // H2 gate fix: releases focus containment now that the splash is actually gone
+    // H5 gate fix: re-applies view mode now that effectiveViewMode() is no
+    // longer forced to "overlay" -- restores the visitor's own persisted
+    // Compare preference (if any), building the real panel set via
+    // syncPanels() if data is ready by now (a no-op harmlessly deferred to
+    // the data-ready success path's own applyViewMode() call otherwise --
+    // see effectiveViewMode's own comment for the full deadlock this closes).
+    applyViewMode();
     maybeArmAutoRun();
-    // Moves focus to the map region it just uncovered (§17.3's own "focus
-    // moves to the map region") — race-canvas carries a static
-    // tabindex="-1" (index.html) precisely so this programmatic focus
-    // works without also adding it to the normal Tab order.
-    stack?.focus();
+    // Moves focus to whichever map region the above just made visible --
+    // the overlay's race-canvas (static tabindex="-1") normally, or the
+    // compare grid (same static tabindex="-1", index.html) when the
+    // restored mode is Compare, since a hidden .map-frame can't receive a
+    // real .focus() call (§17.3's own "focus moves to the map region").
+    (viewMode === "compare" ? compareGrid : stack)?.focus();
   }
 
   if (safeSessionGet(SPLASH_KEY) === "1") {
@@ -1123,12 +1161,19 @@ function boot(): void {
    * syncPanels() actually builds panels if the persisted mode is
    * "compare"), and on every view-toggle click. */
   function applyViewMode(): void {
-    const compare = viewMode === "compare";
+    // H5 gate fix: routed through effectiveViewMode(), not raw `viewMode`
+    // directly -- see that function's own comment for the persisted-Compare
+    // splash deadlock this closes. `compare` now drives every DOM
+    // consequence below (including the toggle button's own label), so
+    // there's exactly one source of truth for "what does the page look like
+    // right now" -- never a stale label out of step with what's actually
+    // shown while the splash is pending.
+    const compare = effectiveViewMode(viewMode, splashDismissed) === "compare";
     if (mapFrame) mapFrame.hidden = compare;
     if (compareGrid) compareGrid.hidden = !compare;
     if (viewToggleBtn) {
       viewToggleBtn.setAttribute("aria-pressed", String(compare));
-      viewToggleBtn.textContent = `View: ${viewMode}`;
+      viewToggleBtn.textContent = `View: ${compare ? "compare" : "overlay"}`;
     }
     if (compare) {
       syncPanels();

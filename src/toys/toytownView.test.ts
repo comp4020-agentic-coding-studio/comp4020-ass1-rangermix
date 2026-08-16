@@ -15,6 +15,7 @@ import {
   svgUserPoint,
   svgZoomAbout,
   unorderedKey,
+  vbPercentXY,
 } from "./toytownView";
 
 // A tiny synthetic 3-node fixture, deliberately mixing a TWO-WAY pair
@@ -370,6 +371,16 @@ describe("driftConnectors: which nodes' decluttered button drifted past the thre
     ];
     expect(driftConnectors(trueXY, shownXY, 6)).toEqual([{ truePos: [50, 50], shownPos: [50, 60] }]);
   });
+
+  // H5 gate fix: default threshold raised 6 -> 8 to thin the congested-hub
+  // starburst (see the function's own comment) — pinned here with NO third
+  // argument so a future accidental revert back to 6 fails this test rather
+  // than only showing up as a by-eye regression.
+  it("defaults its threshold to 8 (H5 gate fix, raised from 6) when no threshold argument is passed", () => {
+    const trueXY: [number, number][] = [[0, 0]];
+    expect(driftConnectors(trueXY, [[7, 0]])).toEqual([]); // 7 units: under the new default, no connector
+    expect(driftConnectors(trueXY, [[9, 0]])).toEqual([{ truePos: [0, 0], shownPos: [9, 0] }]); // 9 units: over it
+  });
 });
 
 describe("driftConnectorMarkup", () => {
@@ -466,5 +477,37 @@ describe('svgUserPoint: screen px -> viewBox user-space (inverse of preserveAspe
   it("offsets by the current viewBox's own x/y when already zoomed/panned", () => {
     const vb = { x: 50, y: 20, w: 100, h: 100 };
     expect(svgUserPoint(vb, 100, 100, 0, 0)).toEqual([50, 20]);
+  });
+});
+
+describe("vbPercentXY: viewBox user-space -> left/top percentage (H5 gate fix — the hierarchy right-edge clip)", () => {
+  const BASE = { x: 0, y: 0, w: 460, h: 300 };
+
+  it("with no inset, maps the viewBox's own corners to exactly 0%/100% (the pre-fix behavior)", () => {
+    expect(vbPercentXY(BASE, 0, 0)).toEqual([0, 0]);
+    expect(vbPercentXY(BASE, 460, 300)).toEqual([100, 100]);
+  });
+
+  it("with no inset, the centre still lands at 50%/50%", () => {
+    expect(vbPercentXY(BASE, 230, 150)).toEqual([50, 50]);
+  });
+
+  it("with a non-zero inset, the viewBox's own corners land INSIDE [0,100] instead of exactly at the edge — the fix itself", () => {
+    const [left, top] = vbPercentXY(BASE, 460, 300, 4);
+    expect(left).toBeCloseTo(96, 5); // 100 - insetPct, not 100
+    expect(top).toBeCloseTo(96, 5);
+    const [left0, top0] = vbPercentXY(BASE, 0, 0, 4);
+    expect(left0).toBeCloseTo(4, 5); // insetPct, not 0
+    expect(top0).toBeCloseTo(4, 5);
+  });
+
+  it("a non-zero inset still leaves the centre point at exactly 50%/50% (only the extremes move)", () => {
+    expect(vbPercentXY(BASE, 230, 150, 4)).toEqual([50, 50]);
+  });
+
+  it("offsets by the current viewBox's own x/y when already zoomed/panned, same as svgUserPoint's inverse", () => {
+    const vb = { x: 50, y: 20, w: 100, h: 100 };
+    expect(vbPercentXY(vb, 50, 20)).toEqual([0, 0]);
+    expect(vbPercentXY(vb, 150, 120)).toEqual([100, 100]);
   });
 });
