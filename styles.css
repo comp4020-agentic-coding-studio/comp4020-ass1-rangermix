@@ -1005,8 +1005,20 @@ a {
      background (found live: "Dijkstra — 1[3,249]", "Bidirectional
      — [8,]cl[653]"). Shrinking the buttons (and tightening their offset to
      match) clears the chip's row entirely at this panel size instead of
-     removing either control. */
+     removing either control.
+     G6 gate fix: G2 (this polish round, §16.7) gave every compare panel a
+     THIRD button (zoom-fit, "Map" — the overlay's own fit toggle had no
+     Compare-mode surface before that), which this rule never learned about:
+     three 32px buttons at a 4px gap stack to 104px tall, so the F6-tuned
+     `bottom: 6px` column once again starts ~17px from the panel's top and
+     re-covers the chip's row (found live the same way F6's own bug was:
+     "Dijkstra — 1[3,249]" truncated). Laying the three out as a ROW instead
+     of a column sidesteps the height math entirely — a 104px-wide strip
+     fits easily inside a 171px-wide quad panel with room either side, and a
+     single button's own 32px height leaves the chip's row untouched
+     regardless of how many controls end up in the strip. */
   .compare-grid-quad .zoom-controls {
+    flex-direction: row;
     right: 6px;
     bottom: 6px;
     gap: 4px;
