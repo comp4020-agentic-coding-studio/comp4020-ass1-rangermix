@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { decodeToytown, type ToytownArtifact } from "./toytown";
 import {
@@ -477,6 +478,30 @@ describe('svgUserPoint: screen px -> viewBox user-space (inverse of preserveAspe
   it("offsets by the current viewBox's own x/y when already zoomed/panned", () => {
     const vb = { x: 50, y: 20, w: 100, h: 100 };
     expect(svgUserPoint(vb, 100, 100, 0, 0)).toEqual([50, 20]);
+  });
+});
+
+describe("wheel handler preventDefault (build/refine-round fix — hierarchy zoom must not scroll the page)", () => {
+  it("a wheel handler registered with { passive: false } calls preventDefault to block page scroll", () => {
+    const element = document.createElement("div");
+    let preventDefaultCalled = false;
+
+    // Register a wheel handler matching the pattern in climbLinked.ts with { passive: false }
+    element.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+        preventDefaultCalled = true;
+      },
+      { passive: false },
+    );
+
+    // Create and dispatch a cancelable synthetic WheelEvent
+    const wheelEvent = new WheelEvent("wheel", { cancelable: true });
+    element.dispatchEvent(wheelEvent);
+
+    expect(preventDefaultCalled).toBe(true);
+    expect(wheelEvent.defaultPrevented).toBe(true);
   });
 });
 

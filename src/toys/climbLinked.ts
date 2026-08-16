@@ -635,12 +635,12 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
   hierZoomOutBtn?.addEventListener("click", () => hierZoomAtCentre(1 / BUTTON_ZOOM_FACTOR));
 
   if (hierStage && hierSvg) {
-    // Wheel zooms about the cursor, same { passive: false } + preventDefault
-    // convention as the real map's own wheel handler so the page doesn't
-    // ALSO scroll while the panel zooms under the cursor.
+    // Wheel zooms about the cursor. `{ passive: false }` + preventDefault so
+    // the page doesn't ALSO scroll while the panel zooms under the cursor.
     hierStage.addEventListener(
       "wheel",
       (e) => {
+        e.preventDefault();
         const rect = hierSvg.getBoundingClientRect();
         const [px, py] = svgUserPoint(hierVb, rect.width, rect.height, e.clientX - rect.left, e.clientY - rect.top);
         hierVb = svgZoomAbout(hierVb, Math.pow(WHEEL_ZOOM_BASE, -e.deltaY), px, py, HIER_BASE_VB.w, HIER_BASE_VB.h);
