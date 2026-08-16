@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import { decodeToytown, type ToytownArtifact } from "./toytown";
 import {
   advancePick,
+  contextPolylineMarkup,
   declutterXY,
+  driftConnectorMarkup,
+  driftConnectors,
   edgeClsOf,
   IDLE_PICK,
   isArterial,
   physicalEdges,
   roadPolylineMarkup,
+  svgPan,
+  svgUserPoint,
+  svgZoomAbout,
   unorderedKey,
 } from "./toytownView";
 
@@ -301,5 +307,164 @@ describe("declutterXY: nudges near-coincident points apart", () => {
       expect(out[0][0]).toBeGreaterThanOrEqual(0);
       expect(out[0][1]).toBeLessThanOrEqual(300);
     });
+  });
+});
+
+// ---------------------------------------------------------------------
+// H3 (refine round, design spec §17.5/.6): the context layer, drift
+// connectors, and the hierarchy panel's SVG viewBox zoom.
+// ---------------------------------------------------------------------
+
+describe("contextPolylineMarkup: the faint §17.5 context layer", () => {
+  it('draws one <polyline class="context-line"> per context polyline, with points but no data-a/data-b', () => {
+    const artifact: ToytownArtifact = {
+      ...ARTIFACT,
+      context: [
+        [
+          [100, 100],
+          [200, 200],
+        ],
+        [
+          [300, 100],
+          [400, 100],
+          [400, 200],
+        ],
+      ],
+    };
+    const t = decodeToytown(artifact);
+    const markup = contextPolylineMarkup(t);
+    expect(markup.match(/<polyline/g)).toHaveLength(2);
+    expect(markup).toContain('class="context-line"');
+    expect(markup).not.toContain("data-a");
+  });
+
+  it("draws nothing when the artifact has no context field at all (older/hand-built artifacts)", () => {
+    const t = decodeToytown(ARTIFACT); // ARTIFACT (this file's shared fixture) has no `context`
+    expect(contextPolylineMarkup(t)).toBe("");
+  });
+});
+
+describe("driftConnectors: which nodes' decluttered button drifted past the threshold (§17.5 delta 3)", () => {
+  it("flags a node whose shown position is more than the threshold away from its true position", () => {
+    const trueXY: [number, number][] = [[100, 100]];
+    const shownXY: [number, number][] = [[110, 100]]; // 10 units away
+    expect(driftConnectors(trueXY, shownXY, 6)).toEqual([{ truePos: [100, 100], shownPos: [110, 100] }]);
+  });
+
+  it("does not flag a node within the threshold", () => {
+    const trueXY: [number, number][] = [[100, 100]];
+    const shownXY: [number, number][] = [[103, 100]]; // 3 units away
+    expect(driftConnectors(trueXY, shownXY, 6)).toEqual([]);
+  });
+
+  it("preserves per-node correspondence, skipping only the untouched nodes", () => {
+    const trueXY: [number, number][] = [
+      [0, 0],
+      [50, 50],
+      [100, 100],
+    ];
+    const shownXY: [number, number][] = [
+      [0, 0],
+      [50, 60], // only this one moved (10 units)
+      [100, 100],
+    ];
+    expect(driftConnectors(trueXY, shownXY, 6)).toEqual([{ truePos: [50, 50], shownPos: [50, 60] }]);
+  });
+});
+
+describe("driftConnectorMarkup", () => {
+  it("draws one <line> per connector, from the true position to the shown position", () => {
+    const markup = driftConnectorMarkup([{ truePos: [1, 2], shownPos: [3, 4] }]);
+    expect(markup).toContain('x1="1" y1="2" x2="3" y2="4"');
+    expect(markup.match(/<line/g)).toHaveLength(1);
+  });
+
+  it("draws nothing for an empty connector list", () => {
+    expect(driftConnectorMarkup([])).toBe("");
+  });
+});
+
+describe("svgZoomAbout: anchor-preserving SVG viewBox zoom (design spec §17.6)", () => {
+  const BASE = { x: 0, y: 0, w: 460, h: 300 };
+
+  it("zooming in shrinks the viewBox (narrower w/h reads as MORE zoomed in)", () => {
+    const out = svgZoomAbout(BASE, 2, 230, 150, 460, 300);
+    expect(out.w).toBeCloseTo(230, 5);
+    expect(out.h).toBeCloseTo(150, 5);
+  });
+
+  it("keeps the anchor point at the SAME fractional position within the viewBox after zooming", () => {
+    const px = 100;
+    const py = 80;
+    const beforeFracX = (px - BASE.x) / BASE.w;
+    const beforeFracY = (py - BASE.y) / BASE.h;
+    const after = svgZoomAbout(BASE, 3, px, py, 460, 300);
+    expect((px - after.x) / after.w).toBeCloseTo(beforeFracX, 6);
+    expect((py - after.y) / after.h).toBeCloseTo(beforeFracY, 6);
+  });
+
+  it("clamps the zoom level at 6x: repeated zoom-in stops shrinking the viewBox further", () => {
+    let vb = BASE;
+    for (let i = 0; i < 20; i++) vb = svgZoomAbout(vb, 2, 230, 150, 460, 300);
+    expect(vb.w).toBeCloseTo(460 / 6, 5);
+    expect(vb.h).toBeCloseTo(300 / 6, 5);
+  });
+
+  it("clamps the zoom level at 1x: zooming out never grows the viewBox past the base extent", () => {
+    const zoomedIn = svgZoomAbout(BASE, 3, 230, 150, 460, 300);
+    const out = svgZoomAbout(zoomedIn, 0.01, 230, 150, 460, 300);
+    expect(out.w).toBeCloseTo(460, 5);
+    expect(out.h).toBeCloseTo(300, 5);
+    expect(out.x).toBeCloseTo(0, 5);
+    expect(out.y).toBeCloseTo(0, 5);
+  });
+
+  it("clamps pan so the viewBox never drifts outside [0,w0] x [0,h0], even zoomed hard at a corner", () => {
+    const out = svgZoomAbout(BASE, 6, 0, 0, 460, 300);
+    expect(out.x).toBeGreaterThanOrEqual(0);
+    expect(out.y).toBeGreaterThanOrEqual(0);
+    expect(out.x + out.w).toBeLessThanOrEqual(460 + 1e-6);
+    expect(out.y + out.h).toBeLessThanOrEqual(300 + 1e-6);
+  });
+
+  it("leaves vb unchanged when the base extent is degenerate (w0 or h0 <= 0)", () => {
+    expect(svgZoomAbout(BASE, 2, 100, 100, 0, 300)).toEqual(BASE);
+    expect(svgZoomAbout(BASE, 2, 100, 100, 460, 0)).toEqual(BASE);
+  });
+});
+
+describe("svgPan", () => {
+  it("shifts the viewBox by (dx, dy)", () => {
+    const vb = { x: 10, y: 10, w: 100, h: 100 };
+    expect(svgPan(vb, 5, -3, 460, 300)).toEqual({ x: 15, y: 7, w: 100, h: 100 });
+  });
+
+  it("clamps so the viewBox never drifts outside [0,w0] x [0,h0]", () => {
+    const vb = { x: 0, y: 0, w: 100, h: 100 };
+    const out = svgPan(vb, -50, 1000, 460, 300);
+    expect(out.x).toBe(0); // can't go below 0
+    expect(out.y).toBe(200); // clamped to h0 - h = 300 - 100
+  });
+});
+
+describe('svgUserPoint: screen px -> viewBox user-space (inverse of preserveAspectRatio="none")', () => {
+  it("maps the box's top-left/bottom-right corners to the viewBox's own corners", () => {
+    const vb = { x: 0, y: 0, w: 460, h: 300 };
+    expect(svgUserPoint(vb, 920, 600, 0, 0)).toEqual([0, 0]);
+    expect(svgUserPoint(vb, 920, 600, 920, 600)).toEqual([460, 300]);
+  });
+
+  it('scales each axis independently, matching preserveAspectRatio="none" (not a shared uniform scale)', () => {
+    // The hierarchy panel rendered at 460 wide x 440 tall (task H3's own
+    // taller stage) — x and y must each divide by their OWN box dimension.
+    const vb = { x: 0, y: 0, w: 460, h: 300 };
+    const [x, y] = svgUserPoint(vb, 460, 440, 230, 220);
+    expect(x).toBeCloseTo(230, 5); // half of 460px wide -> half of 460 viewBox units
+    expect(y).toBeCloseTo(150, 5); // half of 440px tall -> half of 300 viewBox units, NOT half of 440
+  });
+
+  it("offsets by the current viewBox's own x/y when already zoomed/panned", () => {
+    const vb = { x: 50, y: 20, w: 100, h: 100 };
+    expect(svgUserPoint(vb, 100, 100, 0, 0)).toEqual([50, 20]);
   });
 });

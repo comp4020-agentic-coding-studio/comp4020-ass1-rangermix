@@ -20,7 +20,16 @@ import { createContractor } from "../algos/chBuild";
 import { dijkstra } from "../algos/dijkstra";
 import { buildCsr, type Graph } from "../algos/graph";
 import { VIEWBOX, VIEWBOX_H, VIEWBOX_W, type Toytown } from "./toytown";
-import { declutterXY, MIN_NODE_DIST, physicalEdges, roadPolylineMarkup, unorderedKey } from "./toytownView";
+import {
+  contextPolylineMarkup,
+  declutterXY,
+  driftConnectorMarkup,
+  driftConnectors,
+  MIN_NODE_DIST,
+  physicalEdges,
+  roadPolylineMarkup,
+  unorderedKey,
+} from "./toytownView";
 
 const FLASH_MS = 800;
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -133,11 +142,16 @@ export function mountContraction(root: HTMLElement, t: Toytown): void {
   // shortcuts earlier clicks already added.
   const contractor = createContractor(t.graph);
   const roads = physicalEdges(t);
+  // Same declutter run nodeButtonsMarkup does internally — see flood.ts's
+  // matching comment (design spec §17.5 delta 3).
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
 
   root.innerHTML =
     `<div class="toy-stage">` +
     `<svg class="toy-svg" viewBox="${VIEWBOX}" aria-hidden="true">` +
+    `<g class="context-layer">${contextPolylineMarkup(t)}</g>` +
     `<g class="edges">${roadPolylineMarkup(roads)}</g>` +
+    `<g class="drift-layer">${driftConnectorMarkup(driftConnectors(t.xy, buttonXY))}</g>` +
     `<g class="shortcuts"></g>` +
     `</svg>` +
     nodeButtonsMarkup(t) +

@@ -135,6 +135,72 @@ export function roadPolylineMarkup(edges: PhysicalEdge[]): string {
     .join("");
 }
 
+/** SVG `<polyline>` markup for the FAINT context layer (design spec §17.5,
+ * task H3) — every nearby road clipped from the full Canberra graph at
+ * build time (`t.contextGeometry`, decoded by toytown.ts's decodeToytown
+ * from build.ts's toytownContextPolylines), meant to draw BENEATH
+ * roadPolylineMarkup's own output so a real intersection with no toy-graph
+ * edge of its own still reads as sitting on connected geography instead of
+ * floating in blank space. No `data-a`/`data-b` (a context line isn't a
+ * real graph edge — nothing ever looks one up by node pair) and no state
+ * classes: this layer is purely decorative, never touched/on-route/
+ * flashed — see styles.css's .context-line (opacity/width only, no
+ * transition, no pointer-events). Callers splice this INTO their own SVG
+ * ahead of `roadPolylineMarkup`'s group so paint order puts it underneath
+ * (flood.ts, contraction.ts, order.ts, and climbLinked's map view all do). */
+export function contextPolylineMarkup(t: Toytown): string {
+  return t.contextGeometry
+    .map((poly) => `<polyline class="context-line" points="${poly.map(([x, y]) => `${x},${y}`).join(" ")}" />`)
+    .join("");
+}
+
+export interface DriftConnector {
+  truePos: [number, number];
+  shownPos: [number, number];
+}
+
+/** Design spec §17.5 delta 3: which nodes' decluttered BUTTON position
+ * (`shownXY`) drifted more than `threshold` (VIEWBOX units, same space as
+ * declutterXY's own `minDist`) from their TRUE geographic position
+ * (`trueXY`, i.e. `t.xy` before decluttering) — the pairs
+ * driftConnectorMarkup draws a short leader line for. Now that a real
+ * context layer draws the TRUE street underneath (contextPolylineMarkup
+ * above), an un-flagged drift reads as "this node is floating off its
+ * street" — the exact complaint (user feedback: "lots of nodes have no
+ * street connection shown") a visible connector defuses without having to
+ * shrink declutterXY's own separation floor (MIN_NODE_DIST is tuned to a
+ * real screen-px hit-target guarantee at the narrowest supported viewport —
+ * see its own doc comment — so shrinking it risks reintroducing the
+ * overlapping-buttons bug it fixed). Pure and order-preserving: index `i`
+ * in the result corresponds 1:1 to node `i`, filtered to only the
+ * displaced ones. */
+export function driftConnectors(
+  trueXY: [number, number][], shownXY: [number, number][], threshold = 6,
+): DriftConnector[] {
+  const out: DriftConnector[] = [];
+  for (let i = 0; i < trueXY.length; i++) {
+    const truePos = trueXY[i];
+    const shownPos = shownXY[i];
+    if (Math.hypot(shownPos[0] - truePos[0], shownPos[1] - truePos[1]) > threshold) {
+      out.push({ truePos, shownPos });
+    }
+  }
+  return out;
+}
+
+/** SVG `<line>` markup for driftConnectors' output — a subtle 1px leader
+ * from each displaced node's true spot to its button, styled by
+ * styles.css's .drift-connector (dashed, muted, non-interactive). */
+export function driftConnectorMarkup(connectors: DriftConnector[]): string {
+  return connectors
+    .map(
+      (c) =>
+        `<line class="drift-connector" x1="${c.truePos[0]}" y1="${c.truePos[1]}" ` +
+        `x2="${c.shownPos[0]}" y2="${c.shownPos[1]}" />`,
+    )
+    .join("");
+}
+
 /** Nudges points closer together than `minDist` apart, via a simple
  * iterative pairwise-repulsion pass (each too-close pair splits the
  * shortfall, moving half the deficit each, along their connecting vector;
@@ -265,4 +331,100 @@ export function advancePick(state: PickState, node: number): PickAdvance {
     return { next: { start: state.start, end: node }, complete: [state.start, node] };
   }
   return { next: { start: node, end: null }, complete: null };
+}
+
+// ---------------------------------------------------------------------
+// SVG viewBox zoom (design spec §17.6, task H3): climbLinked's hierarchy
+// panel is a schematic SVG (climb.ts's rank-lift layout, not real
+// geography), so it gets its own small viewBox-rect zoom model rather than
+// reusing src/viz/mapRenderer.ts's geo-anchored ViewState (that module's
+// zoomAbout/panGeo operate on {cLon,cLat,span} against a real bbox/fit —
+// meaningless for a panel whose y-axis is contraction rank, not latitude).
+// The INTERACTION pattern still mirrors the real map's (src/pages/home.ts):
+// wheel-zoom about the cursor, +/- buttons zooming about the current
+// view's own centre (the a11y path — no cursor to anchor on from a
+// keyboard), drag-pan — just expressed as a plain SVG viewBox rectangle
+// instead of a geo ViewState. Pure and unit-tested directly (no DOM): the
+// screen-pixel <-> viewBox conversion (getBoundingClientRect, pointer
+// events) is climbLinked.ts's own thin glue around these.
+// ---------------------------------------------------------------------
+
+/** An SVG `viewBox="x y w h"` rectangle, in the SVG's own user-space units
+ * (climb's case: the same 0-460 x 0-300 space toytown.ts's VIEWBOX_W/
+ * VIEWBOX_H and climb.ts's rank-lift layout already use). */
+export interface ViewBoxRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export const SVG_ZOOM_MIN = 1;
+export const SVG_ZOOM_MAX = 6;
+
+function clampNum(v: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+/** Zooms `vb` by `factor` (>1 zooms in, <1 zooms out) about the point
+ * `(px, py)` — expressed in `vb`'s OWN user-space (see svgUserPoint for
+ * converting a screen-space pointer position into it) — so that point stays
+ * fixed under the cursor while the rest of the view scales around it, the
+ * same anchor-preserving math as the real map's own zoomAbout
+ * (src/viz/mapRenderer.ts), just against a plain rectangle instead of a geo
+ * ViewState. The zoom LEVEL is `w0 / vb.w` (how many times narrower the
+ * current viewBox is than the BASE `w0`x`h0` extent — the fully-zoomed-out
+ * view), clamped to `[SVG_ZOOM_MIN, SVG_ZOOM_MAX]`; `h` scales by the exact
+ * same ratio as `w` so the viewBox's own aspect never drifts from `w0:h0`
+ * (any non-uniform STRETCH — e.g. this panel's own preserveAspectRatio=
+ * "none" mapping the base viewBox onto a taller CSS box — is a presentation
+ * concern the caller's SVG element applies once, on top of whatever
+ * rectangle this function returns, never something this function itself
+ * introduces). Pan is clamped so the viewBox rect never drifts outside
+ * `[0,w0] x [0,h0]` — guarantees `w0 - w >= 0`/`h0 - h >= 0` since
+ * `scale >= SVG_ZOOM_MIN (1)` always holds, so the clamp range is never
+ * inverted. Guards `w0<=0 || h0<=0` by returning `vb` unchanged (defensive
+ * against a caller measuring a not-yet-laid-out element, same reasoning as
+ * mapRenderer.ts's own `fit.scale<=0` guards). */
+export function svgZoomAbout(
+  vb: ViewBoxRect, factor: number, px: number, py: number, w0: number, h0: number,
+): ViewBoxRect {
+  if (!(w0 > 0) || !(h0 > 0)) return vb;
+  const scale = clampNum((w0 / vb.w) * factor, SVG_ZOOM_MIN, SVG_ZOOM_MAX);
+  const w = w0 / scale;
+  const h = h0 / scale;
+  const x = clampNum(px - (px - vb.x) * (w / vb.w), 0, w0 - w);
+  const y = clampNum(py - (py - vb.y) * (h / vb.h), 0, h0 - h);
+  return { x, y, w, h };
+}
+
+/** Pans `vb` by `(dx, dy)` — already expressed in `vb`'s own user-space
+ * units (climbLinked.ts converts a screen-px drag delta into this space
+ * first, dividing by the CURRENT per-axis scale — see its own drag-pan
+ * handler). Clamped to the same `[0,w0] x [0,h0]` bounds as svgZoomAbout, so
+ * a pan can never push the viewBox past the base extent's own edges. Same
+ * `w0<=0 || h0<=0` guard as svgZoomAbout. */
+export function svgPan(vb: ViewBoxRect, dx: number, dy: number, w0: number, h0: number): ViewBoxRect {
+  if (!(w0 > 0) || !(h0 > 0)) return vb;
+  return {
+    ...vb,
+    x: clampNum(vb.x + dx, 0, w0 - vb.w),
+    y: clampNum(vb.y + dy, 0, h0 - vb.h),
+  };
+}
+
+/** Converts a pointer position expressed as `(offsetX, offsetY)` CSS px
+ * within an element rendered at `(boxW, boxH)` CSS px into `vb`'s own
+ * user-space coordinates — the inverse of how `preserveAspectRatio="none"`
+ * maps a viewBox onto its element's box (each axis scales independently by
+ * `boxDim / vb.dim`, no shared uniform scale — unlike the real map's
+ * projectPoint/unprojectPoint, which assume ONE scale for both axes). Pure:
+ * the caller supplies the live `getBoundingClientRect()` numbers rather
+ * than this function reading the DOM itself, so the screen<->user-space
+ * math stays directly testable. */
+export function svgUserPoint(
+  vb: ViewBoxRect, boxW: number, boxH: number, offsetX: number, offsetY: number,
+): [number, number] {
+  if (!(boxW > 0) || !(boxH > 0)) return [vb.x, vb.y];
+  return [vb.x + (offsetX / boxW) * vb.w, vb.y + (offsetY / boxH) * vb.h];
 }

@@ -80,13 +80,22 @@ export async function loadRouting(
  * Decoding (dequantize + build a Graph + project to screen space) lives in
  * src/toys/toytown.ts's decodeToytown, not here — this interface only
  * describes the fetched shape, same division of labor as RenderData/
- * loadRender above. */
+ * loadRender above. `context` (task H3, design spec §17.5) is the faint
+ * backdrop layer: polylines clipped from the FULL Canberra graph's render
+ * geometry down to this artifact's own bbox at build time (build.ts's
+ * toytownContextPolylines), quantized the same absolute-[x,y]-pairs way as
+ * `edges[].geometry`. Optional (rather than required) so a hand-built test
+ * fixture that predates this field — or omits it because a test doesn't
+ * care about the context layer — still typechecks; decodeToytown treats a
+ * missing `context` as an empty layer (nothing extra drawn), never a
+ * crash. */
 export interface ToytownArtifact {
   bbox: [number, number, number, number];
   n: number;
   lon: number[];
   lat: number[];
   edges: { from: number; to: number; w: number; cls: number; geometry: [number, number][] }[];
+  context?: [number, number][][];
 }
 
 /** Fetches public/data/toytown.json — the small Canberra city-centre

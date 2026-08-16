@@ -12,7 +12,10 @@ import { dijkstra } from "../algos/dijkstra";
 import { VIEWBOX, VIEWBOX_H, VIEWBOX_W, type Toytown } from "./toytown";
 import {
   advancePick,
+  contextPolylineMarkup,
   declutterXY,
+  driftConnectorMarkup,
+  driftConnectors,
   IDLE_PICK,
   MIN_NODE_DIST,
   physicalEdges,
@@ -69,12 +72,20 @@ function labelFor(i: number, n: number, from: number, to: number): string {
 
 export function mountFlood(root: HTMLElement, t: Toytown): { playDefault: () => void } {
   const roads = physicalEdges(t);
+  // Same declutter run nodeButtonsMarkup does internally (pure/deterministic
+  // — recomputing is cheap at toytown's ~55-node scale) so the drift
+  // connectors below (design spec §17.5 delta 3) know each button's TRUE
+  // vs SHOWN position without threading a return value through the markup
+  // helper.
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
 
   root.innerHTML =
     `<div class="toy-stage">` +
     `<svg class="toy-svg" viewBox="${VIEWBOX}" role="img" ` +
     `aria-label="Street network used to demonstrate Dijkstra's search.">` +
+    `<g class="context-layer" aria-hidden="true">${contextPolylineMarkup(t)}</g>` +
     `<g class="edges">${roadPolylineMarkup(roads)}</g>` +
+    `<g class="drift-layer" aria-hidden="true">${driftConnectorMarkup(driftConnectors(t.xy, buttonXY))}</g>` +
     `<path class="route-path" d="" />` +
     `</svg>` +
     nodeButtonsMarkup(t) +

@@ -40,12 +40,19 @@ const COORD_SCALE = 1e5; // matches scripts/data/build.ts's emitToytown + routin
  * re-derive the same projection, e.g. to place a click target). `edgeCls`
  * is the same per-edge road-class bucket (0-3), same indexing as
  * `edgeGeometry` — task G5 added it so toytownView's physicalEdges can style
- * the arterial heavier/brighter than local streets (design spec §16.12/13). */
+ * the arterial heavier/brighter than local streets (design spec §16.12/13).
+ * `contextGeometry` (task H3, design spec §17.5) is the faint backdrop
+ * layer — every nearby road clipped from the FULL Canberra graph at build
+ * time (build.ts's toytownContextPolylines), projected to screen space the
+ * SAME way as `edgeGeometry` but with no per-line semantics of its own (no
+ * cls, no direction, no node endpoints — see toytownView's
+ * contextPolylineMarkup): it is geography, not a graph element. */
 export interface Toytown {
   graph: Graph;
   xy: [number, number][];
   edgeGeometry: [number, number][][];
   edgeCls: number[];
+  contextGeometry: [number, number][][];
   bbox: [number, number, number, number];
 }
 
@@ -80,8 +87,14 @@ export function decodeToytown(a: ToytownArtifact): Toytown {
   for (let i = 0; i < a.n; i++) xy.push(toScreen(a.lon[i], a.lat[i]));
   const edgeGeometry: [number, number][][] = a.edges.map((e) => e.geometry.map(([qx, qy]) => toScreen(qx, qy)));
   const edgeCls: number[] = a.edges.map((e) => e.cls);
+  // `a.context` is optional (older/hand-built artifacts may omit it — see
+  // ToytownArtifact's own doc comment) — an absent layer decodes to an
+  // empty one, never a crash.
+  const contextGeometry: [number, number][][] = (a.context ?? []).map((poly) =>
+    poly.map(([qx, qy]) => toScreen(qx, qy)),
+  );
 
-  return { graph, xy, edgeGeometry, edgeCls, bbox: a.bbox };
+  return { graph, xy, edgeGeometry, edgeCls, contextGeometry, bbox: a.bbox };
 }
 
 /** Fetches + decodes public/data/toytown.json in one call — the loader F5's

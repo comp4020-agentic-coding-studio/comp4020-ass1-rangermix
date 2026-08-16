@@ -194,6 +194,37 @@ describe.skipIf(!haveToytown)("toytown artifact (Northbourne-corridor /how/ subg
     const result = chQuery(ch, pair.from, pair.to);
     expect(result.usesShortcut).toBe(true);
   });
+
+  // H3 sensor (design spec §17.5, refine round): the context layer — every
+  // nearby road clipped from the FULL Canberra graph at build time
+  // (build.ts's toytownContextPolylines) — must actually be present and
+  // non-empty (a "context layer" that's always empty isn't one; user
+  // feedback: "show all road / actual map for the mini map that connects
+  // the nodes"), and every point must fall within THIS artifact's own
+  // shipped bbox — the same box its nodes/edges are quantized relative to
+  // (build.ts's emitToytown) — since a context point outside it would mean
+  // the clip leaked geometry past the box it's supposed to be confined to.
+  it("ships a non-empty context layer, entirely within the artifact's own bbox", () => {
+    const context = artifact.context ?? [];
+    expect(context.length).toBeGreaterThan(0);
+    const [minLon, minLat, maxLon, maxLat] = artifact.bbox;
+    const COORD_SCALE = 1e5; // matches build.ts's own quantization grid
+    const lonSpan = Math.round((maxLon - minLon) * COORD_SCALE);
+    const latSpan = Math.round((maxLat - minLat) * COORD_SCALE);
+    let totalPoints = 0;
+    for (const poly of context) {
+      expect(poly.length).toBeGreaterThanOrEqual(2); // never a degenerate single-point "line"
+      for (const [qx, qy] of poly) {
+        totalPoints++;
+        // +/-1 slack for integer rounding at the box edge, not a loose bound.
+        expect(qx).toBeGreaterThanOrEqual(-1);
+        expect(qx).toBeLessThanOrEqual(lonSpan + 1);
+        expect(qy).toBeGreaterThanOrEqual(-1);
+        expect(qy).toBeLessThanOrEqual(latSpan + 1);
+      }
+    }
+    expect(totalPoints).toBeGreaterThan(0);
+  });
 });
 
 describe.skipIf(haveToytown)("toytown artifact missing", () => {

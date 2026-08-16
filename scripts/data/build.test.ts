@@ -1,6 +1,16 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseOsm, buildRoutingGraph, SPEEDS, haversineM, type OverpassJson, type RoutingGraph } from "./build";
+import {
+  buildRoutingGraph,
+  clipPolylineToBbox,
+  haversineM,
+  parseOsm,
+  SPEEDS,
+  toytownContextPolylines,
+  type OverpassJson,
+  type PipeEdge,
+  type RoutingGraph,
+} from "./build";
 
 const fixture = JSON.parse(
   readFileSync(new URL("./fixtures/mini.json", import.meta.url), "utf8"),
@@ -422,5 +432,158 @@ describe("self-loops: a closed way with no other junction on it (e.g. a roundabo
     const selfLoops = g.edges.filter((e) => e.from === rIdx && e.to === rIdx);
     expect(selfLoops.length).toBe(1);
     expect(selfLoops[0].geometry).toEqual([R, X, Y, R]);
+  });
+});
+
+// H3 (refine round, design spec §17.5): the /how/ context layer — every
+// nearby road clipped from the FULL Canberra graph at build time. Plain
+// synthetic coordinates throughout (not the shared `fixture` above) so the
+// geometry each case is exercising is legible by inspection, not entangled
+// with mini.json's own parallel-edge/reversed-oneway story.
+describe("clipPolylineToBbox: Liang-Barsky polyline clip against an axis-aligned box", () => {
+  const BOX: [number, number, number, number] = [0, 0, 10, 10];
+
+  it("returns the polyline unchanged (one run) when it's entirely inside the box", () => {
+    const pts: [number, number][] = [
+      [1, 1],
+      [5, 5],
+      [3, 8],
+    ];
+    expect(clipPolylineToBbox(pts, BOX)).toEqual([pts]);
+  });
+
+  it("returns nothing for a polyline entirely outside the box", () => {
+    const pts: [number, number][] = [
+      [100, 100],
+      [200, 200],
+    ];
+    expect(clipPolylineToBbox(pts, BOX)).toEqual([]);
+  });
+
+  it("clips a segment that crosses one edge of the box, keeping only the inside portion", () => {
+    // (0,0) is ON the box's own corner; (20,0) is well outside it — the
+    // clipped run should stop exactly at x=10 (the box's right edge).
+    const clipped = clipPolylineToBbox(
+      [
+        [0, 0],
+        [20, 0],
+      ],
+      BOX,
+    );
+    expect(clipped).toHaveLength(1);
+    expect(clipped[0]).toEqual([
+      [0, 0],
+      [10, 0],
+    ]);
+  });
+
+  it("splits into TWO separate runs when a polyline exits and re-enters the box", () => {
+    // A "U": starts inside, rises well above the box (y=20), comes back
+    // down inside on the far side — the middle leg never touches the box.
+    const pts: [number, number][] = [
+      [1, 1],
+      [1, 20],
+      [9, 20],
+      [9, 1],
+    ];
+    const clipped = clipPolylineToBbox(pts, BOX);
+    expect(clipped).toHaveLength(2);
+    // First run ends where the polyline crosses y=10 going up; second run
+    // starts where it crosses y=10 coming back down.
+    expect(clipped[0][0]).toEqual([1, 1]);
+    expect(clipped[1][clipped[1].length - 1]).toEqual([9, 1]);
+  });
+
+  it("never produces a degenerate single-point run", () => {
+    // Touches the box at exactly one corner point, otherwise outside.
+    const clipped = clipPolylineToBbox(
+      [
+        [-5, -5],
+        [0, 0],
+        [-5, 5],
+      ],
+      BOX,
+    );
+    for (const run of clipped) expect(run.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("toytownContextPolylines: clip + dedupe the full graph's edges for the context layer", () => {
+  const BOX: [number, number, number, number] = [0, 0, 10, 10];
+
+  it("excludes an edge whose geometry never enters the box", () => {
+    const edges: PipeEdge[] = [
+      {
+        from: 0, to: 1, w: 5, cls: 0,
+        geometry: [
+          [1, 1],
+          [2, 2],
+        ],
+      },
+      {
+        from: 2, to: 3, w: 5, cls: 0,
+        geometry: [
+          [500, 500],
+          [600, 600],
+        ],
+      },
+    ];
+    const out = toytownContextPolylines(edges, BOX);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual([
+      [1, 1],
+      [2, 2],
+    ]);
+  });
+
+  it("dedupes a two-way street's forward + exact-reversed PipeEdge pair to ONE context line", () => {
+    const fwd: [number, number][] = [
+      [1, 1],
+      [4, 4],
+    ];
+    const edges: PipeEdge[] = [
+      { from: 0, to: 1, w: 5, cls: 0, geometry: fwd },
+      { from: 1, to: 0, w: 5, cls: 0, geometry: [...fwd].reverse() as [number, number][] },
+    ];
+    expect(toytownContextPolylines(edges, BOX)).toHaveLength(1);
+  });
+
+  it("does NOT dedupe two genuinely different (non-reversed) polylines", () => {
+    const edges: PipeEdge[] = [
+      {
+        from: 0, to: 1, w: 5, cls: 0,
+        geometry: [
+          [1, 1],
+          [2, 2],
+        ],
+      },
+      {
+        from: 2, to: 3, w: 5, cls: 1,
+        geometry: [
+          [1, 9],
+          [2, 8],
+        ],
+      },
+    ];
+    expect(toytownContextPolylines(edges, BOX)).toHaveLength(2);
+  });
+
+  it("clips a through edge to only its in-box portion", () => {
+    const edges: PipeEdge[] = [
+      {
+        from: 0, to: 1, w: 5, cls: 0,
+        geometry: [
+          [-5, 5],
+          [15, 5],
+        ],
+      },
+    ];
+    const out = toytownContextPolylines(edges, BOX);
+    expect(out).toEqual([
+      [
+        [0, 5],
+        [10, 5],
+      ],
+    ]);
   });
 });

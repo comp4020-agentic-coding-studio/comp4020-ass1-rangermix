@@ -12,7 +12,15 @@
 import { buildCh, createContractor, orderedShortcutCount } from "../algos/chBuild";
 import { transpose, type Graph } from "../algos/graph";
 import { VIEWBOX, VIEWBOX_H, VIEWBOX_W, type Toytown } from "./toytown";
-import { declutterXY, MIN_NODE_DIST, physicalEdges, roadPolylineMarkup } from "./toytownView";
+import {
+  contextPolylineMarkup,
+  declutterXY,
+  driftConnectorMarkup,
+  driftConnectors,
+  MIN_NODE_DIST,
+  physicalEdges,
+  roadPolylineMarkup,
+} from "./toytownView";
 
 const RANDOM_SEED = 7;
 
@@ -147,6 +155,9 @@ function nodeButtonsMarkup(t: Toytown): string {
 
 export function mountOrder(root: HTMLElement, t: Toytown): void {
   const roads = physicalEdges(t);
+  // Same declutter run nodeButtonsMarkup does internally — see flood.ts's
+  // matching comment (design spec §17.5 delta 3).
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
 
   root.innerHTML =
     `<div class="order-tiles" data-role="tiles">${tilesMarkup()}</div>` +
@@ -156,7 +167,9 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
       contract them — watch how you're doing against the heuristic as you go.</p>` +
     `<div class="toy-stage">` +
     `<svg class="toy-svg" viewBox="${VIEWBOX}" aria-hidden="true">` +
+    `<g class="context-layer">${contextPolylineMarkup(t)}</g>` +
     `<g class="edges">${roadPolylineMarkup(roads)}</g>` +
+    `<g class="drift-layer">${driftConnectorMarkup(driftConnectors(t.xy, buttonXY))}</g>` +
     `</svg>` +
     nodeButtonsMarkup(t) +
     `</div>` +

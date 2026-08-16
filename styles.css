@@ -1271,16 +1271,57 @@ html[data-splash-dismissed] .splash {
   height: 100%;
 }
 
+/* Raised from the old 1.2/0.7 (design spec §17.5, task H3): once a real
+   context layer (.context-line below) draws the wider street network
+   underneath, a barely-there local street used to read as just another
+   faint context line instead of "the toy's own road" — every toy node
+   needs to visibly sit ON something (user feedback: "lots of nodes have no
+   street connection shown"). Arterial (.edge-arterial below) already draws
+   heavier/opaque and is untouched. */
 .edge-line {
   fill: none;
   stroke: var(--road);
-  stroke-width: 1.2;
+  stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.7;
+  opacity: 0.88;
   transition:
     stroke 200ms ease,
     opacity 200ms ease;
+}
+
+/* The context layer (design spec §17.5, task H3): every nearby road clipped
+   from the FULL Canberra graph at build time (build.ts's
+   toytownContextPolylines -> toytown.ts's Toytown.contextGeometry ->
+   toytownView's contextPolylineMarkup), drawn BENEATH the toy's own
+   .edge-line roads in every map-based toy (flood, contraction, order,
+   climb's map view). Very faint and non-interactive on purpose — it's
+   geography for orientation, not a graph element: nothing here is ever
+   clickable, touched, or on-route, so no hover/focus/transition rules
+   apply to it the way they do to .edge-line. */
+.context-line {
+  fill: none;
+  stroke: var(--road);
+  stroke-width: 0.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* Design spec §17.5 delta 3, task H3: a short, faint leader line from a
+   node's TRUE geographic position to its declutterXY-nudged button, drawn
+   only when that nudge exceeds driftConnectors' threshold (~6 viewBox
+   units). Now that .context-line draws the TRUE street underneath, an
+   unflagged nudge reads as "this node is floating off its street" — the
+   connector makes the offset legible instead. Dashed (not solid) so it
+   never competes with a real road's own line style. */
+.drift-connector {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 /* The arterial (cls>=2: secondary/primary/trunk/motorway — toytownView's
@@ -1721,11 +1762,13 @@ html[data-splash-dismissed] .splash {
 
 /* Two stacked views in one toy root, hierarchy on top (climb-hierarchy-stage
    is the 2.5-D rank-lifted graph, unchanged from F5) and the real street map
-   below (climb-map-stage — the visitor's click target). Each .toy-stage
-   keeps its own 460x300 aspect-ratio/hit-circle sizing untouched (a plain
-   column stack, not a shared coordinate system), so declutter/hit-area math
-   tuned per-stage stays correct and phone (390px) just stacks the two
-   full-width instead of overflowing. */
+   below (climb-map-stage — the visitor's click target). A plain column
+   stack, not a shared coordinate system, so declutter/hit-area math tuned
+   per-stage stays correct and phone (390px) just stacks the two full-width
+   instead of overflowing. climb-map-stage keeps the base .toy-stage's
+   460x300 aspect-ratio untouched (it draws REAL street geometry, which must
+   never scale non-uniformly); climb-hierarchy-stage overrides its own ratio
+   below (design spec §17.6, task H3: more vertical room for the rank-lift). */
 .climb-views {
   display: flex;
   flex-direction: column;
@@ -1758,9 +1801,68 @@ html[data-splash-dismissed] .splash {
   margin-top: 80px;
 }
 
+/* Design spec §17.6, task H3: more vertical room for the rank-lift —
+   ~440px tall at this stage's own 460px max-width (comfortably inside the
+   spec's 420-460px desktop target), scaling down proportionally on
+   narrower viewports (incl. 390px phone) via the SAME aspect-ratio
+   mechanism rather than a separate media-query height. The underlying
+   rank-lift coordinate space stays climb.ts's own untouched 0-300
+   (BASE_Y/TOP_Y) — climbLinked.ts's own preserveAspectRatio="none" on this
+   stage's <svg> is what actually stretches that space down over the extra
+   height, matching how the percentage-positioned .node-mark/.climb-meet
+   layers already behave (see that file's own comment). cursor/touch-action
+   support the new drag-pan below. Deliberately NOT overflow:hidden here —
+   see .climb-nodes below for why the clip lives one level deeper. */
+.climb-hierarchy-stage {
+  aspect-ratio: 460 / 440;
+  cursor: grab;
+  touch-action: none;
+}
+
+.climb-hierarchy-stage:active {
+  cursor: grabbing;
+}
+
+/* The hierarchy's own zoom +/- (design spec §17.6): reuses .zoom-controls/
+   .zoom-btn's 44x44px footprint, border, and hover treatment verbatim
+   (src/pages/home.ts's real-map controls), so it reads as the same control
+   everywhere on the site — but NOT its position:absolute overlay-in-a-
+   corner placement: a touched node's real x/rank position can legitimately
+   land anywhere in this panel (unlike the real map, whose zoom corner never
+   has to share space with a specific data point), including the exact
+   corner an overlaid control would occupy — found live on the graph's own
+   DEFAULT pair, no re-pick needed (see the H3 report). Instead this is its
+   own normal-flow row, between the view label and the stage (climbLinked.ts
+   markup), right-aligned via justify-content so it still reads as
+   "belonging" to the panel below with the same visual weight as a corner,
+   but with zero collision risk against ANY node position. */
+.hier-zoom-controls {
+  position: static;
+  flex-direction: row;
+  justify-content: flex-end;
+  margin: 0 0 10px;
+}
+
+/* overflow:hidden matters once the HIERARCHY stage is ZOOMABLE (design spec
+   §17.6, task H3 — climb-map-stage's own .climb-nodes never needs this,
+   since map node percentages are always relative to the fixed, never-zoomed
+   VIEWBOX_W/VIEWBOX_H, so nothing here changes for it): a ghost node well
+   outside the current zoomed-in viewBox computes a left/top percentage
+   outside [0,100]% (climbLinked.ts's own hierPercentXY, relative to the
+   CURRENT hierVb) — a plain positioned <div> doesn't clip itself the way an
+   <svg> root does by default, so without this the stray node-marks escaped
+   THIS layer's own box and scattered across the rest of the page (found
+   live: zooming in threw stray node dots as far as the page's own right
+   edge — see the H3 report). Scoped to .climb-nodes itself, one level
+   INSIDE .climb-hierarchy-stage, rather than the stage: .climb-meet (a
+   SIBLING, not a descendant of this) still needs to render past the box's
+   own top edge into the stage's 80px margin-top headroom when the meet
+   node sits near the top of the range (see .climb-view .toy-stage's own
+   comment) — clipping at the STAGE level would cut the star off too. */
 .climb-nodes {
   position: absolute;
   inset: 0;
+  overflow: hidden;
 }
 
 .climb-edge {

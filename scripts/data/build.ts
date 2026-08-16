@@ -619,7 +619,7 @@ export function emit(g: RoutingGraph, outDir: string): EmitResult {
 // with a real, visible spine rather than a corner clip.
 const TOYTOWN_BBOX: [number, number, number, number] = [149.12805, -35.28145, 149.13455, -35.27295];
 
-export interface ToytownEmitResult { nodes: number; edges: number; gzBytes: number }
+export interface ToytownEmitResult { nodes: number; edges: number; gzBytes: number; contextPolylines: number }
 
 /** Keeps only ways whose EVERY referenced node falls inside `bbox` — a way
  * with even one node outside is dropped whole rather than clipped, so every
@@ -676,6 +676,201 @@ export function toytownHierarchyStats(g: RoutingGraph): ToytownHierarchyStats {
   return { edges, cls0, cls0Frac: edges > 0 ? cls0 / edges : 0, maxCls, hasArterial: maxCls >= 2 };
 }
 
+// ---------------------------------------------------------------------
+// Context layer (design spec §17.5, refine round task H3): a faint backdrop
+// of every nearby road, drawn BENEATH toytown's own graph so a real
+// intersection with no toy-graph edge of its own still reads as sitting on
+// connected geography instead of floating in blank space (user feedback:
+// "lots of nodes have no street connection shown ... show all road / actual
+// map for the mini map that connects the nodes"). The spec's own words are
+// "clipped from the full render geometry at build time" — the FULL Canberra
+// graph's edge geometry (the same PipeEdge[] emit() draws render.json's
+// lines from), clipped down to toytown's own shipped bbox. Deliberately NOT
+// a second raw-OSM parse widened past drivable classes: fetch.ts's Overpass
+// query filters to SPEEDS' highway classes SERVER-SIDE (see its QUERY
+// regex), so footway/cycleway/path/pedestrian/service/track were never
+// fetched into the cache in the first place — confirmed empirically against
+// the committed cache (zero elements carry those highway values) — and the
+// pipeline is offline-only (this repo's CLAUDE.md), so there is no way to
+// recover them without a network call this task is explicitly told never to
+// make. Clipping the FULL graph's already-contracted drivable geometry also
+// shows MORE of the real network within the bbox than toytown's own cut
+// does: cutToytown's waysWithinBbox drops a way ENTIRELY the moment even one
+// referenced node falls outside the box, and the toytown-only SCC/
+// contraction run over such a tiny island can itself drop small fragments a
+// wider graph keeps connected — both losses are sidestepped by clipping the
+// wider graph's geometry instead of re-deriving a second small graph.
+// ---------------------------------------------------------------------
+
+/** Liang-Barsky clip of segment (x0,y0)-(x1,y1) against an axis-aligned
+ * `[minX,minY,maxX,maxY]` bbox — the clipped `[[cx0,cy0],[cx1,cy1]]`
+ * sub-segment, or `null` if the segment misses the box entirely (including a
+ * degenerate segment whose single point sits outside it). Standard
+ * parametric-line clip: walks the four half-plane tests (left/right/bottom/
+ * top), narrowing `[tMin,tMax]` along the segment's own parameterization
+ * each time, rejecting as soon as the interval empties. */
+function clipSegmentToBbox(
+  x0: number, y0: number, x1: number, y1: number,
+  bbox: [number, number, number, number],
+): [[number, number], [number, number]] | null {
+  const [minX, minY, maxX, maxY] = bbox;
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  let tMin = 0;
+  let tMax = 1;
+  const clip = (p: number, q: number): boolean => {
+    if (p === 0) return q >= 0; // segment parallel to this boundary pair: reject unless already inside it
+    const r = q / p;
+    if (p < 0) {
+      if (r > tMax) return false;
+      if (r > tMin) tMin = r;
+    } else {
+      if (r < tMin) return false;
+      if (r < tMax) tMax = r;
+    }
+    return true;
+  };
+  if (!clip(-dx, x0 - minX)) return null;
+  if (!clip(dx, maxX - x0)) return null;
+  if (!clip(-dy, y0 - minY)) return null;
+  if (!clip(dy, maxY - y0)) return null;
+  if (tMin > tMax) return null;
+  return [
+    [x0 + tMin * dx, y0 + tMin * dy],
+    [x0 + tMax * dx, y0 + tMax * dy],
+  ];
+}
+
+/** Clips a whole polyline to `bbox`, returning zero or more sub-polylines —
+ * a road that leaves and re-enters the box becomes separate runs, not one
+ * line that teleports across the gap. Consecutive clipped segments that
+ * share an endpoint (the common case: both fully inside the box, so the
+ * clip is the identity and the shared vertex compares EXACTLY equal, no
+ * floating-point drift) are stitched into one growing polyline; a segment
+ * that misses the box entirely closes off whatever run was in progress.
+ * Pure and unit-tested directly (build.test.ts) — the exact same algorithm
+ * a caller would otherwise have to trust by eye against a real map. */
+export function clipPolylineToBbox(
+  points: [number, number][], bbox: [number, number, number, number],
+): [number, number][][] {
+  const result: [number, number][][] = [];
+  let current: [number, number][] = [];
+  for (let i = 0; i + 1 < points.length; i++) {
+    const [x0, y0] = points[i];
+    const [x1, y1] = points[i + 1];
+    const clipped = clipSegmentToBbox(x0, y0, x1, y1, bbox);
+    // A clip that collapses to a single point (tMin === tMax below: the
+    // segment only GRAZES the box's boundary — a corner or edge tangent —
+    // without truly crossing into the interior) contributes no visible
+    // line, so it's treated the same as a miss: closes off whatever run
+    // was in progress rather than appending a zero-length hop to it.
+    // Found live against the real Canberra graph (a handful of the 135
+    // clipped toytown context polylines were exactly this before the
+    // guard — see the H3 report).
+    const degenerate = clipped && clipped[0][0] === clipped[1][0] && clipped[0][1] === clipped[1][1];
+    if (!clipped || degenerate) {
+      if (current.length >= 2) result.push(current);
+      current = [];
+      continue;
+    }
+    const [a, b] = clipped;
+    if (current.length === 0) {
+      current.push(a, b);
+    } else {
+      const last = current[current.length - 1];
+      if (last[0] === a[0] && last[1] === a[1]) {
+        current.push(b);
+      } else {
+        if (current.length >= 2) result.push(current);
+        current = [a, b];
+      }
+    }
+  }
+  if (current.length >= 2) result.push(current);
+  return result;
+}
+
+/** Cheap reject: does `geometry`'s own axis-aligned bounding box even
+ * overlap `bbox`? Run ahead of the real per-segment clip so the tens of
+ * thousands of full-graph edges nowhere near the tiny toytown box (almost
+ * all of them) cost one min/max scan each, not a full Liang-Barsky pass. */
+function edgeBboxOverlaps(
+  geometry: [number, number][], bbox: [number, number, number, number],
+): boolean {
+  const [minX, minY, maxX, maxY] = bbox;
+  let eMinX = Infinity, eMinY = Infinity, eMaxX = -Infinity, eMaxY = -Infinity;
+  for (const [x, y] of geometry) {
+    if (x < eMinX) eMinX = x;
+    if (x > eMaxX) eMaxX = x;
+    if (y < eMinY) eMinY = y;
+    if (y > eMaxY) eMaxY = y;
+  }
+  return eMaxX >= minX && eMinX <= maxX && eMaxY >= minY && eMinY <= maxY;
+}
+
+/** A direction-independent identity for a polyline's geometry: whichever of
+ * (forward, reversed) sorts first lexicographically, so a two-way street's
+ * two PipeEdges (forward + the exact-reversed geometry edgesForWay builds
+ * for the return direction) produce the SAME key. Exact string equality is
+ * safe here (no epsilon needed) — both directions trace the literal same
+ * float coordinates, just in opposite order, never independently
+ * re-measured. */
+function canonicalPolylineKey(points: [number, number][]): string {
+  const fwd = points.map(([x, y]) => `${x},${y}`).join(";");
+  const rev = [...points].reverse().map(([x, y]) => `${x},${y}`).join(";");
+  return fwd < rev ? fwd : rev;
+}
+
+/** The context layer's raw (un-quantized) geometry: `fullEdges`'s polylines
+ * clipped to `bbox`, deduped by canonical geometry key BEFORE clipping so a
+ * two-way street's forward/reverse PipeEdge pair contributes ONE clipped
+ * line, not two identical ones stacked on each other (see
+ * canonicalPolylineKey). Deliberately NOT ALSO deduped against toytown's own
+ * cut edges (which the caller draws on top, more brightly — see
+ * toytownView's roadPolylineMarkup and styles.css's .edge-line vs
+ * .context-line stacking): that would mean matching geometry across two
+ * INDEPENDENTLY chain-contracted representations — the full graph contracts
+ * through-nodes using every junction in Canberra, the toytown-only cut using
+ * just the ~60 junctions inside this one bbox, so the same physical street
+ * can legitimately end up as different edge spans in each — fragile to get
+ * exactly right for a layer that always renders BENEATH the brighter toy
+ * edges anyway, so any overlap is invisible overdraw, never a visible
+ * artifact. Chosen over exact dedup per this task's own documented option. */
+// A road that clips the bbox for less than this (degrees, ~5 quantized
+// units — see COORD_SCALE below — roughly half a metre at Canberra's
+// latitude) reads as nothing at toytown's scale: found live against the
+// real graph, a handful of the clipped Canberra edges just grazed a corner
+// of the bbox for a couple of pixels' worth of real-world distance before
+// leaving it again (see the H3 report). Dropping these keeps the shipped
+// artifact free of near-invisible fragments without losing anything a
+// visitor could actually see.
+const MIN_CONTEXT_POLYLINE_DEGREES = 5e-5;
+
+function polylineLength(points: [number, number][]): number {
+  let len = 0;
+  for (let i = 1; i < points.length; i++) {
+    len += Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+  }
+  return len;
+}
+
+export function toytownContextPolylines(
+  fullEdges: PipeEdge[], bbox: [number, number, number, number],
+): [number, number][][] {
+  const seen = new Set<string>();
+  const out: [number, number][][] = [];
+  for (const e of fullEdges) {
+    if (!edgeBboxOverlaps(e.geometry, bbox)) continue;
+    const key = canonicalPolylineKey(e.geometry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    for (const clipped of clipPolylineToBbox(e.geometry, bbox)) {
+      if (polylineLength(clipped) >= MIN_CONTEXT_POLYLINE_DEGREES) out.push(clipped);
+    }
+  }
+  return out;
+}
+
 /** Quantizes `g` (relative to ITS OWN bbox, not the main graph's) and
  * writes public/data/toytown.json. Geometry encoding: each edge's
  * `geometry` is its full point list (endpoints included, matching
@@ -685,8 +880,16 @@ export function toytownHierarchyStats(g: RoutingGraph): ToytownHierarchyStats {
  * NOT delta-encoded like render.json's lines: at toytown's scale (dozens of
  * nodes, ~100 edges) the byte savings are noise against the 4 MB budget,
  * and absolute coordinates decode with no running-position bookkeeping —
- * simplicity wins over density here. */
-export function emitToytown(g: RoutingGraph, outDir: string): ToytownEmitResult {
+ * simplicity wins over density here. `context` (task H3, design spec §17.5)
+ * is encoded the SAME way — absolute quantized [x,y] pairs per polyline
+ * point, on this artifact's own bbox — for the same reason: at a few dozen
+ * short clipped polylines, delta-encoding would save bytes nobody would
+ * notice against the 4 MB budget (see the H3 report for the measured
+ * total). `fullEdges` is the FULL Canberra graph's own edge list (what
+ * emit() draws render.json's lines from) — passed in rather than re-read
+ * from disk, since main() below already built it once for the real emit()
+ * call. */
+export function emitToytown(g: RoutingGraph, outDir: string, fullEdges: PipeEdge[]): ToytownEmitResult {
   const n = g.lon.length;
   const allPoints: [number, number][] = [];
   for (let i = 0; i < n; i++) allPoints.push([g.lon[i], g.lat[i]]);
@@ -704,8 +907,11 @@ export function emitToytown(g: RoutingGraph, outDir: string): ToytownEmitResult 
     cls: e.cls,
     geometry: e.geometry.map(([elon, elat]): [number, number] => [qLon(elon), qLat(elat)]),
   }));
+  const context = toytownContextPolylines(fullEdges, bbox).map((poly) =>
+    poly.map(([elon, elat]): [number, number] => [qLon(elon), qLat(elat)]),
+  );
 
-  const json = { bbox, n, lon, lat, edges };
+  const json = { bbox, n, lon, lat, edges, context };
   mkdirSync(outDir, { recursive: true });
   const outPath = resolve(outDir, "toytown.json");
   writeFileSync(outPath, JSON.stringify(json));
@@ -720,9 +926,10 @@ export function emitToytown(g: RoutingGraph, outDir: string): ToytownEmitResult 
     `hierarchy: cls0 ${hierarchy.cls0}/${hierarchy.edges} (${(hierarchy.cls0Frac * 100).toFixed(0)}%), ` +
     `maxCls ${hierarchy.maxCls}, hasArterial ${hierarchy.hasArterial}`,
   );
+  console.log(`context: ${context.length} polylines (clipped from the full render geometry, §17.5)`);
   console.log(`gzip:  ${fmtKB(gzBytes)}`);
 
-  return { nodes: n, edges: edges.length, gzBytes };
+  return { nodes: n, edges: edges.length, gzBytes, contextPolylines: context.length };
 }
 
 // ---------------------------------------------------------------------
@@ -765,7 +972,10 @@ async function main(): Promise<void> {
     `Toytown cut: ${toytownRouting.lon.length.toLocaleString()} nodes, ` +
     `${toytownRouting.edges.length.toLocaleString()} edges (bbox ${JSON.stringify(TOYTOWN_BBOX)})`,
   );
-  emitToytown(toytownRouting, resolve("public/data"));
+  // routing.edges is the FULL Canberra graph's own edge geometry (same one
+  // emit() just drew render.json's lines from) — the context layer's source,
+  // see emitToytown's own doc comment and toytownContextPolylines above.
+  emitToytown(toytownRouting, resolve("public/data"), routing.edges);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
