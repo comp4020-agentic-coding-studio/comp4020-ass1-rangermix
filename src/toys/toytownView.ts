@@ -2,11 +2,12 @@
 // contraction, order, and — since task G5 gave climb a real-geometry MAP
 // view alongside its schematic hierarchy view — climb too now) draws on top
 // of. F5 replaced the hand-made, always-undirected 12-node mini-town with a
-// real ANU-area subgraph (src/toys/toytown.ts); G5 re-cut that subgraph onto
-// a real arterial (design spec §16.12/13) and taught this module to style
-// it. This module holds the pieces of toy logic that are both genuinely
-// shared AND correctness-sensitive enough to be worth pinning with tests
-// once, instead of risking several slightly-different reimplementations:
+// real ANU-area subgraph (src/toys/toytown.ts); G4 re-cut that subgraph onto
+// a real arterial (design spec §16.12), and G5 taught this module to style
+// it (design spec §16.13). This module holds the pieces of toy logic that
+// are both genuinely shared AND correctness-sensitive enough to be worth
+// pinning with tests once, instead of risking several slightly-different
+// reimplementations:
 //
 //  - physicalEdges/roadPolylineMarkup: collapsing the graph's real DIRECTED
 //    edges into one entry per physical street for the base-road

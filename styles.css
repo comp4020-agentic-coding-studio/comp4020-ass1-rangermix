@@ -7,7 +7,18 @@
   --ink: #1c2330;
   --muted: #5a6372;
   --road: #d8d3c8;
-  --road-major: #b3ac9d;
+
+  /* G6 gate (spec §16): the old #b3ac9d was a warm grey only ~1.5:1 off
+     --road — read as "a heavier line" rather than "unmistakably the big
+     road." Nudged darker AND cooler (into the same cool-slate family as
+     --muted/--ink/--route, without reaching their darkness) so the
+     arterial pops against --ground/--road at a glance while staying
+     clearly lighter than --route (never confusable with an actual drawn
+     route line). Shared by both pages: src/viz/mapRenderer.ts's real map
+     (home) and styles.css's .edge-arterial (the /how/ toytown toys) both
+     read this token via src/theme.ts's themeColors(). Dark theme's own
+     value (already a clear navy split) is untouched. */
+  --road-major: #697c94;
   --route: #1c2330;
   --c-dijkstra: #eb6834;
   --c-astar: #4a3aa7;
