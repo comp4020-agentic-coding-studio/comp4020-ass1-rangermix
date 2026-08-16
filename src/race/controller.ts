@@ -2,25 +2,58 @@
 // happens in worker.ts (off-main-thread); this file owns the Worker handle,
 // the rAF replay loop, and turning worker results into MapView draw calls
 // and UI updates. Split the same way mapRenderer.ts is: pure, exported,
-// tested math (sliceForFrame, the text formatters) versus a thin stateful
-// class that composes them with real Worker/canvas/DOM calls (untested here
-// by design — verified by eye once wired into home.ts, same rationale as
-// MapView's own canvas half).
+// tested math (sliceForFrame, the text formatters, activeRacers,
+// routeDeltaPct) versus a thin stateful class that composes them with real
+// Worker/canvas/DOM calls (untested here by design — verified by eye once
+// wired into home.ts, same rationale as MapView's own canvas half).
+//
+// ROSTER SEAM (read this before wiring the UI side — spec §18's deep
+// change): every racer's STABLE identity is `RacerId` (below) —
+// roster.ts's own `RosterEntry["id"]`, five values, unaffected by any
+// toggle. It is NOT the same as `Algo` (worker.ts), which is the
+// WORKER-FACING request/response key space (nine possible values: each
+// roster entry's workerKey, plus bidiKey for the four "searchers"-family
+// entries) — a searcher's `RacerId` never changes, but which `Algo` key
+// represents it flips between workerKey and bidiKey as the family
+// bidirectional modifier toggles (spec §18.6; CH has no bidiKey, so its
+// key never flips). Every UI-facing surface in this file — `RaceUi`'s own
+// methods, `ALGO_LABEL`, `ComparePanel.algo`, `AlgoLayer.algo`,
+// `getActiveRoster()`'s return — is keyed by `RacerId`, matching
+// theme.ts's own roster-round palette keys (`colors[layer.algo]` /
+// `colors[\`${layer.algo}Glow\`]` read `--c-<id>` / `--g-<id>` verbatim,
+// see theme.ts's own comment) and matching a compare panel's/scoreboard
+// row's `data-algo` attribute, which should be set to the roster id so a
+// row's identity (hue, position, label) never changes when the family bidi
+// modifier toggles — only its ⇄ marker should (spec §18.6: "identity hue
+// NEVER changes"). Only `RaceRequest.algos` / `RaceResponse.results` (the
+// worker boundary) ever see the request-key (`Algo`) space; this class
+// translates between the two via `activeRacers()` below, and nothing else
+// in this file should need to.
 
 import { loadRouting } from "../data";
 import { haversine } from "../snap";
 import { effectiveTheme, onThemeChange, themeColors } from "../theme";
 import { strideFor, type MapView } from "../viz/mapRenderer";
+import { ROSTER, type RosterEntry } from "./roster";
 import type { Graph } from "../algos/graph";
 import type { Algo, AlgoResult, RaceRequest, RaceResponse, WorkerResponse } from "./worker";
 
-/** One Compare-mode panel: the racer it's dedicated to, and the MapView that
- * draws ONLY that racer's cloud (plus the shared pins/route — see renderAt).
- * Built by home.ts's syncPanels() from RaceController.getActiveRoster() and
- * handed to setComparePanels(); RaceController never constructs a MapView
- * itself, here or anywhere else — panel lifecycle is entirely home.ts's. */
+/** A racer's STABLE UI identity — roster.ts's own `RosterEntry["id"]`, five
+ * values, never affected by the family bidirectional modifier (that's
+ * `Algo`'s job — see this file's header comment for the full seam). */
+export type RacerId = RosterEntry["id"];
+
+/** One Compare-mode panel: the racer it's dedicated to (a `RacerId` — a
+ * panel's identity, like a scoreboard row's, never changes when the family
+ * bidi modifier toggles), and the MapView that draws ONLY that racer's
+ * cloud (plus the shared pins — and, per spec §18.4, that racer's OWN
+ * route rather than necessarily the shared optimal one; see renderAt).
+ * Built by home.ts's syncPanels() from RaceController.getActiveRoster()
+ * and handed to setComparePanels(); RaceController never constructs a
+ * MapView itself, here or anywhere else — panel lifecycle is entirely
+ * home.ts's. */
 export interface ComparePanel {
-  algo: Algo;
+  algo: RacerId;
   view: MapView;
 }
 
@@ -28,40 +61,56 @@ const REPLAY_MS = 2500;
 const DOT_RADIUS = 1.8;
 const DRAW_CAP = 4000; // see mapRenderer.strideFor: visual sampling cap per frame
 
-// Fixed roster order — Dijkstra and CH are the always-on core comparison
-// (disable-proof: no chip can turn them off); A* and Bidirectional are the
-// two optional racers toggled by chips. This order is never re-derived
-// from which chips happen to be active — scoreboard rows, replay draw
-// order (CH last so its sparks land on top of everything else), and the
-// aria announcement's clause order all read off THIS array so the three
-// surfaces can never disagree with each other.
-const ROSTER: Algo[] = ["dijkstra", "astar", "bidi", "ch"];
+// Display-name lookup, sourced from roster.ts's own `name` field (never a
+// second hand-maintained copy — see roster.ts's header comment on why it's
+// the single source of truth) so the aria sentence, the scoreboard row, and
+// a compare panel's chip can never disagree with roster.ts's own contract-
+// exact strings (roster.test.ts pins the id list this is built from).
+export const ALGO_LABEL: Record<RacerId, string> = Object.fromEntries(
+  ROSTER.map((r) => [r.id, r.name] as const),
+) as Record<RacerId, string>;
 
-// Matches the scoreboard's own static row labels (index.html) exactly, so
-// the spoken aria text and the visible row name are always the same word —
-// "Bidirectional", not "Bidirectional Dijkstra", both to keep the aria
-// sentence readable with four clauses and because the magenta row's label
-// IS this text (the accessibility "direct-label every row" obligation).
-// Exported so home.ts's Compare-mode panel chips (build-review §14.3) can
-// label each panel with the exact same word, rather than a second
-// hard-coded copy that could drift from the scoreboard's own wording.
-export const ALGO_LABEL: Record<Algo, string> = {
-  dijkstra: "Dijkstra",
-  astar: "A*",
-  bidi: "Bidirectional",
-  ch: "Contraction Hierarchies",
-};
+/** ROSTER filtered to the racers active given `activeOptional` (core
+ * racers — Dijkstra, CH — always included, roster.ts's own `core` flag)
+ * and mapped to the WORKER-FACING request key each would race under RIGHT
+ * NOW: `bidiKey` when `familyBidi` is on AND the racer is in the
+ * "searchers" family (spec §18.6 — CH is never affected, it has no
+ * bidiKey to switch to regardless), else `workerKey`. Roster display order
+ * throughout (roster.ts's own array order IS spec §18's display order
+ * already — no separate ordering array to keep in sync, unlike the
+ * pre-roster-round fixed `ROSTER: Algo[]` this replaces). Pure and
+ * exported so this exact derivation — the one both run() (what gets
+ * computed) and getActiveRoster() (what home.ts builds Compare panels for)
+ * must agree on — is unit-testable without a Worker, and the two call
+ * sites structurally cannot disagree (both call this, neither re-derives
+ * it) — same rationale the pre-roster-round activeRoster had, extended
+ * from a 2-flag optional set to the full five-racer roster plus a
+ * family-wide modifier. */
+export function activeRacers(
+  activeOptional: ReadonlySet<RacerId>, familyBidi: boolean,
+): { algo: RacerId; key: Algo }[] {
+  return ROSTER.filter((r) => r.core || activeOptional.has(r.id)).map((r) => ({
+    algo: r.id,
+    key: familyBidi && r.family === "searchers" && r.bidiKey ? r.bidiKey : r.workerKey,
+  }));
+}
 
-/** ROSTER filtered down to the racers that are actually active given
- * `optional` (the currently-toggled-on optional racers — Dijkstra and CH
- * need no entry here, they're unconditional). Pure and exported so this
- * exact filter — the one both `run()` (what gets computed) and
- * `getActiveRoster()` (what home.ts builds Compare panels for) need to
- * agree on — is unit-testable without a real RaceController/Worker/MapView,
- * and so the two call sites structurally cannot disagree (both call this,
- * neither re-derives it). */
-export function activeRoster(optional: ReadonlySet<"astar" | "bidi">): Algo[] {
-  return ROSTER.filter((a) => a === "dijkstra" || a === "ch" || optional.has(a));
+/** spec §18.4's honesty rule, as a number: how much longer (as a
+ * percentage of the true optimal distance) a racer's OWN reported route
+ * is, rounded to 1 decimal. Never negative — a racer can't beat the true
+ * shortest path, only match or lose to it, so a spurious negative from
+ * floating-point noise on an EXACT racer clamps to 0 rather than ever
+ * rendering as "shorter than optimal". `optimalDist <= 0` (a from===to
+ * query) also clamps to 0 rather than dividing by zero. Pure and exported
+ * so this is unit-testable without a real race — see controller.test.ts's
+ * "delta math" cases. The UI renders 0 as "no disclosure" (an exact racer,
+ * or an inexact one that happened to find the optimum this time) — that
+ * choice lives in setRowDelta's caller (reportResults below) and in
+ * whatever the UI does with a 0, not in this function. */
+export function routeDeltaPct(racerDist: number, optimalDist: number): number {
+  if (optimalDist <= 0) return 0;
+  const pct = ((racerDist - optimalDist) / optimalDist) * 100;
+  return Math.round(Math.max(0, pct) * 10) / 10;
 }
 
 /** How many of `total` items should be visible at `elapsedMs` into a
@@ -90,30 +139,39 @@ export function headlineText(dijSettled: number, chSettled: number): string {
 
 /** The once-per-race aria text for an arbitrary ROSTER-ORDER list of active
  * racers — canvas wrapper aria-label AND the `race-live` region share this
- * exact string. Only active racers are named (an inactive chip's algorithm
+ * exact string. Only active racers are named (an inactive row's algorithm
  * never appears), which is why this takes the caller's own already-filtered
  * `entries` rather than a fixed algorithm list. Settled counts use en-AU
  * thousands separators (matches the scoreboard rows); km is the haversine
- * route length, one decimal — never the graph's own travel-TIME distance.
+ * length of the SHARED (optimal) route — never a per-racer distance.
  * "intersections" establishes the unit after the FIRST racer only — every
- * later clause reads as the same count of the same thing, exactly the
- * pattern the original two-racer copy (Dijkstra/CH) already used, extended
- * rather than replaced (see formatAnnouncement below, which is that
- * original two-racer call written in terms of this one). */
-export function formatRosterAnnouncement(entries: { label: string; settled: number }[], km: number): string {
+ * later clause reads as the same count of the same thing. An entry with a
+ * positive `deltaPct` (spec §18.4's honesty rule) gets an extra clause,
+ * "took a X% longer route", appended to its own settled-count clause — an
+ * entry with no `deltaPct` (or exactly 0) reads exactly as it always did,
+ * which is what keeps formatAnnouncement's pinned two-racer contract
+ * (below) byte-identical: dijkstra/CH are always exact, so they never carry
+ * a `deltaPct` at all. */
+export function formatRosterAnnouncement(
+  entries: { label: string; settled: number; deltaPct?: number }[], km: number,
+): string {
   const clauses = entries.map((e, i) => {
     const count = e.settled.toLocaleString("en-AU");
-    return i === 0 ? `${e.label} settled ${count} intersections` : `${e.label} settled ${count}`;
+    const base = i === 0 ? `${e.label} settled ${count} intersections` : `${e.label} settled ${count}`;
+    return e.deltaPct && e.deltaPct > 0 ? `${base}, took a ${e.deltaPct.toFixed(1)}% longer route` : base;
   });
   return `${clauses.join("; ")}. Same ${km.toFixed(1)} km route.`;
 }
 
 /** The MVP two-racer announcement (Dijkstra, CH) — kept as its own function
  * (not inlined at call sites) because it's still exactly what a race with
- * both optional chips OFF produces, and its exact copy is a pinned test
+ * every optional racer OFF produces, and its exact copy is a pinned test
  * contract. Implemented as a call into formatRosterAnnouncement rather than
  * a second copy of the sentence-building logic, so the two can never drift
- * apart. */
+ * apart. Dijkstra/CH are always exact, so neither entry carries a
+ * `deltaPct` — this output is therefore unaffected by spec §18.4's
+ * disclosure clause and stays byte-identical to the pre-roster-round
+ * string. */
 export function formatAnnouncement(dijSettled: number, chSettled: number, km: number): string {
   return formatRosterAnnouncement(
     [
@@ -171,26 +229,47 @@ export function rejectAllPending(pending: Map<number, PendingRace>, reason: stri
 }
 
 export interface RaceUi {
-  setRow(algo: Algo, settled: number, total: number): void;
+  setRow(algo: RacerId, settled: number, total: number): void;
   /** Called once per algo after a race completes (never before) — the
    * caller uses this to lazily create the "wall time" tile/row, which is
    * exactly what makes it "appear only after measurement": it has no
    * static markup to hide, it just doesn't exist until this fires. */
-  setTime(algo: Algo, ms: number): void;
+  setTime(algo: RacerId, ms: number): void;
   setHeadline(text: string): void;
   /** Fires ONCE per race (not per frame) with the same announcement text
    * the aria-label and the race-live region both carry. */
   announce(text: string): void;
+  /** spec §18.4's honesty rule, live: called once per active racer after
+   * every race (reportResults below), `pct` already the exact value
+   * `routeDeltaPct` computed (rounded to 1 decimal, never negative) — the
+   * UI's job is only to render it, never to re-derive or re-round it.
+   * `pct <= 0` means "not disclosed this race" (an exact racer, or an
+   * inexact one that happened to find the optimum) — the honest-empty
+   * case: implementations should clear any previously-shown disclosure
+   * rather than ever printing "+0% longer route" (see home.ts's own
+   * `setRowDelta` for the reference implementation this seam was written
+   * against: it clears `.row-delta`'s text back to "" on `pct <= 0`, which
+   * a `:not(:empty)` CSS rule collapses out of layout, and mirrors the
+   * same value into that racer's compare-panel chip if one is currently
+   * showing, the same dual-write pattern `setRow` already uses for settled
+   * counts). Keyed by RacerId (roster id), NOT the request key that flips
+   * with the family bidi modifier — see this file's header comment. */
+  setRowDelta(algo: RacerId, pct: number): void;
 }
 
 /** One racer's replay data for one frame — ROSTER-ordered inside Frame.layers
  * (only ACTIVE racers present), so draw order and bar-scale max both fall
- * out of "iterate the array", never a per-algo if/else. */
+ * out of "iterate the array", never a per-algo if/else. `path` is THIS
+ * racer's OWN found route (may differ from the shared `Frame.path` for a
+ * disclosed variant — spec §18.4) — carried through so Compare-mode panels
+ * can draw it (see renderAt); the overlay's single shared view never reads
+ * a layer's own `path`, only `Frame.path`. */
 interface AlgoLayer {
-  algo: Algo;
+  algo: RacerId;
   order: Uint32Array;
   total: number;
   stride: number;
+  path: number[];
 }
 
 interface Frame {
@@ -228,20 +307,29 @@ export class RaceController {
   // setComparePanels(); home.ts owns panel lifecycle (creating/destroying
   // MapViews), this class only owns WHERE frames get drawn.
   private comparePanels: ComparePanel[] | null = null;
-  // themeColors() reads ~14 CSS custom properties via getComputedStyle —
+  // themeColors() reads ~14+ CSS custom properties via getComputedStyle —
   // cheap once, wasteful at 60fps inside renderAt's per-frame hot path — so
   // it's cached here and refreshed only when it can actually have changed:
   // once at construction, again at the start of every replay (run()), and
   // on a real theme change.
   private colors: Record<string, string>;
-  // Which OPTIONAL racers (A*, Bidirectional) the chips currently have
-  // switched on — Dijkstra and CH need no such flag, they're unconditional
-  // in every run() call (disable-proof, the core comparison). Lives on the
-  // controller rather than being threaded through every run() call because
-  // run() has several independent callers (pin drag, presets, "R", the
-  // auto-run) that all need to respect whatever the chips currently say,
-  // not just whichever trigger happens to fire next.
-  private readonly optionalActive = new Set<"astar" | "bidi">();
+  // Which OPTIONAL racers (the three A* variants — spec §18's bezel rows)
+  // are currently toggled on. Dijkstra and CH need no entry here: roster.ts
+  // marks them `core: true`, and activeRacers() always includes core
+  // racers regardless of this set's contents. Replaces the pre-roster-
+  // round two-flag `optionalActive: Set<"astar"|"bidi">` — "bidi" is no
+  // longer a member of ANY such set; see `familyBidi` below, a genuinely
+  // different kind of toggle. Lives on the controller rather than being
+  // threaded through every run() call because run() has several
+  // independent callers (pin drag, presets, "R", the auto-run) that all
+  // need to respect whatever the bezel rows currently say.
+  private readonly activeOptional = new Set<RacerId>();
+  // spec §18.6: the "searchers" family's single bidirectional MODIFIER.
+  // When true, every ACTIVE searchers-family racer (Dijkstra always, plus
+  // whichever A* variants are in `activeOptional`) races under its bidiKey
+  // form instead of its workerKey form — see activeRacers(). CH is never
+  // affected (it has no bidiKey; it sits outside the family bezel).
+  private familyBidi = false;
 
   constructor(view: MapView, ui: RaceUi) {
     this.view = view;
@@ -279,37 +367,53 @@ export class RaceController {
     });
   }
 
-  /** Flips one optional racer's chip state for every FUTURE run() call
-   * (this race and on) — home.ts calls this from the chip's click handler,
-   * then re-races the current pins through the scheduler's cancel-first
-   * `now()` entry point (same as any other direct trigger), never `run()`
-   * directly. Dijkstra/CH have no equivalent: they're not in this set, and
-   * run() always includes them regardless. */
-  setAlgoActive(algo: "astar" | "bidi", active: boolean): void {
-    if (active) this.optionalActive.add(algo);
-    else this.optionalActive.delete(algo);
+  /** Flips one optional searcher row's toggle state (astar-straight/
+   * weighted/greedy — spec §18's bezel rows) for every FUTURE run() call.
+   * Dijkstra/CH have no equivalent: they're core (roster.ts's own `core`
+   * flag), always active regardless of this. Replaces the pre-roster-round
+   * `setAlgoActive("astar"|"bidi", active)` — "bidi" is now
+   * setFamilyBidi below, a genuinely different kind of toggle (a
+   * family-wide MODIFIER, not a sixth racer — spec §18.6), not a variant
+   * of this method. Passing a core id is a harmless no-op (activeRacers()
+   * includes core racers unconditionally either way). */
+  setRacerActive(id: RacerId, active: boolean): void {
+    if (active) this.activeOptional.add(id);
+    else this.activeOptional.delete(id);
   }
 
-  /** The racer algos that WOULD run in the next run() call, in ROSTER order
+  /** Flips the "searchers" family's bidirectional modifier (spec §18.6's
+   * bezel-level toggle) for every FUTURE run() call. Affects every ACTIVE
+   * searcher (Dijkstra always, plus whichever A* variants are toggled on
+   * via setRacerActive) — never CH, which sits outside the family bezel
+   * and has no bidiKey to switch to (roster.ts's own contract: only
+   * `family: "searchers"` entries carry one). */
+  setFamilyBidi(active: boolean): void {
+    this.familyBidi = active;
+  }
+
+  /** The racer ids that WOULD run in the next run() call, in ROSTER order
    * — Dijkstra and CH always, plus whichever optional racers are currently
-   * toggled on (see setAlgoActive). home.ts's syncPanels() calls this to
+   * toggled on (see setRacerActive). Returns STABLE `RacerId`s, never the
+   * request key that flips with the family bidi modifier (see this file's
+   * header comment) — a Compare-mode panel's identity must not change just
+   * because the modifier toggled. home.ts's syncPanels() calls this to
    * decide the Compare-mode panel set (build-review §14.3: "one panel per
    * ACTIVE racer") without keeping its own separate copy of "which
    * optional racers are on" that could drift from this class's own. */
-  getActiveRoster(): Algo[] {
-    return activeRoster(this.optionalActive);
+  getActiveRoster(): RacerId[] {
+    return activeRacers(this.activeOptional, this.familyBidi).map((a) => a.algo);
   }
 
   /** Switches the render target between overlay (draw every racer's cloud
    * onto ONE shared view — pass `null`, the default) and Compare (draw
-   * each racer's cloud onto its OWN panel view, pins+route on every panel
-   * — pass the panel set) — see renderAt for exactly how `comparePanels`
-   * changes what gets drawn where. Safe mid-race: replay state lives in
-   * `this.current` (state-as-data, same rule mid-race resize/theme-change
-   * already relies on), so switching modes just re-renders that SAME frame
-   * at its current elapsed time onto the new target(s) via redrawFrame() —
-   * never a new race. A no-op redraw before any race has run (redrawFrame's
-   * own no-op guard). */
+   * each racer's cloud onto its OWN panel view, pins on every panel, and
+   * each panel's OWN route — pass the panel set) — see renderAt for
+   * exactly how `comparePanels` changes what gets drawn where. Safe
+   * mid-race: replay state lives in `this.current` (state-as-data, same
+   * rule mid-race resize/theme-change already relies on), so switching
+   * modes just re-renders that SAME frame at its current elapsed time onto
+   * the new target(s) via redrawFrame() — never a new race. A no-op redraw
+   * before any race has run (redrawFrame's own no-op guard). */
   setComparePanels(panels: ComparePanel[] | null): void {
     this.comparePanels = panels;
     this.redrawFrame();
@@ -338,14 +442,7 @@ export class RaceController {
   // that's the settle-flood animation — but the base road-network layer is
   // untouched by any of it: base only repaints from a MapView's OWN pan/
   // zoom/resize/theme/threshold triggers (mapRenderer.ts's own store
-  // subscription and onThemeChange callback), never from this class. A
-  // replay therefore never pays base-layer cost — crisp-stroke or the
-  // §16.10 interaction-time cache/blit alike — regardless of how many
-  // panels are active, which is what makes MapView's own base-layer caching
-  // (mapRenderer.ts) the whole fix for "compare view lags significantly":
-  // N panels each blitting instead of each fully re-stroking on every pan/
-  // zoom tick, with replay's per-frame cost unchanged (and already batched —
-  // see MapView.drawDots) on top.
+  // subscription and onThemeChange callback), never from this class.
   private renderAt(elapsedMs: number): void {
     const c = this.current;
     if (!c) return;
@@ -367,11 +464,7 @@ export class RaceController {
     // racer's cloud onto the one shared `this.view`, exactly as before
     // Compare mode existed — `comparePanels` is null until home.ts's first
     // setComparePanels(panels) call, so every page that never enters
-    // Compare mode never touches this branch at all. Compare mode draws
-    // each racer's cloud onto ONLY its own panel, while pins+route (shared/
-    // identical regardless of racer) go on every panel — `targets` is
-    // "every view that gets cleared and gets pins+route", one element in
-    // overlay mode, one per active panel in Compare mode.
+    // Compare mode never touches this branch at all.
     const targets: MapView[] = this.comparePanels ? this.comparePanels.map((p) => p.view) : [this.view];
 
     for (const v of targets) v.clearOverlay();
@@ -397,14 +490,10 @@ export class RaceController {
       for (const v of drawTo) {
         v.drawDots(
           layer.order, up, c.graph.lon, c.graph.lat, color,
-          // additive: true UNCONDITIONALLY (§16.8 — was `dark` until this fix,
-          // which meant "wants the density treatment" was silently only ever
-          // true when the theme was ALREADY dark, so MapView's own light-mode
-          // `multiply` branch could never fire from this, the only real call
-          // site). Every settle-flood cloud wants overlap density to read in
-          // EITHER theme; which blend (`lighter` in dark, `multiply` in
-          // light) is MapView's own call, not this caller's — see
-          // drawDots's own doc comment.
+          // additive: true UNCONDITIONALLY (§16.8) — every settle-flood
+          // cloud wants overlap density to read in EITHER theme; which
+          // blend (`lighter` in dark, `multiply` in light) is MapView's
+          // own call, not this caller's — see drawDots's own doc comment.
           { additive: true, radius: DOT_RADIUS, stride: layer.stride },
         );
       }
@@ -412,9 +501,35 @@ export class RaceController {
     }
     const showRoute = elapsedMs >= c.duration && c.path.length >= 2;
     for (const v of targets) {
-      if (showRoute) v.drawRoute(c.path, c.graph.lon, c.graph.lat);
       v.drawPin(c.graph.lon[c.pinA], c.graph.lat[c.pinA], "A");
       v.drawPin(c.graph.lon[c.pinB], c.graph.lat[c.pinB], "B");
+    }
+    if (showRoute) {
+      if (this.comparePanels) {
+        // Compare mode: each panel draws ITS OWN racer's route, which may
+        // legitimately differ from the shared optimal one (spec §18.4's
+        // honesty rule: a disclosed variant's compare panel shows the
+        // route it ACTUALLY found, never silently substituted for the
+        // optimal one — the overlay's single shared view below is where
+        // "the" optimal route always lives). Falls back to the shared
+        // `c.path` only if this racer's own path is degenerate (defensive
+        // — every completed race result has a valid own-path; also covers
+        // a panel whose racer toggled off mid-race, before the next panel
+        // rebuild catches up). Panel isolation (one racer's cloud+route
+        // per panel) is what makes two different routes legible without
+        // any extra styling — which route is whose is unambiguous from
+        // WHICH panel it's drawn on; a colour/dash distinction, if wanted,
+        // is the UI task's to add (this seam only carries the data
+        // through — see AlgoLayer.path's own doc and run()'s comment on
+        // the {algo, path, routeDeltaPct}-per-racer shape).
+        for (const panel of this.comparePanels) {
+          const layer = c.layers.find((l) => l.algo === panel.algo);
+          const routePath = layer && layer.path.length >= 2 ? layer.path : c.path;
+          panel.view.drawRoute(routePath, c.graph.lon, c.graph.lat);
+        }
+      } else {
+        for (const v of targets) v.drawRoute(c.path, c.graph.lon, c.graph.lat);
+      }
     }
   }
 
@@ -437,18 +552,21 @@ export class RaceController {
 
   /** Computes (via the worker) and replays a race between two already-
    * snapped node indices — Dijkstra and CH always, plus whichever optional
-   * racers the chips currently have active (see setAlgoActive). Superseded
-   * races (a newer `run()` call landing while this one is still animating)
-   * bail out silently instead of fighting the newer race for the canvas. */
+   * racers are toggled on (setRacerActive) racing in either their plain or
+   * (setFamilyBidi) bidirectional form. Superseded races (a newer run()
+   * call landing while this one is still animating) bail out silently
+   * instead of fighting the newer race for the canvas. */
   async run(fromNode: number, toNode: number): Promise<void> {
     const token = ++this.raceToken;
-    // ROSTER order, filtered to what's actually active this race — Dijkstra
-    // and CH unconditionally, A*/Bidirectional only if their chip is on.
-    // This exact array is also what gets requested from the worker, so
-    // "active this race" and "computed this race" can never disagree.
-    // Same call getActiveRoster() makes — see activeRoster's own comment
-    // for why the two are never allowed to independently re-derive this.
-    const algos: Algo[] = activeRoster(this.optionalActive);
+    // Roster order, filtered to what's actually active this race and
+    // resolved to each racer's CURRENT request key (plain or bidi — see
+    // activeRacers's own doc). This exact array is also what gets
+    // requested from the worker, so "active this race" and "computed this
+    // race" can never disagree — same call getActiveRoster() makes (via
+    // the same activeRacers()), see that method's own comment for why the
+    // two are never allowed to independently re-derive this.
+    const active0 = activeRacers(this.activeOptional, this.familyBidi);
+    const algos: Algo[] = active0.map((a) => a.key);
     const [{ graph }, res] = await Promise.all([
       this.routingPromise,
       this.request({
@@ -461,18 +579,39 @@ export class RaceController {
     ]);
     if (token !== this.raceToken) return;
 
+    // The core comparison — always requested (roster.ts: dijkstra/ch are
+    // `core: true`) — looked up by PLAIN workerKey specifically, never a
+    // bidi form, even when familyBidi is on: dijkstra/bidijkstra agree on
+    // DISTANCE exactly (equivalence-tested) but bidijkstra's own path can
+    // legitimately differ under ties, and spec §18.4 says the overlay's
+    // shared route is THE optimal one — anchoring it to the always-plain
+    // keys keeps that route stable regardless of the modifier, rather than
+    // silently swapping which concrete path gets drawn based on a toggle
+    // that isn't supposed to change what "the" route means.
     const dij = res.results.dijkstra;
     const ch = res.results.ch;
     if (!dij || !ch) return; // worker only omits a key if we didn't ask for it
 
-    const active = algos
-      .map((algo) => ({ algo, label: ALGO_LABEL[algo], result: res.results[algo] }))
-      .filter((a): a is { algo: Algo; label: string; result: AlgoResult } => a.result !== undefined);
+    const active = active0
+      .map((a) => ({ algo: a.algo, label: ALGO_LABEL[a.algo], result: res.results[a.key] }))
+      .filter((a): a is { algo: RacerId; label: string; result: AlgoResult } => a.result !== undefined);
+
+    // The {algo, path, routeDeltaPct}-per-racer data shape this seam
+    // agrees on (controller.ts <-> the UI task's compare-panel rendering —
+    // "extend the panel render seam minimally, the UI task styles it"):
+    // `algo` and `path` are carried through the replay Frame via
+    // AlgoLayer (below), read by renderAt's Compare-mode route drawing
+    // above; `routeDeltaPct` is NOT stored on the frame — it's computed
+    // once in reportResults, after replay, and pushed to the UI via
+    // ui.setRowDelta(algo, pct), which a real implementation mirrors into
+    // both the scoreboard row AND that racer's compare-panel chip (see
+    // RaceUi.setRowDelta's own doc) — one source of truth for the
+    // percentage, never a second accumulator on the frame that could drift.
     const layers: AlgoLayer[] = active.map(({ algo, result }) => {
       const order = new Uint32Array(result.settled);
-      return { algo, order, total: result.settledCount, stride: strideFor(order.length, DRAW_CAP) };
+      return { algo, order, total: result.settledCount, stride: strideFor(order.length, DRAW_CAP), path: result.path };
     });
-    const path = ch.path.length >= 2 ? ch.path : dij.path; // prefer CH's unpacked path (equivalence guarantee)
+    const path = ch.path.length >= 2 ? ch.path : dij.path; // THE shared optimal route — see the comment above
 
     // Fresh snapshot for this replay, not a per-frame recompute (see the
     // `colors` field comment) — covers a theme change that happened while
@@ -489,17 +628,35 @@ export class RaceController {
   }
 
   private reportResults(
-    active: { algo: Algo; label: string; result: AlgoResult }[],
+    active: { algo: RacerId; label: string; result: AlgoResult }[],
     dij: AlgoResult, ch: AlgoResult, graph: Graph, path: number[],
   ): void {
     for (const a of active) this.ui.setTime(a.algo, a.result.ms);
     // The headline stat is always Dijkstra-vs-CH specifically (the site's
-    // core claim), independent of which optional racers also ran.
+    // core claim), independent of which optional racers also ran or
+    // whether the family bidi modifier is on (dij/ch here are always the
+    // plain, always-exact core keys — see run()'s own comment on why the
+    // shared overlay route is anchored to them the same way).
     this.ui.setHeadline(headlineText(dij.settledCount, ch.settledCount));
     const km = pathKm(graph, path);
+    // spec §18.4's honesty rule: every racer's OWN measured distance
+    // against the true optimum. dijkstra and CH always agree on distance
+    // (equivalence-tested elsewhere), so either works as `optimalDist`;
+    // routeDeltaPct clamps floating-point noise and the from===to
+    // degenerate case to 0 rather than a spurious negative or a
+    // divide-by-zero. Computed ONCE per racer and reused for both the
+    // aria sentence and each row's live disclosure below — one source of
+    // truth, never two accumulators that could drift apart.
+    const optimalDist = Math.min(dij.dist, ch.dist);
+    const deltas = active.map((a) => ({ algo: a.algo, pct: routeDeltaPct(a.result.dist, optimalDist) }));
+    const deltaByAlgo = new Map(deltas.map((d) => [d.algo, d.pct] as const));
     this.ui.announce(
-      formatRosterAnnouncement(active.map((a) => ({ label: a.label, settled: a.result.settledCount })), km),
+      formatRosterAnnouncement(
+        active.map((a) => ({ label: a.label, settled: a.result.settledCount, deltaPct: deltaByAlgo.get(a.algo) })),
+        km,
+      ),
     );
+    for (const d of deltas) this.ui.setRowDelta(d.algo, d.pct);
     // /how/'s closing echo reads this back — same numbers the scoreboard
     // just showed, so the two can never disagree. try/catch: private-mode
     // browsers throw on localStorage access. Keys stay dj/ch only (not

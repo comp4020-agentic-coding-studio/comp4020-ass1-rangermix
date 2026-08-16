@@ -1,5 +1,5 @@
 import { MinHeap } from "./heap.ts";
-import type { Graph } from "./graph";
+import type { Csr, Graph } from "./graph";
 import type { SearchResult } from "./dijkstra";
 import { haversine } from "../snap";
 
@@ -151,4 +151,38 @@ export function astar(
     dist: to >= 0 ? getDist(to) : NaN,
     path, settled: Uint32Array.from(settled), relaxed,
   };
+}
+
+/**
+ * Recomputes a path's true cost by summing each hop's CHEAPEST original
+ * edge weight straight from the CSR (parallel edges collapse to their
+ * minimum — the same rule the relax loop above already applies, so this
+ * can never disagree with what a correct search actually accumulated)
+ * rather than trusting a value the search loop carried as a side effect of
+ * its own priority-queue bookkeeping. `dist[]` inside astar() above (and,
+ * built the same way, astarVariants.ts's greedySearch and bidiAstar.ts) is
+ * ALREADY exactly this sum by construction — parent pointers are only ever
+ * set alongside a real edge-weight addition, never a heap's key (g+h, or
+ * for astarVariant's greedy form, h alone) — so routing an EXACT variant's
+ * `dist` through this function changes nothing about its value. It exists
+ * for the INEXACT variants (weighted/greedy, single- and bidirectional):
+ * spec §18.4's honesty rule ("+X% longer route") depends on those numbers
+ * being right, so astarVariants.ts and bidiAstar.ts both route their
+ * returned `dist` through this rather than trust an upstream accumulator
+ * that a future refactor could accidentally disconnect from the heap key
+ * it's meant to be independent of. O(hops * avg out-degree) — negligible
+ * next to the search itself, and routes stay short even on the real graph.
+ */
+export function routeCost(csr: Csr, path: readonly number[]): number {
+  let total = 0;
+  for (let i = 0; i + 1 < path.length; i++) {
+    const u = path[i];
+    const v = path[i + 1];
+    let best = Infinity;
+    for (let s = csr.firstOut[u]; s < csr.firstOut[u + 1]; s++) {
+      if (csr.head[s] === v && csr.weight[s] < best) best = csr.weight[s];
+    }
+    total += best; // stays Infinity only if `path` used a non-existent edge — a bug elsewhere, not something to mask
+  }
+  return total;
 }

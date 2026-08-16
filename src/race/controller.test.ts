@@ -39,19 +39,23 @@ window.matchMedia ??= ((q: string) => ({
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  activeRoster,
+  activeRacers,
   dispatchResponse,
   formatAnnouncement,
   formatMs,
+  formatRosterAnnouncement,
   headlineText,
   pathKm,
   RaceController,
   rejectAllPending,
+  routeDeltaPct,
   sliceForFrame,
   type PendingRace,
+  type RacerId,
   type RaceUi,
 } from "./controller";
-import type { RaceErrorResponse, RaceRequest, RaceResponse, WorkerResponse } from "./worker";
+import { knownAlgoKeys, type RaceErrorResponse, type RaceRequest, type RaceResponse, type WorkerResponse } from "./worker";
+import { ROSTER } from "./roster";
 import { toyGraph } from "../algos/graph";
 import type { MapView } from "../viz/mapRenderer";
 
@@ -220,29 +224,104 @@ describe("pathKm (haversine hop-sum, hand-computed against the same R=6,371,000 
   });
 });
 
-describe("activeRoster (ROSTER filtered to active racers — the one filter run() and getActiveRoster() both use, so they can never disagree on what's active)", () => {
-  it("with no optional racers active, only dijkstra and ch race, in ROSTER order", () => {
-    expect(activeRoster(new Set())).toEqual(["dijkstra", "ch"]);
+describe("activeRacers (ROSTER filtered to active racers, each resolved to its CURRENT request key — the one derivation run() and getActiveRoster() both use, so they can never disagree on what's active or which key currently represents it)", () => {
+  it("with no optional racers active and familyBidi off, only dijkstra and ch race, plain keys, in ROSTER order", () => {
+    expect(activeRacers(new Set(), false)).toEqual([
+      { algo: "dijkstra", key: "dijkstra" },
+      { algo: "ch", key: "ch" },
+    ]);
   });
 
-  it("astar active alone inserts at its ROSTER position (between dijkstra and ch), not appended at the end", () => {
-    expect(activeRoster(new Set<"astar" | "bidi">(["astar"]))).toEqual(["dijkstra", "astar", "ch"]);
+  it("an optional A* variant inserts at its ROSTER position (between dijkstra and ch), not appended at the end", () => {
+    expect(activeRacers(new Set<RacerId>(["astar-weighted"]), false)).toEqual([
+      { algo: "dijkstra", key: "dijkstra" },
+      { algo: "astar-weighted", key: "astar-weighted" },
+      { algo: "ch", key: "ch" },
+    ]);
   });
 
-  it("bidi active alone inserts at its ROSTER position too", () => {
-    expect(activeRoster(new Set<"astar" | "bidi">(["bidi"]))).toEqual(["dijkstra", "bidi", "ch"]);
-  });
-
-  it("both optional racers active: the full four-racer roster, in ROSTER order regardless of the Set's own insertion order", () => {
-    expect(activeRoster(new Set<"astar" | "bidi">(["bidi", "astar"]))).toEqual([
-      "dijkstra", "astar", "bidi", "ch",
+  it("every optional racer active: the full five-racer roster, in ROSTER order regardless of the Set's own insertion order", () => {
+    const active = activeRacers(
+      new Set<RacerId>(["astar-greedy", "astar-straight", "astar-weighted"]), false,
+    );
+    expect(active.map((a) => a.algo)).toEqual([
+      "dijkstra", "astar-straight", "astar-weighted", "astar-greedy", "ch",
     ]);
   });
 
   it("dijkstra and ch are never excludable — they race regardless of what's in the optional set", () => {
-    const roster = activeRoster(new Set<"astar" | "bidi">(["astar", "bidi"]));
-    expect(roster).toContain("dijkstra");
-    expect(roster).toContain("ch");
+    const active = activeRacers(new Set<RacerId>(), false).map((a) => a.algo);
+    expect(active).toContain("dijkstra");
+    expect(active).toContain("ch");
+  });
+
+  it("familyBidi on switches every ACTIVE searchers-family racer to its bidiKey, but leaves ch on its plain key (ch has no bidiKey — spec §18.6, CH sits outside the family bezel)", () => {
+    expect(activeRacers(new Set<RacerId>(["astar-straight"]), true)).toEqual([
+      { algo: "dijkstra", key: "bidi:dijkstra" },
+      { algo: "astar-straight", key: "bidi:astar-straight" },
+      { algo: "ch", key: "ch" },
+    ]);
+  });
+
+  it("familyBidi on with no optional racers still flips dijkstra alone (dijkstra is core — always active — and IS a searchers-family member)", () => {
+    expect(activeRacers(new Set(), true)).toEqual([
+      { algo: "dijkstra", key: "bidi:dijkstra" },
+      { algo: "ch", key: "ch" },
+    ]);
+  });
+});
+
+describe("routeDeltaPct (spec §18.4's honesty rule, as a number — 1 decimal, never negative)", () => {
+  it("is 0 when the racer's distance already equals the optimal", () => {
+    expect(routeDeltaPct(100, 100)).toBe(0);
+  });
+
+  it("computes a positive percentage, rounded to 1 decimal, when the racer is longer", () => {
+    expect(routeDeltaPct(123, 100)).toBe(23);
+    expect(routeDeltaPct(110.25, 100)).toBeCloseTo(10.3, 5);
+  });
+
+  it("clamps a spuriously-negative delta (floating-point noise on an exact racer) to 0, never a negative percentage", () => {
+    expect(routeDeltaPct(99.999999, 100)).toBe(0);
+  });
+
+  it("guards a zero/degenerate optimal distance (a from===to query) instead of dividing by zero", () => {
+    expect(routeDeltaPct(0, 0)).toBe(0);
+  });
+});
+
+describe("formatRosterAnnouncement's disclosure clause (spec §18.4: aria names active racers, appends ', took a X% longer route' for disclosed rows)", () => {
+  it("appends the disclosure clause for an entry with a positive deltaPct", () => {
+    expect(
+      formatRosterAnnouncement(
+        [
+          { label: "Dijkstra", settled: 100, deltaPct: 0 },
+          { label: "A* — greedy", settled: 40, deltaPct: 23 },
+        ],
+        5,
+      ),
+    ).toBe(
+      "Dijkstra settled 100 intersections; A* — greedy settled 40, took a 23.0% longer route. Same 5.0 km route.",
+    );
+  });
+
+  it("omits the disclosure clause when deltaPct is 0 or absent — exactly the pre-disclosure sentence shape", () => {
+    expect(formatRosterAnnouncement([{ label: "Dijkstra", settled: 100, deltaPct: 0 }], 5)).toBe(
+      "Dijkstra settled 100 intersections. Same 5.0 km route.",
+    );
+    expect(formatRosterAnnouncement([{ label: "Dijkstra", settled: 100 }], 5)).toBe(
+      "Dijkstra settled 100 intersections. Same 5.0 km route.",
+    );
+  });
+});
+
+describe("worker registry coverage (every roster workerKey/bidiKey resolves to a real handler — worker.ts's registry is BUILT FROM roster.ts, this checks that promise holds)", () => {
+  it("every roster entry's workerKey, and every searchers-family entry's bidiKey, is a known algo key", () => {
+    const known = knownAlgoKeys();
+    for (const entry of ROSTER) {
+      expect(known.has(entry.workerKey), entry.workerKey).toBe(true);
+      if (entry.bidiKey) expect(known.has(entry.bidiKey), entry.bidiKey).toBe(true);
+    }
   });
 });
 
@@ -331,7 +410,7 @@ describe("rejectAllPending (the Worker onerror/onmessageerror path — a whole-w
 // renderAt makes, not a re-implementation of its logic.
 describe("RaceController.run() (renderAt) — additive:true regression", () => {
   function mockUi(): RaceUi {
-    return { setRow: vi.fn(), setTime: vi.fn(), setHeadline: vi.fn(), announce: vi.fn() };
+    return { setRow: vi.fn(), setTime: vi.fn(), setHeadline: vi.fn(), announce: vi.fn(), setRowDelta: vi.fn() };
   }
 
   function mockView() {
