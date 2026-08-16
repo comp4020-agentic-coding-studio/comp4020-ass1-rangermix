@@ -500,9 +500,89 @@ export function withinBlitRange(cachedSpan: number, currentSpan: number, ratioLi
   return ratio >= 1 / ratioLimit && ratio <= ratioLimit;
 }
 
-/** Where to `drawImage` a cached base-layer bitmap (its own [0,0]-[w,h] CSS
- * rect, crisply stroked at `cachedView`) so the SAME geographic content it
- * shows reprojects correctly under the panel's CURRENT view (`currentView`)
+// Interaction-time overscan (§19.3, fifth build review — user: "panning
+// around the map without stopping wont show empty area"): a crisp capture
+// used to cover EXACTLY the viewport, so panning past its edge before the
+// next re-stroke exposed bare ground. Capturing a margin beyond the
+// viewport on every side means a pan that stays within the margin still
+// blits real stroked pixels instead of empty canvas. 0.3 of the viewport
+// per side -> ~1.6x the viewport's own extent per axis, ~2.5x the pixels
+// (and memory) of an unscanned capture once both axes compound — see
+// baseCaptureBounds below for the content-extent clamp that keeps a
+// zoomed-out view from wastefully overscanning past where the map's data
+// actually ends.
+const OVERSCAN_MARGIN_RATIO = 0.3;
+
+/** A crisp base-layer capture's own rect, CSS px, relative to the capturing
+ * panel's `[0,0]-[w,h]` viewport frame — `left`/`top` negative and
+ * `right`/`bottom` beyond `w`/`h` whenever overscan margin was captured.
+ * Recorded alongside a cache entry's `view`/`key` (see MapView's
+ * `baseCacheBounds` field and `SharedBaseCacheEntry`) so `baseBlitRect`
+ * knows what footprint the bitmap it's mapping actually covers. */
+export interface CaptureBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/** The rect a crisp base-layer capture should render (§19.3) — the plain
+ * viewport `[0,0]-[w,h]` expanded by `marginRatio * w`/`marginRatio * h` on
+ * every side, then clamped so the capture never reaches past where the
+ * map's own content actually projects to on screen right now (`bbox`
+ * through the CURRENT transform): a fully-zoomed-out view already shows the
+ * whole city with only `fitTransform`'s own PAD of slack, so there's no
+ * real content out past that worth capturing. The clamp only ever SHRINKS
+ * the margin toward the viewport's own edge, never past it — `left`/`top`
+ * are clamped at 0 and `right`/`bottom` at `w`/`h` (via the outer
+ * `Math.min(0, ...)`/`Math.max(w, ...)`), so the core viewport rect is
+ * always included regardless of content, and a letterboxed axis (content
+ * narrower than the viewport) degrades to exactly the legacy no-margin rect
+ * on that axis rather than shrinking below the viewport itself.
+ *
+ * Guards `fit.scale <= 0` the same way every other view-derivation function
+ * in this module does (a hidden panel's `resize()` is a real, reachable
+ * source of a degenerate fit — see `clampGeoView`'s own comment) by
+ * returning the plain viewport rect, matching `baseBlitRect`'s own
+ * degenerate-fit fallback. */
+export function baseCaptureBounds(
+  view: ViewState, bbox: [number, number, number, number], fit: Transform, w: number, h: number,
+  marginRatio = OVERSCAN_MARGIN_RATIO,
+): CaptureBounds {
+  if (!(fit.scale > 0)) return { left: 0, top: 0, right: w, bottom: h };
+  const t = deriveTransform(view, bbox, fit, w, h);
+  const [cx0, cy0] = projectPoint(bbox, t, bbox[0], bbox[3]); // geo top-left -> screen
+  const [cx1, cy1] = projectPoint(bbox, t, bbox[2], bbox[1]); // geo bottom-right -> screen
+  const contentLeft = Math.min(cx0, cx1);
+  const contentRight = Math.max(cx0, cx1);
+  const contentTop = Math.min(cy0, cy1);
+  const contentBottom = Math.max(cy0, cy1);
+  const marginX = marginRatio * w;
+  const marginY = marginRatio * h;
+  return {
+    left: Math.min(0, Math.max(-marginX, contentLeft)),
+    top: Math.min(0, Math.max(-marginY, contentTop)),
+    right: Math.max(w, Math.min(w + marginX, contentRight)),
+    bottom: Math.max(h, Math.min(h + marginY, contentBottom)),
+  };
+}
+
+/** Device-pixel canvas size a `CaptureBounds` rect needs at `dpr` — the
+ * overscanned analogue of `resize()`'s own `Math.round(cssW * dpr)`
+ * backing-store sizing, pulled out as a pure function so the rounding is
+ * unit-testable without a real canvas. */
+export function captureBoundsDeviceSize(bounds: CaptureBounds, dpr: number): { width: number; height: number } {
+  return {
+    width: Math.round((bounds.right - bounds.left) * dpr),
+    height: Math.round((bounds.bottom - bounds.top) * dpr),
+  };
+}
+
+/** Where to `drawImage` a cached base-layer bitmap (its own `bounds` CSS
+ * rect — legacy callers omit it and get the plain `[0,0]-[w,h]` viewport
+ * rect, matching a pre-overscan capture exactly — crisply stroked at
+ * `cachedView`) so the SAME geographic content it shows reprojects correctly
+ * under the panel's CURRENT view (`currentView`)
  * — the pure geometry behind interaction-time blitting (§16.10). Both the
  * cached and current transforms are plain uniform-scale + offset (no
  * rotation — see deriveTransform), so the cached rect's two opposite
@@ -529,12 +609,13 @@ export function withinBlitRange(cachedSpan: number, currentSpan: number, ratioLi
  * guards anyway rather than hand a caller's drawImage an Infinity/NaN rect. */
 export function baseBlitRect(
   cachedView: ViewState, currentView: ViewState, bbox: [number, number, number, number], fit: Transform, w: number, h: number,
+  bounds: CaptureBounds = { left: 0, top: 0, right: w, bottom: h },
 ): { dx: number; dy: number; dw: number; dh: number } {
   if (!(fit.scale > 0)) return { dx: 0, dy: 0, dw: w, dh: h };
   const cachedT = deriveTransform(cachedView, bbox, fit, w, h);
   const currentT = deriveTransform(currentView, bbox, fit, w, h);
-  const [lon0, lat0] = unprojectPoint(bbox, cachedT, 0, 0);
-  const [lon1, lat1] = unprojectPoint(bbox, cachedT, w, h);
+  const [lon0, lat0] = unprojectPoint(bbox, cachedT, bounds.left, bounds.top);
+  const [lon1, lat1] = unprojectPoint(bbox, cachedT, bounds.right, bounds.bottom);
   const [x0, y0] = projectPoint(bbox, currentT, lon0, lat0);
   const [x1, y1] = projectPoint(bbox, currentT, lon1, lat1);
   return { dx: x0, dy: y0, dw: x1 - x0, dh: y1 - y0 };
@@ -583,19 +664,26 @@ export function baseCacheValid(cached: BaseCacheKey | null, current: BaseCacheKe
  * (§16.10 review round 2 — see the `sharedBaseCache` module comment, right
  * before `MapView`, for the full mechanism this keys): every field
  * BaseCacheKey already tracks (theme/cssWidth/cssHeight/dpr/pctThreshold/
- * emphasize) PLUS the live geo ViewState's own three fields. `view` has to
- * be part of the key, not just `key`: two panels only ever stroke IDENTICAL
- * pixels when both their fingerprint AND their current view agree — folding
- * its fields into the string (rather than relying on same-store panels
- * usually sharing ONE ViewState object reference) also makes this correct
- * for a future caller whose panels don't share a store but happen to
- * coincide numerically. Plain string interpolation, not a hash: a small
- * fixed field count, and a readable key is easier to debug than a hash
- * collision would be to notice. Exported so the "identical inputs -> the
- * same key, any one differing field -> a different key" contract is
- * directly unit-testable without a real canvas. */
-export function baseFingerprintKey(key: BaseCacheKey, view: ViewState): string {
-  return `${key.theme}|${key.cssWidth}|${key.cssHeight}|${key.dpr}|${key.pctThreshold}|${key.emphasize}|${view.cLon}|${view.cLat}|${view.span}`;
+ * emphasize) PLUS the live geo ViewState's own three fields PLUS (§19.3
+ * overscan) the four `CaptureBounds` fields a fresh capture actually used.
+ * `view` has to be part of the key, not just `key`: two panels only ever
+ * stroke IDENTICAL pixels when both their fingerprint AND their current view
+ * agree — folding its fields into the string (rather than relying on
+ * same-store panels usually sharing ONE ViewState object reference) also
+ * makes this correct for a future caller whose panels don't share a store
+ * but happen to coincide numerically. `bounds` is, in THIS app, always
+ * exactly what `baseCaptureBounds(view, ...)` would itself recompute from
+ * fields already in the string — but folding it in explicitly rather than
+ * trusting that derivation to stay in sync is the same defensive stance
+ * this key already takes on `view` (see above), and it's what lets a
+ * bounds-only difference be asserted directly in a unit test rather than
+ * relying on it always being implied. Plain string interpolation, not a
+ * hash: a small fixed field count, and a readable key is easier to debug
+ * than a hash collision would be to notice. Exported so the "identical
+ * inputs -> the same key, any one differing field -> a different key"
+ * contract is directly unit-testable without a real canvas. */
+export function baseFingerprintKey(key: BaseCacheKey, view: ViewState, bounds: CaptureBounds): string {
+  return `${key.theme}|${key.cssWidth}|${key.cssHeight}|${key.dpr}|${key.pctThreshold}|${key.emphasize}|${view.cLon}|${view.cLat}|${view.span}|${bounds.left}|${bounds.top}|${bounds.right}|${bounds.bottom}`;
 }
 
 /** Reverses render.json's per-line encoding: `line[0]` is `cls`, `line[1]`
@@ -792,6 +880,48 @@ export function assignStaggerSlots<T>(liveIds: readonly T[]): Map<T, number> {
   return slots;
 }
 
+// Periodic crisp-refresh cadence during SUSTAINED interaction (§19.3, fifth
+// build review): overscan (above) covers a pan that stays within its
+// margin, but drawBase's canBlit branch alone would otherwise keep blitting
+// the SAME crisp capture indefinitely for as long as view changes keep
+// arriving faster than INTERACTION_IDLE_MS's settle window — a long enough
+// continuous drag eventually outruns even the overscanned margin, exposing
+// empty ground the user's own report named ("panning around the map...only
+// shows when the pan stopped"). Forcing a fresh crisp re-stroke — re-centered
+// on wherever the view is NOW, with a fresh overscan margin around that new
+// center — on a cadence of AT LEAST PERIODIC_REFRESH_BASE_MS tops the cache
+// back up without waiting for the gesture to stop. `refreshDue` is a pure
+// throttle predicate: true once `now - lastCrispAt` has reached the (slot
+// -staggered) cadence, same shape as INTERACTION_IDLE_MS's own elapsed-time
+// check, so a real re-stroke resets the clock (see MapView.strokeBaseCrisp's
+// own `lastCrispAt` write) exactly like markViewChanged resets the idle
+// timer. Staggered across the SAME BLIT_RATIO_MULTIPLIERS-width 5 slots
+// MapView's own zoom-delta re-stroke threshold already uses (setStaggerSlot
+// assigns one slot per panel for both), for the identical §16.10 reason:
+// Compare mode's panels share one ViewStore, so during one sustained shared
+// pan every panel would otherwise cross the SAME cadence boundary on the
+// SAME tick, turning one frame into an N-panel-simultaneous crisp-restroke
+// spike instead of N single-panel ones spread across a few consecutive
+// frames. Offsets are small and non-negative — "a ≥500ms per-view cadence"
+// (never SHORTER than the design spec's own "at least every 0.5s" floor,
+// only ever a little longer for the later slots) — and pairwise distinct so
+// no two concurrently-live panels' cadences coincide.
+const PERIODIC_REFRESH_BASE_MS = 500; // design spec §19.3's own "at least every 0.5s"
+const PERIODIC_REFRESH_SLOT_OFFSETS_MS = [0, 30, 60, 90, 120];
+
+/** Whether a panel whose last crisp capture happened at `lastCrispAt` is due
+ * for another one at `now`, given its `slot` (0..4, same stagger slot
+ * `setStaggerSlot` assigns for the zoom-delta threshold — see the module
+ * comment above). Pure throttle: `now - lastCrispAt >=
+ * PERIODIC_REFRESH_BASE_MS + PERIODIC_REFRESH_SLOT_OFFSETS_MS[slot]`.
+ * `slot` wraps (`% PERIODIC_REFRESH_SLOT_OFFSETS_MS.length`), the same
+ * defensive stance `setStaggerSlot`/`assignStaggerSlots` already take on an
+ * out-of-range slot. */
+export function refreshDue(lastCrispAt: number, now: number, slot: number): boolean {
+  const offset = PERIODIC_REFRESH_SLOT_OFFSETS_MS[slot % PERIODIC_REFRESH_SLOT_OFFSETS_MS.length];
+  return now - lastCrispAt >= PERIODIC_REFRESH_BASE_MS + offset;
+}
+
 // Shared (cross-instance) base-layer cache (§16.10, review round 2): Compare
 // mode's panels all share ONE ViewStore AND (styles.css's `.compare-panel`:
 // equal 1fr grid columns + a fixed aspect-ratio) the same css size, so at
@@ -824,14 +954,15 @@ interface SharedBaseCacheEntry {
   bitmap: HTMLCanvasElement;
   view: ViewState;
   key: BaseCacheKey;
+  bounds: CaptureBounds;
 }
 const sharedBaseCache = new Map<string, SharedBaseCacheEntry>();
 
-/** Publishes a freshly-stroked bitmap into the shared cache under its own
- * fingerprint — called only from MapView.captureBaseCache, right after a
- * REAL crisp stroke (never from adoptSharedBaseCache's own cheap path,
- * which would just be re-publishing a copy of what's already there).
- * Stores a private COPY of `bitmap`, not the caller's own canvas by
+/** Publishes a freshly-stroked (overscanned, §19.3) bitmap into the shared
+ * cache under its own fingerprint — called only from MapView.captureBaseCache,
+ * right after a REAL crisp stroke (never from adoptSharedBaseCache's own
+ * cheap path, which would just be re-publishing a copy of what's already
+ * there). Stores a private COPY of `bitmap`, not the caller's own canvas by
  * reference: `bitmap` is a MapView instance's own `baseBitmap`, which THAT
  * instance mutates in place on every future crisp stroke (captureBaseCache
  * resizes/redraws into the SAME canvas object rather than allocating a
@@ -839,8 +970,8 @@ const sharedBaseCache = new Map<string, SharedBaseCacheEntry>();
  * instance silently corrupt every OTHER instance that has since adopted
  * this entry. Evicts the oldest entry first once at cap (a Map iterates
  * insertion order in JS, so `.keys().next()` is the oldest). */
-function publishSharedBaseCache(key: BaseCacheKey, view: ViewState, bitmap: HTMLCanvasElement): void {
-  const fpKey = baseFingerprintKey(key, view);
+function publishSharedBaseCache(key: BaseCacheKey, view: ViewState, bounds: CaptureBounds, bitmap: HTMLCanvasElement): void {
+  const fpKey = baseFingerprintKey(key, view, bounds);
   if (!sharedBaseCache.has(fpKey) && sharedBaseCache.size >= SHARED_BASE_CACHE_CAP) {
     const oldest = sharedBaseCache.keys().next().value;
     if (oldest !== undefined) sharedBaseCache.delete(oldest);
@@ -850,7 +981,7 @@ function publishSharedBaseCache(key: BaseCacheKey, view: ViewState, bitmap: HTML
   copy.height = bitmap.height;
   const copyCtx = copy.getContext("2d");
   if (copyCtx) copyCtx.drawImage(bitmap, 0, 0);
-  sharedBaseCache.set(fpKey, { bitmap: copy, view, key });
+  sharedBaseCache.set(fpKey, { bitmap: copy, view, key, bounds });
 }
 
 export class MapView {
@@ -878,14 +1009,21 @@ export class MapView {
   private dpr = 1;
   private cssWidth = 0;
   private cssHeight = 0;
-  // Interaction-time base-layer cache (§16.10) — see drawBase/strokeBaseCrisp/
-  // blitBase/currentBaseKey below for how these are used. All three are only
-  // ever written together, in captureBaseCache, right after a crisp stroke;
+  // Interaction-time base-layer cache (§16.10; `baseCacheBounds` added for
+  // §19.3 overscan) — see drawBase/strokeBaseCrisp/blitBase/currentBaseKey
+  // below for how these are used. All four are only ever written together,
+  // in captureBaseCache/adoptSharedBaseCache, right after a crisp capture;
   // null until the first one ever happens (this constructor's own resize()
   // call), so the very first paint has nothing to blit and is always crisp.
   private baseBitmap: HTMLCanvasElement | null = null;
   private baseCacheView: ViewState | null = null;
   private baseCacheKey: BaseCacheKey | null = null;
+  // The CSS-px rect (relative to THIS panel's own viewport frame) `baseBitmap`
+  // actually covers — wider than `[0,0]-[cssWidth,cssHeight]` whenever the
+  // capture overscanned (see baseCaptureBounds). blitBase needs this to map
+  // the bitmap back onto the current viewport correctly; without it, an
+  // overscanned bitmap would be assumed viewport-sized and drawn squashed.
+  private baseCacheBounds: CaptureBounds | null = null;
   // performance.now() of the last PAN/ZOOM-driven redraw (markViewChanged,
   // called only from the store subscription below — never from resize()'s,
   // setPctThreshold()'s, or the theme callback's OWN drawBase() calls), so
@@ -893,6 +1031,14 @@ export class MapView {
   // design spec's own "~150ms of the last view change" wording. -Infinity so
   // a fresh instance starts idle (never spuriously "recent").
   private lastViewChangeAt = -Infinity;
+  // performance.now() of the last time THIS instance actually refreshed its
+  // crisp cache (strokeBaseCrisp — either a real re-stroke or an adopted
+  // sibling capture; see that method's own `lastCrispAt` write), independent
+  // of whether that capture was gesture-idle-triggered or the §19.3 periodic
+  // refresh below. -Infinity so a fresh instance is immediately due (though
+  // its very first drawBase() always strokes crisp anyway, baseBitmap being
+  // null — this only matters once refreshDue starts gating later ticks).
+  private lastCrispAt = -Infinity;
   // The trailing debounce that forces a crisp re-stroke + cache refresh once
   // a gesture settles (reset on every pan/zoom tick — see markViewChanged).
   // Its callback calls strokeBaseCrisp() directly rather than drawBase()
@@ -901,10 +1047,14 @@ export class MapView {
   // the branch decision to elapsed-time comparison alone would be one
   // scheduling-jitter away from occasionally blitting a stale cache forever.
   private idleRestrokeTimer: ReturnType<typeof setTimeout> | undefined;
-  // This instance's own zoom-delta re-stroke threshold. Exists at all
-  // because Compare mode's panels share ONE ViewStore, so during a
-  // sustained zoom every panel would otherwise cross the exact SAME fixed
-  // threshold on the exact SAME tick, turning one frame into an
+  // This instance's own stagger slot (0..BLIT_RATIO_MULTIPLIERS.length-1),
+  // shared by TWO independent re-stroke disciplines that both need one slot
+  // per concurrently-live panel: the zoom-delta re-stroke threshold
+  // (`blitRatioLimit`, derived from it below) and the §19.3 periodic-refresh
+  // cadence (`refreshDue`, called from drawBase with this field directly).
+  // Exists at all because Compare mode's panels share ONE ViewStore, so
+  // during sustained interaction every panel would otherwise cross the exact
+  // SAME threshold/cadence on the exact SAME tick, turning one frame into an
   // N-panel-simultaneous full re-stroke spike — found via this task's own
   // honest before/after measurement (see the G3 report). Defaults to a
   // deterministic construction-time value from BLIT_RATIO_MULTIPLIERS' own
@@ -920,8 +1070,12 @@ export class MapView {
   // Mutable (not `readonly`) for exactly that override; safe to change at
   // any time — read fresh by drawBase on every call, nothing about it is
   // stateful across calls.
-  private blitRatioLimit =
-    BLIT_SPAN_RATIO_LIMIT * BLIT_RATIO_MULTIPLIERS[mapViewSequence++ % BLIT_RATIO_MULTIPLIERS.length];
+  private staggerSlot = mapViewSequence++ % BLIT_RATIO_MULTIPLIERS.length;
+  // Derived from `staggerSlot` above (not its own independent counter read)
+  // so the two disciplines agree on which slot THIS instance is, whether
+  // that slot came from the construction-time default or a later
+  // setStaggerSlot override.
+  private blitRatioLimit = BLIT_SPAN_RATIO_LIMIT * BLIT_RATIO_MULTIPLIERS[this.staggerSlot];
 
   constructor(base: HTMLCanvasElement, overlay: HTMLCanvasElement, render: RenderData, store?: ViewStore) {
     this.baseCanvas = base;
@@ -1045,17 +1199,19 @@ export class MapView {
     return { w: this.cssWidth, h: this.cssHeight };
   }
 
-  /** Overrides this instance's own §16.10 re-stroke-threshold stagger (see
-   * `blitRatioLimit`'s own field comment) to a specific slot index —
-   * home.ts's syncPanels calls this on every currently-live Compare panel,
-   * every time the panel set changes (via assignStaggerSlots), so slots are
-   * always derived from the CURRENT live roster rather than trusting the
-   * construction-time default (mapViewSequence) to still be collision-free
-   * after panels have been torn down and rebuilt over the page's life.
-   * Out-of-range slots wrap (`% BLIT_RATIO_MULTIPLIERS.length`), the same
-   * defensive stance the constructor's own default already takes. */
+  /** Overrides this instance's own §16.10 re-stroke-threshold stagger AND
+   * §19.3 periodic-refresh stagger (see `staggerSlot`'s own field comment)
+   * to a specific slot index — home.ts's syncPanels calls this on every
+   * currently-live Compare panel, every time the panel set changes (via
+   * assignStaggerSlots), so slots are always derived from the CURRENT live
+   * roster rather than trusting the construction-time default
+   * (mapViewSequence) to still be collision-free after panels have been torn
+   * down and rebuilt over the page's life. Out-of-range slots wrap (`%
+   * BLIT_RATIO_MULTIPLIERS.length`), the same defensive stance the
+   * constructor's own default already takes. */
   setStaggerSlot(slot: number): void {
-    this.blitRatioLimit = BLIT_SPAN_RATIO_LIMIT * BLIT_RATIO_MULTIPLIERS[slot % BLIT_RATIO_MULTIPLIERS.length];
+    this.staggerSlot = slot % BLIT_RATIO_MULTIPLIERS.length;
+    this.blitRatioLimit = BLIT_SPAN_RATIO_LIMIT * BLIT_RATIO_MULTIPLIERS[this.staggerSlot];
   }
 
   /** Sets the hierarchy-slider filter (`null` = show every road) and
@@ -1207,52 +1363,90 @@ export class MapView {
    * "invalidate" call (see BaseCacheKey/baseCacheValid's own comments).
    * Called on construction, resize, threshold change, every theme change,
    * and every pan/zoom (all four wire into this same method — see each
-   * call site's own comment). */
+   * call site's own comment).
+   *
+   * A fourth gate, `!refreshDue(...)` (§19.3), sits alongside the original
+   * three: even while every one of them says "keep blitting" — fingerprint
+   * valid, gesture recent, zoom delta small — a SUSTAINED gesture (view
+   * changes arriving faster than INTERACTION_IDLE_MS, so recentlyChanged
+   * never lapses) would otherwise blit the exact same crisp capture
+   * indefinitely, and a long enough continuous pan eventually drags the
+   * viewport past even that capture's overscan margin (baseCaptureBounds)
+   * into empty ground — the user's own report ("panning around the
+   * map...only shows when the pan stopped"). refreshDue forces a periodic
+   * strokeBaseCrisp — re-centered on wherever the view is NOW, with a fresh
+   * overscan margin around that new center — on a cadence of at least
+   * PERIODIC_REFRESH_BASE_MS regardless of how settled the other three
+   * gates think the cache is. */
   drawBase(): void {
     const view = this.store.get();
     const key = this.currentBaseKey();
-    const recentlyChanged = performance.now() - this.lastViewChangeAt < INTERACTION_IDLE_MS;
+    const now = performance.now();
+    const recentlyChanged = now - this.lastViewChangeAt < INTERACTION_IDLE_MS;
     const canBlit =
       recentlyChanged &&
       this.baseBitmap !== null &&
       this.baseCacheView !== null &&
+      this.baseCacheBounds !== null &&
       baseCacheValid(this.baseCacheKey, key) &&
-      withinBlitRange(this.baseCacheView.span, view.span, this.blitRatioLimit);
+      withinBlitRange(this.baseCacheView.span, view.span, this.blitRatioLimit) &&
+      !refreshDue(this.lastCrispAt, now, this.staggerSlot);
     if (canBlit) this.blitBase(view);
     else this.strokeBaseCrisp();
   }
 
   /** The "this panel needs a fresh crisp view" path — but not necessarily a
-   * fresh STROKE. First checks the shared cross-instance cache (§16.10
-   * review round 2 — see the `sharedBaseCache` module comment) for a bitmap
-   * a SIBLING panel already stroked at the exact same fingerprint+view this
-   * instant, and adopts it (adoptSharedBaseCache) instead of repeating the
-   * work on a hit — Compare mode's panels share one ViewStore and (equal
-   * css size) an identical fit, so a hit's pixels are guaranteed identical
-   * to what THIS instance would otherwise independently stroke. Only on a
-   * genuine miss does it actually stroke every visible road line from
-   * scratch (identical painting logic to before §16.10 — ground fill,
-   * optional ghost pass, class-weighted lines) and capture the
-   * freshly-painted canvas as this instance's own interaction-time cache
-   * (captureBaseCache, which also PUBLISHES it for the next sibling to
-   * adopt) — see drawBase's own comment for when this runs vs. the cheap
-   * blitBase path. The only place (together with adoptSharedBaseCache)
-   * `baseBitmap`/`baseCacheView`/`baseCacheKey` are written. */
+   * fresh STROKE. Computes this instant's overscanned capture rect
+   * (baseCaptureBounds, §19.3) and stamps `lastCrispAt` FIRST — both a real
+   * stroke and an adopted sibling capture below count as "this panel is
+   * crisp again right now" for refreshDue's cadence, so the timestamp write
+   * isn't conditional on which path runs. Then checks the shared
+   * cross-instance cache (§16.10 review round 2 — see the `sharedBaseCache`
+   * module comment) for a bitmap a SIBLING panel already stroked at the
+   * exact same fingerprint+view+bounds this instant, and adopts it
+   * (adoptSharedBaseCache) instead of repeating the work on a hit — Compare
+   * mode's panels share one ViewStore and (equal css size) an identical fit,
+   * so a hit's pixels are guaranteed identical to what THIS instance would
+   * otherwise independently stroke. Only on a genuine miss does it actually
+   * stroke every visible road line from scratch (identical painting logic
+   * to before §16.10 — ground fill, optional ghost pass, class-weighted
+   * lines) — into `baseBitmap` directly, sized to `bounds` and shifted so
+   * `bounds`'s own top-left lands at the bitmap's `(0,0)`, NOT into the
+   * viewport-sized visible canvas (see captureBaseCache for how the visible
+   * canvas gets updated from this) — and records the freshly-painted bitmap
+   * as this instance's own interaction-time cache (captureBaseCache, which
+   * also PUBLISHES it for the next sibling to adopt). See drawBase's own
+   * comment for when this runs vs. the cheap blitBase path. The only place
+   * (together with adoptSharedBaseCache) `baseBitmap`/`baseCacheView`/
+   * `baseCacheKey`/`baseCacheBounds` are written. */
   private strokeBaseCrisp(): void {
     const view = this.store.get();
     const key = this.currentBaseKey();
-    const shared = sharedBaseCache.get(baseFingerprintKey(key, view));
+    const bounds = baseCaptureBounds(view, this.render.bbox, this.fit, this.cssWidth, this.cssHeight);
+    this.lastCrispAt = performance.now();
+    const shared = sharedBaseCache.get(baseFingerprintKey(key, view, bounds));
     if (shared) {
       this.adoptSharedBaseCache(shared);
       return;
     }
-    const ctx = this.baseCtx;
+    if (!this.baseBitmap) this.baseBitmap = document.createElement("canvas");
+    const size = captureBoundsDeviceSize(bounds, this.dpr);
+    this.baseBitmap.width = size.width;
+    this.baseBitmap.height = size.height;
+    const ctx = this.baseBitmap.getContext("2d");
+    if (!ctx) return; // defensive; matches this class's other getContext() guards
     const colors = themeColors();
     const t = this.currentTransform(); // one derivation for this whole repaint — see currentTransform's own comment
     ctx.save();
-    ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
+    // Shifts the bitmap's own origin to bounds' top-left (device px, dpr
+    // baked in) so every subsequent draw call below — which projects
+    // through `t`, the SAME viewport-relative transform blitBase/drawBase
+    // use everywhere else in this class — lands in the right bitmap pixel
+    // without every call site needing its own bounds-relative math.
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, -bounds.left * this.dpr, -bounds.top * this.dpr);
+    ctx.clearRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
     ctx.fillStyle = colors.ground;
-    ctx.fillRect(0, 0, this.cssWidth, this.cssHeight);
+    ctx.fillRect(bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     if (this.pctThreshold !== null) {
@@ -1272,32 +1466,27 @@ export class MapView {
       ctx.stroke();
     }
     ctx.restore();
-    this.captureBaseCache();
+    this.captureBaseCache(bounds);
   }
 
   /** The cross-instance cheap path (§16.10 review round 2): copies a
-   * sibling's already-fresh bitmap (found by strokeBaseCrisp via the shared
-   * cache) onto both this instance's VISIBLE base canvas and its OWN
-   * `baseBitmap`. The second copy matters just as much as the first: this
-   * instance's FUTURE blitBase calls read `baseBitmap` directly, so without
-   * a private copy of its own, the very next interaction tick would find
-   * nothing to blit from and force ANOTHER strokeBaseCrisp call — defeating
-   * the §16.10 interaction-time cache for every panel that ever takes this
-   * path. Never aliases `shared.bitmap` itself into `this.baseBitmap` — see
+   * sibling's already-fresh (possibly overscanned, §19.3) bitmap — found by
+   * strokeBaseCrisp via the shared cache — into this instance's OWN
+   * `baseBitmap`, records its view/key/bounds, then hands off to blitBase to
+   * paint the VISIBLE canvas (identical mechanism a later pan-driven blit
+   * uses: `baseCacheView` was just set to `shared.view`, so blitting AT
+   * `shared.view` is the identity crop of `bounds` onto the viewport — no
+   * separate "draw this onto the visible canvas" logic needed here). The
+   * private `baseBitmap` copy matters as much as ever: this instance's
+   * FUTURE blitBase calls read `baseBitmap` directly, so without a private
+   * copy of its own, the very next interaction tick would find nothing to
+   * blit from and force ANOTHER strokeBaseCrisp call — defeating the §16.10
+   * interaction-time cache for every panel that ever takes this path. Never
+   * aliases `shared.bitmap` itself into `this.baseBitmap` — see
    * publishSharedBaseCache's own comment for why that would be unsafe (a
    * later captureBaseCache on THIS instance mutates whatever canvas
-   * `baseBitmap` points at, in place). Draws through the SAME dpr-scaled
-   * `baseCtx` transform every other paint in this class relies on (see
-   * blitBase's own comment) — no explicit setTransform needed here either. */
+   * `baseBitmap` points at, in place). */
   private adoptSharedBaseCache(shared: SharedBaseCacheEntry): void {
-    const ctx = this.baseCtx;
-    ctx.save();
-    ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
-    ctx.drawImage(
-      shared.bitmap, 0, 0, shared.bitmap.width, shared.bitmap.height,
-      0, 0, this.cssWidth, this.cssHeight,
-    );
-    ctx.restore();
     if (!this.baseBitmap) this.baseBitmap = document.createElement("canvas");
     this.baseBitmap.width = shared.bitmap.width;
     this.baseBitmap.height = shared.bitmap.height;
@@ -1309,44 +1498,48 @@ export class MapView {
     }
     this.baseCacheView = shared.view;
     this.baseCacheKey = shared.key;
+    this.baseCacheBounds = shared.bounds;
+    this.blitBase(shared.view);
   }
 
-  /** Copies the base canvas's just-stroked pixels into `baseBitmap`
-   * (allocating it on first use) and records the geo ViewState + fingerprint
-   * that produced them. A plain device-pixel copy (`drawImage` of the
-   * canvas itself, identity transform on the destination) — a pixel-for-
-   * pixel snapshot of whatever strokeBaseCrisp just painted, DPR included,
-   * so blitBase later needs no DPR math of its own (it draws through the
-   * SAME dpr-scaled ctx transform strokeBaseCrisp does). Also PUBLISHES the
-   * fresh bitmap to the shared cross-instance cache (§16.10 review round 2 —
-   * see that module comment) so a sibling panel with the identical
-   * fingerprint can adopt it instead of independently re-stroking. */
-  private captureBaseCache(): void {
-    if (!this.baseBitmap) this.baseBitmap = document.createElement("canvas");
-    this.baseBitmap.width = this.baseCanvas.width;
-    this.baseBitmap.height = this.baseCanvas.height;
-    const cacheCtx = this.baseBitmap.getContext("2d");
-    if (cacheCtx) {
-      cacheCtx.setTransform(1, 0, 0, 1, 0, 0);
-      cacheCtx.clearRect(0, 0, this.baseBitmap.width, this.baseBitmap.height);
-      cacheCtx.drawImage(this.baseCanvas, 0, 0);
-    }
-    this.baseCacheView = this.store.get();
+  /** Records `baseBitmap` (already the just-stroked, possibly overscanned
+   * canvas — strokeBaseCrisp paints INTO it directly now, §19.3, rather than
+   * painting the visible canvas and copying) as this instance's
+   * interaction-time cache: the geo ViewState, fingerprint, and capture
+   * `bounds` that produced it. Also PUBLISHES the fresh bitmap to the shared
+   * cross-instance cache (§16.10 review round 2 — see that module comment)
+   * so a sibling panel with the identical fingerprint+view+bounds can adopt
+   * it instead of independently re-stroking. Finally hands off to blitBase
+   * to paint the VISIBLE canvas — `baseCacheView` was just set to the
+   * current view, so this is the identity crop of `bounds` onto the
+   * viewport, the same mechanism adoptSharedBaseCache and every later
+   * pan-driven blit use. */
+  private captureBaseCache(bounds: CaptureBounds): void {
+    if (!this.baseBitmap) return; // defensive; strokeBaseCrisp always allocates baseBitmap before calling this
+    const view = this.store.get();
+    this.baseCacheView = view;
     this.baseCacheKey = this.currentBaseKey();
-    publishSharedBaseCache(this.baseCacheKey, this.baseCacheView, this.baseBitmap);
+    this.baseCacheBounds = bounds;
+    publishSharedBaseCache(this.baseCacheKey, view, bounds, this.baseBitmap);
+    this.blitBase(view);
   }
 
-  /** The cheap path: blits the cached bitmap into the base canvas under the
-   * delta between the geo state it was stroked at and `view` (baseBlitRect —
-   * the pure geometry, unit-tested in mapRenderer.test.ts), backdropped with
-   * a flat ground fill for any margin the cached bitmap doesn't cover this
-   * frame (e.g. this tick has zoomed OUT since the cache was taken, so the
-   * blit rect is smaller than the viewport). */
+  /** The cheap path: blits the cached (possibly overscanned, §19.3) bitmap
+   * into the base canvas under the delta between the geo state + bounds it
+   * was captured at and `view` (baseBlitRect — the pure geometry, unit-
+   * tested in mapRenderer.test.ts), backdropped with a flat ground fill for
+   * any margin the cached bitmap doesn't cover this frame (e.g. this tick
+   * has panned/zoomed far enough since the capture that even its overscan
+   * margin no longer fully covers the viewport — rare in practice now that
+   * refreshDue tops the cache up periodically during sustained interaction,
+   * but still geometrically possible for a single very fast tick). */
   private blitBase(view: ViewState): void {
-    if (!this.baseBitmap || !this.baseCacheView) return; // defensive; drawBase's canBlit already checked both
+    if (!this.baseBitmap || !this.baseCacheView || !this.baseCacheBounds) return; // defensive; drawBase's canBlit already checked all three
     const ctx = this.baseCtx;
     const colors = themeColors();
-    const rect = baseBlitRect(this.baseCacheView, view, this.render.bbox, this.fit, this.cssWidth, this.cssHeight);
+    const rect = baseBlitRect(
+      this.baseCacheView, view, this.render.bbox, this.fit, this.cssWidth, this.cssHeight, this.baseCacheBounds,
+    );
     ctx.save();
     ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
     ctx.fillStyle = colors.ground;

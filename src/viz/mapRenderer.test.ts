@@ -11,7 +11,9 @@ import {
   assignStaggerSlots,
   baseBlitRect,
   baseCacheValid,
+  baseCaptureBounds,
   baseFingerprintKey,
+  captureBoundsDeviceSize,
   clampGeoView,
   createViewStore,
   decodeLine,
@@ -19,6 +21,7 @@ import {
   fitTransform,
   panGeo,
   projectPoint,
+  refreshDue,
   strideFor,
   unprojectPoint,
   visibleLines,
@@ -27,6 +30,7 @@ import {
   zoomAbout,
   zoomToBounds,
   type BaseCacheKey,
+  type CaptureBounds,
   type Transform,
   type ViewState,
 } from "./mapRenderer";
@@ -940,6 +944,108 @@ describe("baseBlitRect (where to drawImage the cached base bitmap under the CURR
     expect(Number.isFinite(rect.dw)).toBe(true);
     expect(Number.isFinite(rect.dh)).toBe(true);
   });
+
+  // §19.3: an overscanned capture's `bounds` extend past [0,w]x[0,h] (see
+  // baseCaptureBounds) -- these cases cover the omitted-vs-explicit legacy
+  // default, and that an overscanned bitmap's mapped rect still fully
+  // covers the viewport after a pan that stays within the captured margin.
+  describe("with an overscanned CaptureBounds (§19.3)", () => {
+    it("omitting bounds is EXACTLY equivalent to passing the plain [0,w]x[0,h] viewport rect -- legacy callers unaffected", () => {
+      const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+      const fit = fitTransform(bbox, 900, 600, 20);
+      const cached: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
+      const current: ViewState = { cLon: 149.12, cLat: -35.31, span: 0.45 };
+      const withDefault = baseBlitRect(cached, current, bbox, fit, 900, 600);
+      const withExplicit = baseBlitRect(cached, current, bbox, fit, 900, 600, { left: 0, top: 0, right: 900, bottom: 600 });
+      expect(withExplicit).toEqual(withDefault);
+    });
+
+    it("identity view: an overscanned bitmap maps to a rect wider than the viewport on every side, by exactly the margin", () => {
+      const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+      const fit = fitTransform(bbox, 900, 600, 20);
+      const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.4 };
+      const bounds = baseCaptureBounds(view, bbox, fit, 900, 600);
+      const rect = baseBlitRect(view, view, bbox, fit, 900, 600, bounds);
+      expect(rect.dx).toBeCloseTo(bounds.left, 6);
+      expect(rect.dy).toBeCloseTo(bounds.top, 6);
+      expect(rect.dw).toBeCloseTo(bounds.right - bounds.left, 6);
+      expect(rect.dh).toBeCloseTo(bounds.bottom - bounds.top, 6);
+    });
+
+    it("a pan that stays WITHIN the overscan margin: the mapped rect still fully covers the viewport (no empty edge to reveal)", () => {
+      const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+      const fit = fitTransform(bbox, 900, 600, 20);
+      // span 1/8 (max zoom), same as baseCaptureBounds' own "zoomed in" case
+      // above -- content vastly exceeds viewport+margin on BOTH axes there,
+      // so the full, unclamped 0.3x margin is captured on every side (a
+      // more modest zoom, e.g. span 0.4, can leave one axis -- whichever
+      // ISN'T this bbox/viewport's fit-limiting axis -- still letterboxed
+      // with NO real margin to pan into, which isn't the case this test is
+      // for).
+      const cached: ViewState = { cLon: 149.1, cLat: -35.3, span: 1 / 8 };
+      const bounds = baseCaptureBounds(cached, bbox, fit, 900, 600);
+      // A pan well inside the 0.3-viewport margin on every side (e.g. 10% of
+      // the viewport, not the full 30% captured).
+      const current = panGeo(cached, bbox, fit, 900, 600, 90, 60);
+      const rect = baseBlitRect(cached, current, bbox, fit, 900, 600, bounds);
+      // The bitmap's mapped rect must fully contain the viewport -- this IS
+      // what "no empty area while the pointer keeps moving" means in this
+      // module's own geometry: dx <= 0 <= dw+dx... i.e. left edge at/before
+      // 0 and right edge at/after 900 (same for the vertical axis).
+      expect(rect.dx).toBeLessThanOrEqual(0);
+      expect(rect.dy).toBeLessThanOrEqual(0);
+      expect(rect.dx + rect.dw).toBeGreaterThanOrEqual(900);
+      expect(rect.dy + rect.dh).toBeGreaterThanOrEqual(600);
+    });
+
+    it("a pan that EXACTLY reaches the overscan margin's edge still just covers the viewport (boundary case)", () => {
+      // Zero-slack square bbox/fit (same shape as the hand-checked 2x-zoom
+      // case above), but zoomed IN (span 0.5, not the whole-map span 1) so
+      // content genuinely extends past the viewport and the margin isn't
+      // clamped away to nothing (whole-map span-1 view has zero slack here
+      // by construction -- fitTransform's own pad is 0 -- so it captures no
+      // margin at all; that's a different, already-covered case above).
+      const bbox: [number, number, number, number] = [0, -0.5, 1, 0.5];
+      const fit = fitTransform(bbox, 800, 800, 0);
+      const cached: ViewState = { cLon: 0.5, cLat: 0, span: 0.5 };
+      const bounds = baseCaptureBounds(cached, bbox, fit, 800, 800, 0.3);
+      expect(bounds.left).toBeCloseTo(-240, 6); // sanity: genuinely a full, unclamped 240px margin
+      // Pan by exactly the margin (240px) so the bitmap's own left edge
+      // lands exactly at the viewport's left edge (0) -- one pixel further
+      // and it would no longer fully cover x=0.
+      const current = panGeo(cached, bbox, fit, 800, 800, 240, 0);
+      const rect = baseBlitRect(cached, current, bbox, fit, 800, 800, bounds);
+      expect(rect.dx).toBeCloseTo(0, 6);
+    });
+
+    it("property: for random cached/current view pairs within a fixed overscan margin, the mapped rect equals the direct reprojection of bounds' own two corners (200 seeded) -- same property the legacy [0,w]x[0,h] case already checks, generalized to bounds", () => {
+      const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+      const fit = fitTransform(bbox, 1016, 778, 24);
+      const bounds: CaptureBounds = { left: -300, top: -230, right: 1316, bottom: 1008 };
+      const rand = mulberry32(190817);
+      for (let i = 0; i < 200; i++) {
+        const randomView = (): ViewState => ({
+          cLon: bbox[0] + rand() * (bbox[2] - bbox[0]),
+          cLat: bbox[1] + rand() * (bbox[3] - bbox[1]),
+          span: 1 / 8 + rand() * (1 - 1 / 8),
+        });
+        const cached = randomView();
+        const current = randomView();
+        const rect = baseBlitRect(cached, current, bbox, fit, 1016, 778, bounds);
+
+        const cachedT = deriveTransform(cached, bbox, fit, 1016, 778);
+        const currentT = deriveTransform(current, bbox, fit, 1016, 778);
+        const [lon0, lat0] = unprojectPoint(bbox, cachedT, bounds.left, bounds.top);
+        const [lon1, lat1] = unprojectPoint(bbox, cachedT, bounds.right, bounds.bottom);
+        const [ex0, ey0] = projectPoint(bbox, currentT, lon0, lat0);
+        const [ex1, ey1] = projectPoint(bbox, currentT, lon1, lat1);
+        expect(rect.dx).toBeCloseTo(ex0, 6);
+        expect(rect.dy).toBeCloseTo(ey0, 6);
+        expect(rect.dw).toBeCloseTo(ex1 - ex0, 6);
+        expect(rect.dh).toBeCloseTo(ey1 - ey0, 6);
+      }
+    });
+  });
 });
 
 describe("withinBlitRange (the \">2x away\" boundary past which a blit isn't worth it)", () => {
@@ -1066,30 +1172,189 @@ describe("assignStaggerSlots (the LIVE-roster-derived replacement for the page-l
   });
 });
 
-describe("baseFingerprintKey (the shared cross-instance base-cache key, §16.10 review round 2 finding 2)", () => {
+describe("baseFingerprintKey (the shared cross-instance base-cache key, §16.10 review round 2 finding 2; §19.3 bounds join)", () => {
   const key: BaseCacheKey = {
     theme: "dark", cssWidth: 900, cssHeight: 600, dpr: 1, pctThreshold: null, emphasize: false,
   };
   const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 0.5 };
+  const bounds: CaptureBounds = { left: -270, top: -180, right: 1170, bottom: 780 };
 
   it("identical inputs (even different object instances) produce the identical key", () => {
-    expect(baseFingerprintKey(key, view)).toBe(baseFingerprintKey({ ...key }, { ...view }));
+    expect(baseFingerprintKey(key, view, bounds)).toBe(baseFingerprintKey({ ...key }, { ...view }, { ...bounds }));
   });
 
   it("any one differing BaseCacheKey field changes the key", () => {
-    const base = baseFingerprintKey(key, view);
-    expect(baseFingerprintKey({ ...key, theme: "light" }, view)).not.toBe(base);
-    expect(baseFingerprintKey({ ...key, cssWidth: 901 }, view)).not.toBe(base);
-    expect(baseFingerprintKey({ ...key, cssHeight: 601 }, view)).not.toBe(base);
-    expect(baseFingerprintKey({ ...key, dpr: 2 }, view)).not.toBe(base);
-    expect(baseFingerprintKey({ ...key, pctThreshold: 50 }, view)).not.toBe(base);
-    expect(baseFingerprintKey({ ...key, emphasize: true }, view)).not.toBe(base);
+    const base = baseFingerprintKey(key, view, bounds);
+    expect(baseFingerprintKey({ ...key, theme: "light" }, view, bounds)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, cssWidth: 901 }, view, bounds)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, cssHeight: 601 }, view, bounds)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, dpr: 2 }, view, bounds)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, pctThreshold: 50 }, view, bounds)).not.toBe(base);
+    expect(baseFingerprintKey({ ...key, emphasize: true }, view, bounds)).not.toBe(base);
   });
 
   it("any one differing ViewState field changes the key -- two panels only ever stroke identical pixels at the identical view", () => {
-    const base = baseFingerprintKey(key, view);
-    expect(baseFingerprintKey(key, { ...view, cLon: 149.2 })).not.toBe(base);
-    expect(baseFingerprintKey(key, { ...view, cLat: -35.4 })).not.toBe(base);
-    expect(baseFingerprintKey(key, { ...view, span: 0.4 })).not.toBe(base);
+    const base = baseFingerprintKey(key, view, bounds);
+    expect(baseFingerprintKey(key, { ...view, cLon: 149.2 }, bounds)).not.toBe(base);
+    expect(baseFingerprintKey(key, { ...view, cLat: -35.4 }, bounds)).not.toBe(base);
+    expect(baseFingerprintKey(key, { ...view, span: 0.4 }, bounds)).not.toBe(base);
+  });
+
+  // §19.3 delta: overscan capture bounds join the fingerprint too, so a
+  // sibling panel can never adopt a shared-cache entry whose captured
+  // footprint doesn't match what THIS instance would itself have captured
+  // (defensive — bounds are, in this app, already fully determined by
+  // fields the key/view halves cover, but the string makes that explicit
+  // and directly testable rather than relying on the derivation staying in
+  // sync forever).
+  it("any one differing CaptureBounds field changes the key (fingerprint invalidation on bounds change)", () => {
+    const base = baseFingerprintKey(key, view, bounds);
+    expect(baseFingerprintKey(key, view, { ...bounds, left: -269 })).not.toBe(base);
+    expect(baseFingerprintKey(key, view, { ...bounds, top: -179 })).not.toBe(base);
+    expect(baseFingerprintKey(key, view, { ...bounds, right: 1171 })).not.toBe(base);
+    expect(baseFingerprintKey(key, view, { ...bounds, bottom: 781 })).not.toBe(base);
+  });
+});
+
+// §19.3 (fifth build review, user): "panning around the map without
+// stopping wont show empty area" — the two mechanisms below (overscan
+// capture bounds, and the periodic-refresh throttle) are the pure decision
+// layer this is built on. MapView's actual stroke-into-an-oversized-bitmap
+// and periodic-strokeBaseCrisp wiring is untested here, same jsdom-has-no-
+// canvas rationale as the rest of this file.
+describe("baseCaptureBounds (§19.3 overscan capture rect)", () => {
+  const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
+
+  it("zoomed in (content spans far past the viewport): full margin on every side, ~1.6x the viewport per axis", () => {
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 1 / 8 }; // max zoom -- content is huge on screen
+    const bounds = baseCaptureBounds(view, bbox, fit, 900, 600);
+    expect(bounds.left).toBeCloseTo(-0.3 * 900, 6);
+    expect(bounds.top).toBeCloseTo(-0.3 * 600, 6);
+    expect(bounds.right).toBeCloseTo(900 + 0.3 * 900, 6);
+    expect(bounds.bottom).toBeCloseTo(600 + 0.3 * 600, 6);
+  });
+
+  it("a custom marginRatio scales the same way", () => {
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const view: ViewState = { cLon: 149.1, cLat: -35.3, span: 1 / 8 };
+    const bounds = baseCaptureBounds(view, bbox, fit, 900, 600, 0.1);
+    expect(bounds.left).toBeCloseTo(-0.1 * 900, 6);
+    expect(bounds.right).toBeCloseTo(900 + 0.1 * 900, 6);
+  });
+
+  it("fully zoomed out (whole map, span 1): clamped to the fitted content extent -- degrades to exactly the legacy no-margin viewport rect", () => {
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const view = wholeMapView(bbox); // span 1 -- the SAME view fitTransform itself frames, no slack to overscan into
+    const bounds = baseCaptureBounds(view, bbox, fit, 900, 600);
+    expect(bounds).toEqual({ left: 0, top: 0, right: 900, bottom: 600 });
+  });
+
+  it("the core viewport rect is always included, even on a letterboxed axis (content narrower than the viewport)", () => {
+    // A very wide, short viewport against a roughly-square bbox: at whole-map
+    // zoom the fitted content can't fill the wide axis, so that axis has NO
+    // real content to overscan into -- must still cover [0,w], never shrink
+    // below it.
+    const fit = fitTransform(bbox, 2000, 400, 20);
+    const view = wholeMapView(bbox);
+    const bounds = baseCaptureBounds(view, bbox, fit, 2000, 400);
+    expect(bounds.left).toBeLessThanOrEqual(0);
+    expect(bounds.top).toBeLessThanOrEqual(0);
+    expect(bounds.right).toBeGreaterThanOrEqual(2000);
+    expect(bounds.bottom).toBeGreaterThanOrEqual(400);
+  });
+
+  it("a partially-clamped margin (some but not the full 0.3x of content available beyond the viewport) lands strictly between the no-margin and full-margin rects", () => {
+    // This bbox's fit is HEIGHT-limited at 900x600/pad 20 (mapH/availH beats
+    // mapW/availW regardless of the exact cos(midLat) correction, since
+    // mapW = 0.4*cosMid < 0.4 < 860/1018.18 always) -- so the VERTICAL axis
+    // is the one that sits flush against the viewport at whole-map zoom,
+    // and is the one a modest zoom-in pushes past the viewport edge first.
+    // At span 0.9 (exact, no cosMid dependence: contentTop = 300 -
+    // 0.275*(fit.scale/0.9) = 300 - 0.275*1131.31... = -11.11), the overflow
+    // is real (top/bottom past the viewport) but far short of the full 180px
+    // (0.3*600) margin request -- exactly the "partially clamped" case.
+    const fit = fitTransform(bbox, 900, 600, 20);
+    const view: ViewState = { cLon: (bbox[0] + bbox[2]) / 2, cLat: (bbox[1] + bbox[3]) / 2, span: 0.9 };
+    const bounds = baseCaptureBounds(view, bbox, fit, 900, 600);
+    const rawTop = -0.3 * 600;
+    const rawBottom = 600 + 0.3 * 600;
+    expect(bounds.top).toBeGreaterThan(rawTop); // clamped inward from the raw 0.3x request...
+    expect(bounds.top).toBeLessThan(0); // ...yet still strictly negative -- genuine overflow, not fully clamped away
+    expect(bounds.bottom).toBeLessThan(rawBottom);
+    expect(bounds.bottom).toBeGreaterThan(600);
+  });
+
+  it("regression: fit.scale === 0 (degenerate/hidden panel) returns the plain viewport rect instead of dividing by zero", () => {
+    const hiddenFit = fitTransform(bbox, 1, 1, 24);
+    expect(hiddenFit.scale).toBe(0);
+    const view = wholeMapView(bbox);
+    const bounds = baseCaptureBounds(view, bbox, hiddenFit, 1, 1);
+    expect(bounds).toEqual({ left: 0, top: 0, right: 1, bottom: 1 });
+  });
+});
+
+describe("captureBoundsDeviceSize (device-pixel canvas allocation for a CaptureBounds rect, DPR-aware)", () => {
+  it("dpr 1: device px equals CSS px", () => {
+    const bounds: CaptureBounds = { left: -100, top: -50, right: 1000, bottom: 650 };
+    expect(captureBoundsDeviceSize(bounds, 1)).toEqual({ width: 1100, height: 700 });
+  });
+
+  it("dpr 2: device px is exactly double", () => {
+    const bounds: CaptureBounds = { left: -100, top: -50, right: 1000, bottom: 650 };
+    expect(captureBoundsDeviceSize(bounds, 2)).toEqual({ width: 2200, height: 1400 });
+  });
+
+  it("a fractional dpr (e.g. 1.5, a real Windows scaling value) rounds the same way resize()'s own cssW*dpr sizing does", () => {
+    const bounds: CaptureBounds = { left: 0, top: 0, right: 901, bottom: 601 };
+    expect(captureBoundsDeviceSize(bounds, 1.5)).toEqual({
+      width: Math.round(901 * 1.5),
+      height: Math.round(601 * 1.5),
+    });
+  });
+
+  it("the legacy no-margin viewport rect at dpr 1 matches resize()'s own plain cssW/cssH backing-store size", () => {
+    const bounds: CaptureBounds = { left: 0, top: 0, right: 900, bottom: 600 };
+    expect(captureBoundsDeviceSize(bounds, 1)).toEqual({ width: 900, height: 600 });
+  });
+});
+
+describe("refreshDue (§19.3 periodic crisp-refresh throttle during sustained interaction)", () => {
+  it("not due before the base cadence has elapsed", () => {
+    expect(refreshDue(1000, 1499, 0)).toBe(false);
+  });
+
+  it("due once at least PERIODIC_REFRESH_BASE_MS (500ms) has elapsed, slot 0 (zero offset)", () => {
+    expect(refreshDue(1000, 1500, 0)).toBe(true);
+    expect(refreshDue(1000, 1000 + 10_000, 0)).toBe(true); // long-elapsed is still due, not just the boundary instant
+  });
+
+  it("never due before 500ms regardless of slot (the offsets only ever ADD to the base, never subtract)", () => {
+    for (let slot = 0; slot < 5; slot++) {
+      expect(refreshDue(1000, 1499, slot)).toBe(false);
+    }
+  });
+
+  it("out-of-range slots wrap (% length), same defensive stance as setStaggerSlot/assignStaggerSlots", () => {
+    expect(refreshDue(1000, 2000, 5)).toBe(refreshDue(1000, 2000, 0));
+    expect(refreshDue(1000, 2000, 7)).toBe(refreshDue(1000, 2000, 2));
+  });
+
+  it("property: every slot's own cadence is >= 500ms (never shorter than the design spec's own floor)", () => {
+    for (let slot = 0; slot < 5; slot++) {
+      // Right up to (but not reaching) 500ms elapsed: never due, for ANY slot.
+      expect(refreshDue(1000, 1000 + 499, slot)).toBe(false);
+    }
+  });
+
+  it("property: the 5 slots' own due-at instants are pairwise distinct (the whole point of staggering)", () => {
+    const dueAt = (slot: number): number => {
+      // Smallest `now` (integer ms) at which this slot first becomes due.
+      let now = 1000;
+      while (!refreshDue(1000, now, slot)) now++;
+      return now;
+    };
+    const instants = [0, 1, 2, 3, 4].map(dueAt);
+    expect(new Set(instants).size).toBe(instants.length);
   });
 });
