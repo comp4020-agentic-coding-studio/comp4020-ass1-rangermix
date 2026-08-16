@@ -249,11 +249,12 @@ export interface RaceUi {
    * rather than ever printing "+0% longer route" (see home.ts's own
    * `setRowDelta` for the reference implementation this seam was written
    * against: it clears `.row-delta`'s text back to "" on `pct <= 0`, which
-   * a `:not(:empty)` CSS rule collapses out of layout, and mirrors the
-   * same value into that racer's compare-panel chip if one is currently
-   * showing, the same dual-write pattern `setRow` already uses for settled
-   * counts). Keyed by RacerId (roster id), NOT the request key that flips
-   * with the family bidi modifier — see this file's header comment. */
+   * a `:not(:empty)` CSS rule collapses out of layout. The board row is the
+   * disclosure surface; compare-panel chips signal the same delta via the
+   * dashed route overlay, the same dual-signal pattern `setRow` already
+   * uses for settled counts). Keyed by RacerId (roster id), NOT the request
+   * key that flips with the family bidi modifier — see this file's header
+   * comment. */
   setRowDelta(algo: RacerId, pct: number): void;
 }
 

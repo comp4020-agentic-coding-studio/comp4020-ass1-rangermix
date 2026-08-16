@@ -31,7 +31,8 @@
 import { loadRouting } from "../data";
 import { dijkstraCsr } from "../algos/dijkstra";
 import { chQuery } from "../algos/chQuery";
-import { astarVariant, makeHeuristic, type HeuristicKind } from "../algos/astarVariants";
+import { astarVariant, makeHeuristic } from "../algos/astarVariants";
+import { getHeuristicKind } from "../algos/heuristicKind";
 import { maxEdgeSpeedMps, VMAX_SAFETY_MARGIN } from "../algos/astar";
 import { bidiAstar } from "../algos/bidiAstar";
 import { bidijkstra } from "../algos/bidijkstra";
@@ -161,10 +162,10 @@ function fnFor(id: Exclude<RosterEntry["id"], "ch">, bidi: boolean): AlgoFn {
       ? (graph, from, to) => bidijkstra(graph, getGRev(graph), from, to)
       : (graph, from, to) => dijkstraCsr(graph.n, graph.fwd, from, to);
   }
-  // astar-straight | astar-weighted | astar-greedy — "astar-".length === 6,
-  // and every one of roster.ts's three A* ids follows that exact prefix
-  // (roster.test.ts pins the id list), so this cast is safe.
-  const kind = id.slice(6) as HeuristicKind;
+  // astar-straight | astar-weighted | astar-greedy — derived from registry
+  // entry lookup via getHeuristicKind (fail-loud on unknown), not silent string
+  // prefix slicing.
+  const kind = getHeuristicKind(id);
   return bidi
     ? (graph, from, to) => bidiAstar(kind, graph, getGRev(graph), from, to, getVMax(graph))
     : (graph, from, to) => astarVariant(kind, graph, from, to, makeHeuristic(kind, graph, getVMax(graph), to));

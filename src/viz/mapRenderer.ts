@@ -757,7 +757,7 @@ const DENSITY_BUCKETS = 12;
 // setStaggerSlot/assignStaggerSlots (below) are the real fix: home.ts calls
 // setStaggerSlot on every currently-live Compare panel after every diff,
 // which supersedes whatever this counter guessed at construction.
-const BLIT_RATIO_MULTIPLIERS = [1, 1.3, 0.75, 1.15];
+const BLIT_RATIO_MULTIPLIERS = [1, 1.3, 0.75, 1.15, 0.95];
 let mapViewSequence = 0;
 
 /** Assigns each id in `liveIds` (already in the caller's own stable order —
@@ -782,7 +782,7 @@ let mapViewSequence = 0;
  * how many add/remove cycles came before it — there's no persisted per-id
  * counter state for a stale removal to leave stranded. `%
  * BLIT_RATIO_MULTIPLIERS.length` is defensive (this app's own ROSTER never
- * exceeds 4 concurrently-active algos, exactly that many slots), not
+ * exceeds 5 concurrently-active algos, exactly that many slots), not
  * load-bearing for the common case. Pure and exported so the
  * pairwise-distinctness property is unit-testable directly, across
  * arbitrary add/remove sequences, without a real MapView/DOM. */
