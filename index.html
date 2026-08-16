@@ -29,8 +29,8 @@
       <nav aria-label="Primary">
         <a href="./" aria-current="page">Highway to Hill</a>
         <a href="./how/">How it works</a>
-        <button data-testid="theme-toggle" type="button" class="chip" aria-label="Switch theme (current: system)">
-          <span class="theme-toggle-icon" aria-hidden="true">◐S</span>
+        <button data-testid="theme-toggle" type="button" class="chip" aria-label="Theme: system">
+          <span class="theme-toggle-icon" aria-hidden="true">◐</span>
           <span class="theme-toggle-label">Theme: system</span>
         </button>
       </nav>
@@ -47,9 +47,9 @@
             <button data-testid="zoom-in" type="button" class="zoom-btn" aria-label="Zoom in" disabled>+</button>
             <button data-testid="zoom-out" type="button" class="zoom-btn" aria-label="Zoom out" disabled>−</button>
           </div>
-          <div class="splash" data-testid="splash">
+          <div class="splash" data-testid="splash" role="dialog" aria-modal="true" aria-labelledby="splash-title">
             <div class="splash-copy">
-              <h1>Highway to Hill</h1>
+              <h1 id="splash-title">Highway to Hill</h1>
               <p class="splash-desc">Highway to Hill is a live playground where two ways of finding a route race each other across Canberra's real streets.</p>
               <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
               <p class="splash-desc">Drag either pin to a new spot, switch on extra algorithms, and watch the difference for yourself. Every number here is measured live in your browser, never invented.</p>

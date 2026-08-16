@@ -134,6 +134,26 @@ describe("spec: home page (/) contracts", () => {
     },
   );
 
+  // I3 gate named fix: the STATIC markup (before theme.ts's initTheme() ever
+  // runs) used to ship the pre-§18.10 aria-label ("Switch theme (current:
+  // system)") and compact icon text ("◐S") — stale relative to what
+  // theme.ts itself now writes (see theme.test.ts's own "Theme: <state>"/
+  // icon-only assertions), which only self-heals the instant the deferred
+  // module script runs. Checked here directly against the BUILT html (not
+  // theme.ts's runtime output) so the pre-hydration frame — what a visitor
+  // or a screen reader actually sees first — is asserted, not assumed.
+  it(
+    "static (pre-hydration) theme toggle markup already carries the §18.10 aria-label and icon-only glyph, on both pages",
+    () => {
+      for (const page of ["index.html", "how/index.html"]) {
+        const doc = pageDoc(page);
+        const toggle = doc?.querySelector(`[data-testid="${CONTRACTS.testids.themeToggle}"]`);
+        expect(toggle?.getAttribute("aria-label"), page).toBe("Theme: system");
+        expect(toggle?.querySelector(".theme-toggle-icon")?.textContent, page).toBe("◐");
+      }
+    },
+  );
+
   it(
     `race canvas [data-testid=${CONTRACTS.testids.raceCanvas}] has role=img and a non-empty aria-label`,
     () => {
@@ -284,6 +304,26 @@ describe("spec: home page (/) contracts", () => {
       expect(btn).toBeTruthy();
       expect(btn?.tagName).toBe("BUTTON");
       expect(btn?.textContent?.trim()).toBe("Explore the race →");
+    },
+  );
+
+  // I3 gate named fix: role=dialog/aria-modal — cheap correct semantics now
+  // that applySplashInert (home.ts) already makes the controls that OPERATE
+  // the hidden map/race (`inert`, not merely `disabled`) unreachable while
+  // the splash is up. aria-labelledby points at the h1 itself rather than
+  // duplicating its text into a separate aria-label, so the dialog's
+  // accessible name can never drift from the page's own visible title.
+  it(
+    'splash [data-testid=splash] is role="dialog" aria-modal="true", labelled by its own h1',
+    () => {
+      const doc = pageDoc("index.html");
+      const splash = doc?.querySelector('[data-testid="splash"]');
+      const h1 = doc?.querySelector("h1");
+      expect(splash?.getAttribute("role")).toBe("dialog");
+      expect(splash?.getAttribute("aria-modal")).toBe("true");
+      const labelledby = splash?.getAttribute("aria-labelledby");
+      expect(labelledby).toBeTruthy();
+      expect(h1?.id).toBe(labelledby);
     },
   );
 

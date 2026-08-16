@@ -93,25 +93,25 @@ export function themeColors(): Record<string, string> {
     road: read("--road"),
     roadMajor: read("--road-major"),
     route: read("--route"),
+    // Roster round (spec §18): every racer key below is keyed by the
+    // roster id verbatim (src/race/roster.ts's own RosterEntry.id strings),
+    // because controller.ts's replay loop reads a racer's colour
+    // dynamically as `colors[layer.algo]` / `colors[`${layer.algo}Glow`]`,
+    // and `layer.algo` is always one of exactly these five strings. The
+    // pre-roster-round shorthand keys this object used to ALSO carry
+    // (`astar`, `bidi`, `astarGlow`, `bidiGlow` — a fixed single-A*-row/
+    // single-bidi-modifier vocabulary that predates the five-racer roster
+    // and was kept only for the duration of I1's concurrent controller.ts
+    // rewrite, so either side of that landing would still read a valid
+    // key) are gone: `layer.algo` is never literally "astar" or "bidi"
+    // post-roster-round, so nothing has read them since — confirmed by
+    // grepping the whole tree for `colors.astar`/`colors.bidi`/
+    // `colors[\"astar\"]`/`colors[\"bidi\"]` and their Glow variants,
+    // zero hits outside this function's own old definition (I3 gate).
     dijkstra: read("--c-dijkstra"),
-    ch: read("--c-ch"),
-    astar: read("--c-astar"),
-    bidi: read("--c-bidi"),
     dijkstraGlow: read("--g-dijkstra"),
+    ch: read("--c-ch"),
     chGlow: read("--g-ch"),
-    astarGlow: read("--g-astar"),
-    bidiGlow: read("--g-bidi"),
-    // Roster round (spec §18): keyed by the roster ids verbatim
-    // (src/race/roster.ts's own RosterEntry.id strings) rather than the
-    // old fixed astar/bidi shorthand above — controller.ts's replay loop
-    // reads a racer's colour dynamically as `colors[layer.algo]` /
-    // `colors[`${layer.algo}Glow`]`, and `layer.algo` IS one of these
-    // strings post-roster-round, so the object needs an entry under the
-    // EXACT id, not a hand-translated shorthand. "dijkstra"/"ch" are
-    // unchanged ids, already covered by the keys above — only the three
-    // NEW A* variants need entries here, kept ADDITIVE (old keys untouched)
-    // so this stays correct regardless of which side of the concurrent
-    // controller.ts rewrite happens to be checked out when this runs.
     "astar-straight": read("--c-astar"),
     "astar-straightGlow": read("--g-astar"),
     "astar-weighted": read("--c-astar-w"),
