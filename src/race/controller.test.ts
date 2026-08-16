@@ -448,7 +448,18 @@ describe("RaceController.run() (renderAt) — additive:true regression", () => {
           ch: fakeAlgoResult([0, 1], [0, 1]),
         },
       },
-    } as MessageEvent<WorkerResponse>);
+      // I3 reconciliation: I1's roster round widened worker.ts's `Algo`
+      // from a small closed union to plain `string`, so `RaceResponse.
+      // results` is now `Partial<Record<string, AlgoResult>>` (an index
+      // signature) rather than a handful of named optional properties —
+      // this fixture's two-key literal no longer structurally overlaps
+      // `MessageEvent<WorkerResponse>` closely enough for a direct `as`
+      // (tsc TS2352). Same `as unknown as` idiom this codebase already
+      // uses for other deliberately-loose casts (worker.ts's `self as
+      // unknown as Worker`, home.ts's `controller as unknown as
+      // ControllerApiShim`) — this fixture only needs `.data` read back
+      // through dispatchResponse, never the real MessageEvent surface.
+    } as unknown as MessageEvent<WorkerResponse>);
 
     await runPromise;
 
@@ -457,5 +468,81 @@ describe("RaceController.run() (renderAt) — additive:true regression", () => {
       const opts = call[5] as { additive: boolean };
       expect(opts.additive).toBe(true);
     }
+  });
+});
+
+// I3 integration fix: run()'s core-comparison lookup used to read the
+// HARDCODED key `res.results.dijkstra` — correct only while familyBidi is
+// off. Once setFamilyBidi(true) is active, dijkstra's ACTUAL request key is
+// `bidi:dijkstra` (activeRacers()), so a real worker response never contains
+// a plain `dijkstra` entry at all while bidi is on — the old code's
+// `if (!dij || !ch) return;` guard silently discarded EVERY bidirectional
+// race before reportResults/renderAt ever ran (no scoreboard update, no
+// replay, no aria announcement). Neither wave's own unit tests constructed a
+// real bidi RaceRequest through a live run() — this was caught only by an
+// end-to-end live race (agent-browser, the I3 integration gate). This block
+// closes that gap: it drives run() through setFamilyBidi(true) and replies
+// with EXACTLY the response shape a real worker sends for that request
+// (`bidi:dijkstra` + `ch`, never a plain `dijkstra` key), then asserts the
+// UI actually gets updated — a silently-empty mockUi regresses this loudly
+// if the hardcoded-key bug ever comes back.
+describe("RaceController.run() — bidi request/response key regression (I3)", () => {
+  function mockUi(): RaceUi {
+    return { setRow: vi.fn(), setTime: vi.fn(), setHeadline: vi.fn(), announce: vi.fn(), setRowDelta: vi.fn() };
+  }
+
+  function mockView() {
+    return { clearOverlay: vi.fn(), drawDots: vi.fn(), drawRoute: vi.fn(), drawPin: vi.fn() };
+  }
+
+  beforeEach(() => {
+    FakeWorker.instances = [];
+    vi.stubGlobal("Worker", FakeWorker);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a race started under setFamilyBidi(true) still reports results, reading dijkstra's CURRENT (bidi:dijkstra) key rather than assuming the plain one is present", async () => {
+    const ui = mockUi();
+    const controller = new RaceController(mockView() as unknown as MapView, ui);
+    controller.setFamilyBidi(true);
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    expect(worker).toBeDefined();
+    expect(worker?.sent).toHaveLength(1);
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+    // The request itself must ask for the bidi form, never the plain one —
+    // otherwise this test would trivially pass for the wrong reason.
+    expect(req?.algos).toContain("bidi:dijkstra");
+    expect(req?.algos).not.toContain("dijkstra");
+
+    // Exactly the response shape a real worker sends back for this request:
+    // only the keys actually asked for — worker.ts's handleRequest never
+    // populates a key nothing requested.
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          "bidi:dijkstra": fakeAlgoResult([0, 1], [0, 1]),
+          ch: fakeAlgoResult([0, 1], [0, 1]),
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+
+    await runPromise;
+
+    // Before the fix: run()'s `res.results.dijkstra` lookup was always
+    // undefined here, so the function returned before calling any of these
+    // — the whole race silently no-op'd. After the fix, a completed bidi
+    // race reports exactly as a plain one does, keyed by the STABLE
+    // `RacerId` ("dijkstra"), never the request key that flipped to get
+    // here (see controller.ts's own header comment on the two id spaces).
+    expect(ui.setHeadline).toHaveBeenCalled();
+    expect(ui.announce).toHaveBeenCalled();
+    expect(ui.setRow).toHaveBeenCalledWith("dijkstra", expect.any(Number), expect.any(Number));
   });
 });
