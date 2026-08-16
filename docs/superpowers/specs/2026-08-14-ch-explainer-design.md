@@ -564,6 +564,74 @@ toy testids keep their names (order on the page changes).
    simple English — technical/academic words allowed, phrasing simple
    and intuitive. Chapter headings (contracts) stay.
 
+## 18. Fourth build review (user, 2026-08-17 — binding; governs where it collides with earlier sections)
+
+**Layout & controls:**
+1. Routes section matches the MAP's width (not the full layout).
+2. "Surprise me" visually signals randomness: a rainbow treatment
+   (gradient border/accent) distinct from every roster hue — it is a
+   control affordance, not a data series, so the chart-palette rules
+   don't bind it; reduced-motion-safe (no animation required).
+3. Algo on/off affordance: no switches — each toggleable algorithm row
+   is enclosed in a thin BEZEL (border) and the whole bezel is the click
+   target (`aria-pressed` on the row control). Off = dimmed + hollow
+   bezel; on = full presence.
+7. The view (overlay⇄compare) button shrinks and moves to the TOP of the
+   Algorithms section.
+9. A map-size control sits NEXT TO the view button, same line, both
+   small: "current" (default, today's fixed layout cap) vs "adaptive"
+   (the layout cap relaxes so the map extends into large viewports;
+   panel width unchanged). Persisted (localStorage, guarded). Testid
+   `size-toggle`.
+10. The theme button becomes a simple ICON that changes with the
+    selected theme (system ◐ / dark ☾ / light ☀) at ALL widths; full
+    state lives in the aria-label. theme.ts and its tests update
+    coherently.
+
+**Algorithm roster (the deep change):**
+4. A\* gains MULTIPLE heuristics, each its own racer row:
+   - "A\* — straight line": current admissible haversine ÷ data-derived
+     vMax. Exact (equivalence-tested).
+   - "A\* — weighted (1.5×)": h × 1.5 — inadmissible on purpose; faster,
+     may return a longer route.
+   - "A\* — greedy (direction only)": pure h ordering (no g) — the
+     user's "direction guided"; strongly directed, routinely suboptimal.
+   **Honesty rule (binding):** every race already computes the exact
+   answer (Dijkstra/CH). Any variant whose returned route is longer than
+   optimal must SAY SO in its row, live: "+X% longer route", computed
+   from measured distances. No variant ever silently presents a
+   suboptimal route as "the" route. The map draws THE optimal route as
+   the shared route; a suboptimal variant's own route may be shown on
+   its compare panel with its disclosure.
+5. Each A\* row is named "A\* — <heuristic>" exactly as listed above.
+6. BIDIRECTIONAL becomes a family-wide MODIFIER, not a racer: one large
+   thin bezel groups the "graph searchers" family (Dijkstra + all A\*
+   variants) with a single "bidirectional" toggle on the bezel. When on,
+   every ACTIVE family member runs its bidirectional form: Dijkstra →
+   existing bidirectional Dijkstra; A\* straight-line → balanced
+   bidirectional A\* (Ikeda average-function heuristic — exactness
+   preserved for the admissible heuristic, equivalence-tested); weighted
+   and greedy bidirectional forms reuse the balanced framework with
+   their scaling applied and remain disclosed-suboptimal. Active rows
+   show a ⇄ marker while modified (identity hue NEVER changes). CH sits
+   outside the family bezel (its own class; its fineprint may note it is
+   inherently bidirectional).
+
+**Splash:** 8. Copy order becomes: (a) what this project/website IS
+(one plain sentence), then (b) the race exploration invitation (the
+core-interaction sentence stays verbatim). Simple words.
+
+**Roster palette (validated this round, both modes, dataviz validator all
+checks pass; light magenta+yellow carry the relief rule = always-visible
+row labels):** display order Dijkstra, A\*-straight, A\*-weighted,
+A\*-greedy, CH. Dark: `#d95926` `#9085e9` `#d55181` `#c98500` `#3987e5`;
+light: `#eb6834` `#4a3aa7` `#e87ba4` `#eda100` `#2a78d6`. Glow variants:
+existing four keep their mapping (A\*-weighted inherits the old bidi glow
+family `#e87ba0`; A\*-greedy dark glow `#e8c063` — a lightened step of its
+chart hue, map-dots only, never sole identity). The retired "bidirectional
+racer" hue assignment disappears with the racer; the ⇄ modifier carries no
+colour of its own.
+
 ## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
