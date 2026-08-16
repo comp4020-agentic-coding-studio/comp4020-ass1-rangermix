@@ -93,6 +93,30 @@ function peekKey(h: MinHeap): number {
  * post-hoc full-graph scan needed (unlike chQuery.ts's, which exists
  * specifically to cover ITS sequential-not-interleaved shortcut).
  *
+ * One more thing worth making explicit (I3 gate note) — it's easy to read
+ * the case split above as if `best` only reaches `d*` once some single
+ * node becomes doubly settled, but that's not what typically happens.
+ * Suppose forward settles some node `u` that lies on a shortest path, and
+ * `u`'s immediate successor `v` on that same path (joined by the real edge
+ * `(u, v)`) is ALREADY done on the backward side — while `u` itself is NOT
+ * done backward and `v` is NOT done forward, so no node is done on both
+ * sides yet at all; the two frontiers are simply adjacent across this one
+ * boundary edge, with no shared settled node between them. The settle-time
+ * check (`isDone(other, u)`) does not fire for `u` here. But settling `u`
+ * immediately walks its out-edges, including `(u, v)`: `d = distF(u) +
+ * w(u, v)`, which equals `distF(v)` exactly (`u`, `v` are consecutive on a
+ * shortest path, and `u`'s own dist is already final by the time it's
+ * settled — relaxing along the path edge lands precisely on the true
+ * successor distance), and `isDone(other, v)` is true — so the RELAX-time
+ * check (inside the very same `for` loop, on `v`) fires with candidate
+ * `distF(v) + distB(v) = d*` exactly. A relax across the boundary edge,
+ * not a doubly-settled node, is the typical way `best` reaches `d*` in
+ * practice; it's exactly why the check lives at BOTH settle time and relax
+ * time (this function's two check points, named in its own opening
+ * paragraph) rather than settle time alone, and it's what lets
+ * bidirectional search stop right where the frontiers actually meet
+ * instead of needing to push either one past it.
+ *
  * One more thing worth knowing, not load-bearing for the proof above but
  * useful for reasoning about the common case: `from` becomes done on the
  * forward side on the very FIRST outer-loop iteration (both heaps start

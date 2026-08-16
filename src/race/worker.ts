@@ -177,6 +177,27 @@ for (const entry of ROSTER) {
   if (entry.bidiKey) registry[entry.bidiKey] = fnFor(entry.id, true);
 }
 
+// Pre-warm gating sets (I3 gate fix): which request keys need getVMax/
+// getGRev paid before the per-key timing brackets below, derived from
+// ROSTER by entry lookup — never `key.includes("astar")` / `key.
+// startsWith("bidi:")` substring matching against the key STRING, which
+// only happened to work because every current id/prefix spells those
+// substrings, not because the registry actually promises to. ASTAR_KEYS is
+// every non-dijkstra, non-ch entry's own workerKey + bidiKey (exactly the
+// ids `fnFor` routes through `makeHeuristic`/`astarVariant`/`bidiAstar`,
+// straight or bidi form, both of which read `getVMax`); BIDI_KEYS is every
+// entry's own bidiKey, whichever ones roster.ts actually defines (every
+// "searchers" member, dijkstra included — `bidijkstra` needs `getGRev` too,
+// even though dijkstra itself never touches `getVMax`).
+const ASTAR_KEYS = new Set(
+  ROSTER.filter((e) => e.id !== "dijkstra" && e.id !== "ch").flatMap((e) =>
+    e.bidiKey ? [e.workerKey, e.bidiKey] : [e.workerKey],
+  ),
+);
+const BIDI_KEYS = new Set(
+  ROSTER.map((e) => e.bidiKey).filter((k): k is string => k !== undefined),
+);
+
 /** Every key `handleRequest` can resolve, including `"ch"` (special-cased,
  * not actually IN `registry` — see the comment on the loop above). Exported
  * only for controller.test.ts's "registry mapping from roster" check (every
@@ -211,8 +232,10 @@ export async function handleRequest(
   // too), now generalised across however many astar/bidi keys one request
   // carries. Still skipped entirely when nothing in THIS request needs it
   // — a race with only the two core keys (dijkstra, ch) never pays either.
-  if (req.algos.some((k) => k.includes("astar"))) getVMax(graph);
-  if (req.algos.some((k) => k.startsWith("bidi:"))) getGRev(graph);
+  // Gated via ASTAR_KEYS/BIDI_KEYS (ROSTER entry lookup, built once above),
+  // not a substring test against the key string itself.
+  if (req.algos.some((k) => ASTAR_KEYS.has(k))) getVMax(graph);
+  if (req.algos.some((k) => BIDI_KEYS.has(k))) getGRev(graph);
 
   for (const key of req.algos) {
     const t0 = performance.now();

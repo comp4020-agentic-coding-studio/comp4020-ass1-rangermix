@@ -185,6 +185,25 @@ function step(
  * construction is specifically what makes it vanish, so this reduces to
  * exactly bidijkstra.ts's own unmodified stopping rule.
  *
+ * (I3 gate note — the same adjacent-frontiers boundary case bidijkstra.ts's
+ * own step() doc now spells out in full, restated here in this function's
+ * own terms: best.d reaching d* does NOT require any node to be
+ * independently settled on both sides. Suppose forward settles some node u
+ * on a shortest from->to path whose immediate successor v (real edge
+ * (u, v)) is ALREADY done backward, while u itself is not done backward
+ * and v is not done forward — no node done on both sides yet at all, the
+ * frontiers are merely adjacent across this one edge. step()'s settle-time
+ * check (`isDone(other, u)`) does not fire for u here. But settling u
+ * relaxes (u, v): the TRUE accumulated cost g_f(u) + w(u, v) equals v's
+ * true forward cost exactly (consecutive nodes on a shortest path, u's own
+ * g already final once settled), and `isDone(other, v)` is true, so the
+ * RELAX-time check fires with a candidate that sums to d* exactly — same
+ * mechanism, same conclusion, regardless of which potential (if any)
+ * shaped the heap key that got u popped in this order, because the meeting
+ * checks themselves — per step()'s own doc — only ever compare the true
+ * g/dist on each side, never a potential-shifted key. This is the typical
+ * way best.d reaches d* in practice, here exactly as in bidijkstra.ts.)
+ *
  * kind="weighted"/"greedy": h_t/h_s get WEIGHTED_FACTOR-scaled (weighted)
  * or the search key drops g (greedy) — either way p_f is no longer
  * consistent (weighted: the |...| <= w(u,v) bound above no longer holds
