@@ -44,6 +44,8 @@ export const CONTRACTS = {
     howCta: "how-cta",
     astarNote: "astar-note",
     sizeToggle: "size-toggle",
+    splashOpen: "splash-open",
+    splashSuppress: "splash-suppress",
     toys: ["toy-flood", "toy-hierarchy", "toy-climb", "toy-contraction", "toy-order"],
   },
   attribution: "OpenStreetMap contributors",
@@ -151,6 +153,41 @@ describe("spec: home page (/) contracts", () => {
         expect(toggle?.getAttribute("aria-label"), page).toBe("Theme: system");
         expect(toggle?.querySelector(".theme-toggle-icon")?.textContent, page).toBe("◐");
       }
+    },
+  );
+
+  // §19.5 (fifth build review): the splash doubles as an About surface —
+  // this ⓘ button re-opens it at any time (home.ts's open(), reusing the
+  // existing dismiss() machinery). Usable in EITHER state (before or after
+  // dismissal), so unlike most of the header nav's neighbours it needs no
+  // `disabled` assertion here — it's deliberately never gated (see
+  // GatedControls' own comment in home.ts for the "legitimate under the
+  // splash" carve-out this shares with how-cta and the rest of the nav).
+  it(
+    `ⓘ splash-reopen button [data-testid=${CONTRACTS.testids.splashOpen}] exists in the header nav, a real button labelled "About Highway to Hill" (spec §19.5)`,
+    () => {
+      const doc = pageDoc("index.html");
+      const btn = doc?.querySelector(`header nav [data-testid="${CONTRACTS.testids.splashOpen}"]`);
+      expect(btn).toBeTruthy();
+      expect(btn?.tagName).toBe("BUTTON");
+      expect(btn?.getAttribute("aria-label")).toBe("About Highway to Hill");
+    },
+  );
+
+  // §19.5: the splash's own "don't show this again" preference — a real
+  // checkbox so its state (and native label association) needs no
+  // bespoke ARIA; home.ts's loadSplashOff/saveSplashOff own the persistence
+  // (untestable from static HTML, exercised in home.test.ts instead).
+  it(
+    `"don't show this again" checkbox [data-testid=${CONTRACTS.testids.splashSuppress}] exists inside the splash, a real checkbox input (spec §19.5)`,
+    () => {
+      const doc = pageDoc("index.html");
+      const splash = doc?.querySelector('[data-testid="splash"]');
+      const input = doc?.querySelector(`[data-testid="${CONTRACTS.testids.splashSuppress}"]`);
+      expect(input).toBeTruthy();
+      expect(input?.tagName).toBe("INPUT");
+      expect(input?.getAttribute("type")).toBe("checkbox");
+      expect(splash?.contains(input as Node)).toBe(true);
     },
   );
 

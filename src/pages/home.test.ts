@@ -38,9 +38,11 @@ import {
   applyControlsEnabled,
   applySplashInert,
   autoRunPins,
+  computeChromeHeight,
   diffPanels,
   effectiveViewMode,
   shouldArmAutoRun,
+  shouldShowSplashOnBoot,
   type GatedControls,
   type SplashInertTargets,
 } from "./home";
@@ -113,6 +115,29 @@ describe("effectiveViewMode (H5 gate fix — the persisted-Compare splash deadlo
   it("leaves a persisted Overlay mode alone regardless of splash state (nothing to force — already the safe default)", () => {
     expect(effectiveViewMode("overlay", false)).toBe("overlay");
     expect(effectiveViewMode("overlay", true)).toBe("overlay");
+  });
+});
+
+// §19.5 (fifth build review — the ⓘ splash-reopen control): boot-time splash
+// visibility now depends on TWO independent, never-mutually-clearing flags
+// instead of one. Each test flips exactly one flag away from "show" to pin
+// down that both are independently load-bearing, matching the same
+// one-flag-at-a-time discipline shouldArmAutoRun's own tests above use.
+describe("shouldShowSplashOnBoot (§19.5 — session dismissal OR the persistent \"don't show this again\" preference, either alone suppresses)", () => {
+  it("shows the splash when neither flag is set (a genuinely first visit)", () => {
+    expect(shouldShowSplashOnBoot(false, false)).toBe(true);
+  });
+
+  it("off-pref set (localStorage \"hth-splash-off\") suppresses the splash even on a fresh session with no sessionStorage dismissal", () => {
+    expect(shouldShowSplashOnBoot(false, true)).toBe(false);
+  });
+
+  it("session dismissal alone (the pre-existing rule) still suppresses, off-pref or not", () => {
+    expect(shouldShowSplashOnBoot(true, false)).toBe(false);
+  });
+
+  it("both flags set: still suppressed (not a special/different state)", () => {
+    expect(shouldShowSplashOnBoot(true, true)).toBe(false);
   });
 });
 
@@ -242,6 +267,32 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
     applySplashInert(inertTargets, true);
     expectAllGated(true, false);
   });
+
+  // §19.5: home.ts's new open() (the ⓘ button's handler) calls these exact
+  // same two functions a second time, with splashDismissed flipped back to
+  // false — it isn't a fork of dismiss()'s gating logic, just a second call
+  // site for it. This chains dismiss -> reopen -> dismiss (three transitions,
+  // not the original test's two) specifically to catch a state-leak a
+  // single round-trip could miss — e.g. a listener or attribute that only
+  // fails to reset correctly the SECOND time a control is re-gated.
+  it("reopening after dismissal (§19.5 — the ⓘ button) re-gates every control exactly like the original splash did, and a second dismissal re-ungates them the same way", () => {
+    applyControlsEnabled(controls, true, false); // fresh splash, data ready
+    applySplashInert(inertTargets, false);
+    expectAllGated(true, true);
+
+    applyControlsEnabled(controls, true, true); // first dismissal (Explore/Escape)
+    applySplashInert(inertTargets, true);
+    expectAllGated(false, false);
+
+    applyControlsEnabled(controls, true, false); // reopened via ⓘ
+    applySplashInert(inertTargets, false);
+    expectAllGated(true, true);
+    expect(howCta?.inert).toBeFalsy(); // still untouched, same carve-out as every other state above
+
+    applyControlsEnabled(controls, true, true); // dismissed again
+    applySplashInert(inertTargets, true);
+    expectAllGated(false, false);
+  });
 });
 
 // Compare mode (build-review §14.3): diffPanels is the pure add/keep/remove
@@ -310,5 +361,26 @@ describe("diffPanels (panel-set diffing: current panel algos vs. the next desire
     expect(result.keep).toEqual(["ch", "dijkstra"]);
     expect(result.remove).toEqual(["astar-straight"]);
     expect(result.add).toEqual(["astar-weighted"]);
+  });
+});
+
+// J3 (spec §19.2): the arithmetic behind the `--chrome-h` custom property
+// styles.css's adaptive-height rule reads — everything in the `.hero` column
+// EXCEPT the map area itself. updateChromeHeight() (boot()-only, untested
+// here like the rest of boot()'s DOM glue) is the thin live-measurement
+// wrapper around this; this is the plain sum it hands off to, tested with
+// plain numbers rather than a real layout.
+describe("computeChromeHeight (J3 — the live-measured height of everything but the map area, in .hero)", () => {
+  it("sums all five pieces", () => {
+    expect(computeChromeHeight(73, 96, 24, 40, 16)).toBe(249);
+  });
+
+  it("is a plain sum — order of the same five values doesn't matter, only that all five are counted once", () => {
+    expect(computeChromeHeight(1, 2, 3, 4, 5)).toBe(15);
+    expect(computeChromeHeight(5, 4, 3, 2, 1)).toBe(15);
+  });
+
+  it("an all-zero layout (nothing measured yet, e.g. a pre-layout call) sums to zero, not NaN or a floor value — updateChromeHeight's own `|| 0` guards feed this the same way", () => {
+    expect(computeChromeHeight(0, 0, 0, 0, 0)).toBe(0);
   });
 });

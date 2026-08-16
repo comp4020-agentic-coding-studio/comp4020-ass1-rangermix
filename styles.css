@@ -269,7 +269,38 @@ a {
   font-weight: 600;
 }
 
-.site-head nav .chip {
+/* §19.5 addition: the header nav now carries TWO chips (the new ⓘ
+   splash-reopen button ahead of the theme toggle) on the home page, but
+   still only ONE on /how/ (untouched this round). Two things were tried
+   and rejected live before this one, both because a bare `.chip` selector
+   or a structural pseudo-class treats ⓘ and Theme as independent flex
+   items of `nav`, so THIS container's own line-wrapping can split them:
+   `:last-child` left ⓘ stranded next to "How it works" with Theme alone at
+   the far edge; `:first-of-type` clustered them correctly at 2400px but,
+   at 390px, "How it works" + ⓘ (now pushed to line 1's own far edge) filled
+   line 1 exactly enough that Theme no longer fit beside it and wrapped
+   ALONE onto line 2 — split across two lines, at OPPOSITE horizontal
+   edges, worse than either single-chip case.
+   The actual fix: index.html wraps ⓘ+Theme in `.nav-icons`, a single flex
+   item of `nav` that lays its own two children out internally — nav's own
+   line-wrap can now only move the WRAPPER as one piece, never split its
+   contents, at any width. `> .chip:last-child` (direct-child combinator)
+   keeps /how/'s own unwrapped theme-toggle right-anchored exactly as
+   before — it matches there (theme-toggle is a direct nav child) and
+   matches nothing on the home page (both chips now sit one level deeper,
+   inside `.nav-icons`, never a direct child of `nav` itself), so the two
+   rules below can never both fire on the same element. Ordered before the
+   margin rule (lower specificity first) to satisfy stylelint's
+   no-descending-specificity, same convention .route-chip's own comment
+   documents elsewhere in this file. */
+.nav-icons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.site-head nav > .chip:last-child,
+.site-head nav > .nav-icons {
   margin-left: auto;
 }
 
@@ -310,6 +341,83 @@ a {
    no extra JS beyond the class toggle is needed. */
 .race-layout.is-adaptive {
   max-width: none;
+}
+
+/* J3 (spec §19.1-.2, fifth build review): adaptive's VERTICAL half — the
+   rule above only ever relaxed WIDTH. The map area's height now grows too,
+   filling the viewport down to (never past) the Routes strip, so a tall
+   monitor gets a taller map, not just a wider one, and Routes never folds
+   out of view. --chrome-h (home.ts's updateChromeHeight(), fed by the pure
+   computeChromeHeight() the same file unit-tests) is the LIVE-measured
+   height of everything else in this column — the header, .race-layout's own
+   top/bottom padding, .hero's own row gap, and the Routes strip itself — so
+   this can't drift from this file's real numbers the way a hardcoded pixel
+   guess would, and stays correct as those pieces' own heights change
+   (route-chip wrapping, the load-note appearing/disappearing once data is
+   ready, the §19.5 ⓘ button this same round added to the header). A
+   ResizeObserver (home.ts) keeps it current; the calc() below just reads
+   whatever it last measured. max(72vh, …) is a FLOOR, not a ceiling —
+   adaptive only ever ADDS height over "current" mode's own 72vh figure,
+   even on a viewport too short for the calc'd figure to clear it (a
+   wide-but-short window); it never shrinks the map.
+
+   Gated behind the SAME >1440px threshold as the size toggle's own
+   visibility (below): below that width `.is-adaptive` must be a true no-op
+   on BOTH axes, never a still-stretching map behind a hidden control with
+   no visible way to undo it (the width rule above is already a no-op there
+   for a different reason — see the size-toggle comment below — so gating
+   only needed adding here).
+
+   .compare-grid gets the identical min-height treatment (§19.2: "compare
+   grid rows adapt too") — aspect-ratio still governs each panel's own
+   shape, driven by ITS column's width (untouched by this rule, which only
+   floors the GRID's own box height). Verified live at 2400×1300: with only
+   Dijkstra+CH active, two 4:3 panels at that width are naturally only
+   ~620px tall, well short of the ~1073px this rule floors the box to — a
+   plain top-aligned grid (the default) left a visibly dead ~450px gap
+   below the panels before Routes. `align-content: center` (grid rows are
+   still their own natural aspect-ratio height, never stretched or
+   distorted by this) turns that dead gap into even top/bottom framing
+   instead — reads as an intentional layout, not a bug, and costs nothing
+   when the natural content already fills the box (more active racers,
+   more rows, or a narrower window). */
+@media (width > 1440px) {
+  .race-layout.is-adaptive .map-stack,
+  .race-layout.is-adaptive .compare-grid {
+    min-height: max(72vh, calc(100dvh - var(--chrome-h, 0px)));
+  }
+
+  .race-layout.is-adaptive .compare-grid {
+    align-content: center;
+  }
+}
+
+/* Size toggle visibility (spec §19.1): hidden once the viewport is too
+   narrow for adaptive to add anything worth having. Two independent reasons
+   land on the same number: .race-layout's own max-width (1400px, and —
+   box-sizing:border-box, the global rule at the top of this file — already
+   INCLUSIVE of its own 20px side padding) stops binding at that exact
+   width (below it "current" and "adaptive" render at the identical width,
+   the viewport itself being what's constraining, not the cap), and the
+   vertical rule above is gated at the same threshold by construction. 1440,
+   not the mathematically exact 1400: a 40px buffer so the control doesn't
+   flicker back into view for a 1-to-40px gain nobody would perceive as "the
+   map extended" — it shows only once relaxing the cap would add a width
+   actually worth having.
+
+   Static markup (index.html) keeps the button in the DOM at every width —
+   spec/highway-to-hill.test.ts's own existence check is unaffected, this
+   is visibility only. If the visitor toggled adaptive ON at a wide viewport
+   and then shrank the window below this line, `hth-size` stays stored as
+   "adaptive" (home.ts never clears it) but — since both rules above are
+   gated at the identical threshold — the rendered layout is indistinguishable
+   from "current" the whole time it's below the line; widening the window
+   back past 1440px snaps both the button and the extra space back on
+   together, with nothing left half-applied in between. */
+@media (width <= 1440px) {
+  .size-toggle {
+    display: none;
+  }
 }
 
 .hero {
@@ -598,6 +706,31 @@ html[data-splash-dismissed] .splash {
 
 .splash-copy .splash-explore {
   margin-top: 8px;
+}
+
+/* §19.5 (fifth build review): the "don't show this again" preference, a
+   real <label> wrapping the checkbox (not a separate <label for>) so the
+   WHOLE row is the click/tap target, not just the 18px box — min-height:44px
+   keeps that target at the same WCAG 2.5.8 floor every other control on
+   this page uses (see .chip's own min-height for the convention this
+   matches). Styling only — home.ts's loadSplashOff/saveSplashOff
+   (localStorage, "hth-splash-off") own the persistence; this rule just
+   gives the row its shape and touch target. */
+.splash-suppress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 2px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.splash-suppress input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
 }
 
 .controls {

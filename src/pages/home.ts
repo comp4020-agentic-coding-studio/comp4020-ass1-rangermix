@@ -100,6 +100,27 @@ export function effectiveViewMode(mode: "overlay" | "compare", splashDismissed: 
   return splashDismissed ? mode : "overlay";
 }
 
+/** §19.5 (fifth build review — the ⓘ splash-reopen control): whether the
+ * splash should be visible at BOOT, now decided by two independent flags
+ * instead of one — the pre-existing per-tab sessionStorage dismissal
+ * (`sessionDismissed`) and the new persistent "don't show this again"
+ * localStorage preference (`permanentlyOff`, home.ts's loadSplashOff()).
+ * Either one alone is enough to keep the splash hidden on load; neither
+ * clears the other (a visitor who unchecks the box mid-session still
+ * starts dismissed on THIS tab's next reload via sessionStorage, and one
+ * who never checked it but already clicked Explore this session stays
+ * dismissed regardless of the box). Pure so this two-flag decision is
+ * unit-testable without any DOM/storage, same rationale as
+ * autoRunPins/shouldArmAutoRun/effectiveViewMode above — boot()'s own
+ * `if (!shouldShowSplashOnBoot(...))` branch (which also sets
+ * `splashDismissed`/`splashEl.hidden` and, via the SAME
+ * updateControlsEnabled()/updateSplashInert() calls that branch already
+ * made before this round, arms every gated control immediately) is the
+ * thin, untested-here DOM consumer. */
+export function shouldShowSplashOnBoot(sessionDismissed: boolean, permanentlyOff: boolean): boolean {
+  return !sessionDismissed && !permanentlyOff;
+}
+
 /** The full set of controls gated by (dataReady AND splashDismissed) --
  * everything that OPERATES the hidden map/race (H2 gate fix, a build-review
  * finding against the splash this subsumes into: ".splash only covers
@@ -251,6 +272,28 @@ export function diffPanels(current: RacerId[], next: RacerId[]): PanelDiff {
   };
 }
 
+/** J3 (spec §19.2): the arithmetic behind the `--chrome-h` custom property
+ * styles.css's adaptive-height rule reads (`.race-layout.is-adaptive
+ * .map-stack`/`.compare-grid`, `calc(100dvh - var(--chrome-h))`) — the
+ * total height of everything in the `.hero` column EXCEPT the map area
+ * itself: the header, .race-layout's own top/bottom padding, .hero's own
+ * row gap between the map area and Routes, and the Routes strip
+ * (`.controls`) itself. Pulled out as a pure five-number sum so it's
+ * unit-testable without a real DOM; updateChromeHeight() (boot()-only,
+ * untested here like the rest of boot()'s DOM glue — same pure/DOM split
+ * this file uses throughout) is the thin wrapper that measures those five
+ * numbers off the real page (live, not hardcoded — see its own comment for
+ * why) and writes the result into the custom property. */
+export function computeChromeHeight(
+  headerH: number,
+  controlsH: number,
+  layoutPaddingTop: number,
+  layoutPaddingBottom: number,
+  heroGap: number,
+): number {
+  return headerH + controlsH + layoutPaddingTop + layoutPaddingBottom + heroGap;
+}
+
 interface PanelEntry {
   algo: RacerId;
   el: HTMLElement;
@@ -360,6 +403,31 @@ function saveViewMode(mode: "overlay" | "compare"): void {
   }
 }
 
+// §19.5 (fifth build review) — the splash's own "don't show this again"
+// preference: same guarded try/catch pattern, and same PERSISTENT
+// localStorage (not sessionStorage — deliberately outlives this tab/session,
+// unlike SPLASH_KEY below, which is the existing per-tab dismissal flag).
+// Read at boot by shouldShowSplashOnBoot (pure, unit-tested) alongside that
+// per-tab flag; written whenever the splash's own checkbox (index.html)
+// changes — see the `splashSuppressCheckbox` wiring further down.
+const SPLASH_OFF_KEY = "hth-splash-off";
+
+function loadSplashOff(): boolean {
+  try {
+    return localStorage.getItem(SPLASH_OFF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveSplashOff(off: boolean): void {
+  try {
+    localStorage.setItem(SPLASH_OFF_KEY, off ? "1" : "0");
+  } catch {
+    /* storage unavailable — the checkbox still works in-memory for this pageview */
+  }
+}
+
 function boot(): void {
   initTheme();
 
@@ -375,6 +443,10 @@ function boot(): void {
   const loadNote = document.getElementById("load-note");
   const splashEl = document.querySelector<HTMLElement>('[data-testid="splash"]');
   const exploreBtn = document.querySelector<HTMLButtonElement>('[data-testid="explore"]');
+  // §19.5: the header's ⓘ button (re-opens the splash at any time) and the
+  // splash's own "don't show this again" checkbox.
+  const splashOpenBtn = document.querySelector<HTMLButtonElement>('[data-testid="splash-open"]');
+  const splashSuppressCheckbox = document.querySelector<HTMLInputElement>('[data-testid="splash-suppress"]');
   const raceRunBtn = document.querySelector<HTMLButtonElement>('[data-testid="race-run"]');
   // Roster round (spec §18): the panel is built from src/race/roster.ts's
   // own ROSTER array, not two hand-named toggles any more -- every
@@ -392,6 +464,11 @@ function boot(): void {
   const viewToggleBtn = document.querySelector<HTMLButtonElement>('[data-testid="view-toggle"]');
   const sizeToggleBtn = document.querySelector<HTMLButtonElement>('[data-testid="size-toggle"]');
   const raceLayoutEl = document.querySelector<HTMLElement>(".race-layout");
+  // J3 (spec §19.2): the two other pieces of the `.hero` column's own
+  // "chrome" (everything that isn't the map area) that updateChromeHeight()
+  // below needs to measure live — see that function's own comment.
+  const siteHeadEl = document.querySelector<HTMLElement>(".site-head");
+  const heroEl = document.querySelector<HTMLElement>(".hero");
   // H2 gate fix: the routes/controls wrapper (the inert target below) and
   // every route-preset chip (a disabled-gate target) -- one shared class
   // (`.route-chip`, index.html) picks up all six regardless of whether each
@@ -602,18 +679,73 @@ function boot(): void {
     (viewMode === "compare" ? compareGrid : stack)?.focus();
   }
 
-  if (safeSessionGet(SPLASH_KEY) === "1") {
-    // Pre-dismissed earlier this session: start hidden with no animation
-    // or flash — index.html's own inline head script already stamped
-    // `data-splash-dismissed` on <html> before first paint for the CSS
-    // half of that; setting `hidden` here is the JS-observable half that
+  /** §19.5 (fifth build review): re-opens the splash at any time via the
+   * header's ⓘ button. Reuses EXACTLY the gate/inert/view-mode machinery
+   * dismiss() above already calls (updateControlsEnabled/updateSplashInert/
+   * applyViewMode), just left un-reversed here, so a reopened splash traps
+   * focus and re-gates the hidden map/race controls identically to a fresh
+   * one — see those functions' own comments for what each does; nothing
+   * here is a fork of that logic, only a second call site for it.
+   *
+   * Deliberately does NOT touch SPLASH_KEY (sessionStorage): reopening
+   * mid-session is "show me the intro again", not "undo my earlier
+   * dismissal" — a fresh reload of this same tab should still start
+   * dismissed, exactly as the visitor already chose, and dismiss() re-sets
+   * that flag regardless the next time this (re-)opened splash closes.
+   *
+   * Safe mid-race, including mid-replay: applyViewMode()'s non-compare
+   * branch calls controller.setComparePanels(null) (and destroys any
+   * Compare panels), but per controller.ts's own contract (sibling-owned,
+   * read not edited here) that only changes WHERE the current frame is
+   * drawn — it never touches `raceToken`, the one thing the animate() rAF
+   * loop actually checks to keep going. An in-flight replay keeps running
+   * untouched underneath the now-opaque splash; dismissing again just
+   * reveals whatever frame it has reached by then, never a paused or
+   * rewound one. */
+  function open(): void {
+    if (!splashEl || !splashEl.hidden) return; // already open (or no splash element at all) -- nothing to do
+    splashEl.hidden = false;
+    // The pre-paint pass (index.html's inline head script) stamps
+    // `data-splash-dismissed` on <html> BEFORE this module even loads,
+    // whenever EITHER SPLASH_KEY (sessionStorage) or SPLASH_OFF_KEY
+    // (localStorage) already said "don't show it" at that load — which, on
+    // any reloaded/returning pageview this session, is true the instant
+    // after the FIRST dismissal. styles.css's own
+    // `html[data-splash-dismissed] .splash { display:none }` rule is
+    // MORE SPECIFIC than the bare `.splash` rule the `hidden` PROPERTY
+    // above relies on (an attribute selector + a class beats a class
+    // alone), so on exactly those pageviews, clearing `.hidden` here isn't
+    // enough by itself — the stamp would keep it CSS-hidden regardless.
+    // Removing the stamp here is what makes a reopened splash actually
+    // paint (found live: the gating/focus/view-mode side of open() all
+    // checked out correctly while the splash itself silently stayed
+    // display:none — dismiss() never had to clear this because it only
+    // ever moves the SAME direction the stamp already pushes).
+    document.documentElement.removeAttribute("data-splash-dismissed");
+    splashDismissed = false;
+    updateControlsEnabled(); // re-gates every dataReady-gated control, exactly like a fresh splash
+    updateSplashInert(); // re-traps focus/the accessibility tree the same way
+    applyViewMode(); // H5 gate fix's own effectiveViewMode forces Overlay again while the (re-)shown splash covers .map-frame
+    exploreBtn?.focus(); // same autofocus-the-primary-action treatment a fresh splash gets
+  }
+
+  // §19.5: boot-time visibility now depends on TWO independent preferences,
+  // not just the per-tab sessionStorage dismissal — see shouldShowSplashOnBoot's
+  // own comment for why neither flag clears the other.
+  if (!shouldShowSplashOnBoot(safeSessionGet(SPLASH_KEY) === "1", loadSplashOff())) {
+    // Pre-dismissed earlier this session, or permanently suppressed via the
+    // splash's own checkbox on an earlier visit: start hidden with no
+    // animation or flash — index.html's own inline head script already
+    // stamped `data-splash-dismissed` on <html> before first paint for the
+    // CSS half of that (both reasons, see its own updated comment); setting
+    // `hidden` here is the JS-observable half that
     // updateControlsEnabled/updateSplashInert/maybeArmAutoRun actually read.
     splashDismissed = true;
     if (splashEl) splashEl.hidden = true;
   } else {
-    // First splash this session: autofocus the primary action — a real,
-    // enabled, on-screen button, safe to autofocus — so keyboard use
-    // starts right where a mouse visitor's eye lands.
+    // First splash this session, not suppressed: autofocus the primary
+    // action — a real, enabled, on-screen button, safe to autofocus — so
+    // keyboard use starts right where a mouse visitor's eye lands.
     exploreBtn?.focus();
   }
   // H2 gate fix: recompute both gates right away too (boot-with-
@@ -635,6 +767,30 @@ function boot(): void {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") dismiss();
   });
+  // §19.5: the ⓘ button is usable in both states (before AND after the
+  // splash's first dismissal — it's deliberately outside GatedControls,
+  // same "legitimate under the splash" carve-out how-cta and the header nav
+  // already get, see GatedControls' own comment) and simply calls open()
+  // above; open() itself already no-ops if the splash is already showing.
+  splashOpenBtn?.addEventListener("click", open);
+
+  // §19.5: the splash's own "don't show this again" checkbox — starts
+  // matching whatever was persisted on an earlier visit (so reopening via
+  // ⓘ after having checked it before shows it still checked), and persists
+  // on every change. Purely a preference write: unlike Explore/Escape, it
+  // never itself dismisses or reopens the CURRENT splash instance (spec
+  // §19.5: "the Explore/Escape dismissal semantics... are unchanged").
+  if (splashSuppressCheckbox) {
+    splashSuppressCheckbox.checked = loadSplashOff();
+    // Captured into its own const (not the outer parameter-like reference)
+    // so the null-narrowing above still holds inside this nested closure —
+    // same cross-closure-narrowing idiom, same reason, as wireRosterRowToggle's
+    // own `node` capture further down.
+    const checkbox = splashSuppressCheckbox;
+    checkbox.addEventListener("change", () => {
+      saveSplashOff(checkbox.checked);
+    });
+  }
 
   // Which views a caller should draw pins/frames onto right now: the single
   // overlay `view` in overlay mode, or every active Compare panel's own
@@ -1378,6 +1534,51 @@ function boot(): void {
     // (further up boot()) already watches, which repaints the base layer
     // and every active overlay at the new box size on its own.
   });
+
+  /** J3 (spec §19.2): the vertical half of adaptive sizing's live
+   * measurement — writes `--chrome-h` (the total height of everything in
+   * the `.hero` column except the map area: header, .race-layout's own
+   * top/bottom padding, .hero's own row gap, and the Routes strip) onto
+   * `.race-layout` as an inline custom property, which styles.css's own
+   * `@media (width > 1440px) .race-layout.is-adaptive .map-stack`/
+   * `.compare-grid` rule reads via `calc(100dvh - var(--chrome-h))` — see
+   * that rule's own comment for the >1440px threshold and the max(72vh,…)
+   * floor. Live-measured (getComputedStyle + offsetHeight), not a
+   * hardcoded pixel guess: the header's own height isn't fixed (this exact
+   * round added a second chip to its nav, §19.5's ⓘ button) and neither is
+   * the Routes strip's (route-chip wrapping depends on the map's own width,
+   * which THIS SAME adaptive mode changes; the load-note line disappears
+   * once data is ready) — a constant baked in here would drift from
+   * styles.css's real numbers the moment either changed. The arithmetic
+   * itself is computeChromeHeight() (pure, unit-tested); this is only the
+   * DOM-reading half, untested here like the rest of boot()'s glue. Harmless
+   * to run even in "current" mode or below the 1440px threshold — the
+   * custom property just goes unread by any CSS rule at that point. */
+  function updateChromeHeight(): void {
+    if (!raceLayoutEl || !siteHeadEl || !controlsEl || !heroEl) return;
+    const layoutStyle = getComputedStyle(raceLayoutEl);
+    const heroStyle = getComputedStyle(heroEl);
+    const chromeH = computeChromeHeight(
+      siteHeadEl.offsetHeight,
+      controlsEl.offsetHeight,
+      parseFloat(layoutStyle.paddingTop) || 0,
+      parseFloat(layoutStyle.paddingBottom) || 0,
+      parseFloat(heroStyle.rowGap || heroStyle.gap) || 0,
+    );
+    raceLayoutEl.style.setProperty("--chrome-h", `${chromeH}px`);
+  }
+  updateChromeHeight();
+  // Watches the two pieces whose OWN height can change after boot (the
+  // header, on an unexpected wrap; the Routes strip, on route-chip
+  // rewrapping or the load-note hiding once data is ready) — a plain
+  // window "resize" listener would miss both, since neither necessarily
+  // follows a viewport resize (see this function's own comment for why
+  // both genuinely move independently of the viewport).
+  if (typeof ResizeObserver !== "undefined") {
+    const chromeResizeObserver = new ResizeObserver(() => updateChromeHeight());
+    if (siteHeadEl) chromeResizeObserver.observe(siteHeadEl);
+    if (controlsEl) chromeResizeObserver.observe(controlsEl);
+  }
 
   // render.json and routing.json load independently — nothing orders one
   // before the other — so routingReady's rejection can land BEFORE
