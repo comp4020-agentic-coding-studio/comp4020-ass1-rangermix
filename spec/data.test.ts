@@ -77,12 +77,13 @@ describe.skipIf(have)("artifacts missing", () => {
   it.todo("run pnpm data:fetch && pnpm data:build, commit public/data");
 });
 
-// The toytown-layer contracts (Task F4, design spec §14.8): the ANU-area
-// subgraph that replaces the hand-made 12-node mini-town under the /how/
-// toys. Same skip-if-absent pattern as above, gated on the committed
+// The toytown-layer contracts (Task F4, design spec §14.8; re-cut to the
+// Northbourne Avenue corridor for §16.12): the small real-street subgraph
+// that replaces the hand-made 12-node mini-town under the /how/ toys. Same
+// skip-if-absent pattern as above, gated on the committed
 // public/data/toytown.json existing (and — via `have` — the main artifacts
 // too, since the combined-budget test below reads all four files).
-describe.skipIf(!haveToytown)("toytown artifact (ANU-area /how/ subgraph)", () => {
+describe.skipIf(!haveToytown)("toytown artifact (Northbourne-corridor /how/ subgraph)", () => {
   let artifact: ToytownArtifact;
   let toytown: Toytown;
 
@@ -157,6 +158,28 @@ describe.skipIf(!haveToytown)("toytown artifact (ANU-area /how/ subgraph)", () =
     expect(from).not.toBe(to);
     const r = dijkstraCsr(toytown.graph.n, toytown.graph.fwd, from, to);
     expect(r.settled.length).toBeGreaterThanOrEqual(Math.ceil(toytown.graph.n * 0.5));
+  });
+
+  // G4 sensor (design spec §16.12, 2026-08-16 polish round): the toytown cut
+  // must be a REAL hierarchy — a genuine arterial (cls >= 2: secondary,
+  // primary, trunk or motorway in build.ts's CLS table) feeding a
+  // majority-local grid — not another uniform residential block like the
+  // ANU-campus cut this one replaced (user feedback: "use a place with
+  // clear hierarchy of roads... [ANU is] all small streets, no visible
+  // arterial spine"). Pinned here so a future re-cut can't regress it back
+  // to an all-local box. `cls` isn't declared on ToytownArtifact (src/data.ts)
+  // since no toy reads it — it rides along on each edge purely so this
+  // sensor can check the cut against the SHIPPED artifact in CI, which
+  // never has the gitignored cache a re-derivation would need (see
+  // build.ts's toytownHierarchyStats and TOYTOWN_BBOX's own comment for the
+  // tuning story). Cast locally rather than widening the shared type, since
+  // nothing else needs the field.
+  it("is hierarchy-rich: at least one cls>=2 (secondary/primary/trunk/motorway) edge, and at least 50% cls-0 (local street) edges", () => {
+    const edges = artifact.edges as unknown as { cls: number }[];
+    expect(edges.length).toBeGreaterThan(0);
+    expect(edges.some((e) => e.cls >= 2)).toBe(true);
+    const cls0 = edges.filter((e) => e.cls === 0).length;
+    expect(cls0 / edges.length).toBeGreaterThanOrEqual(0.5);
   });
 });
 

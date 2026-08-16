@@ -572,32 +572,52 @@ export function emit(g: RoutingGraph, outDir: string): EmitResult {
 }
 
 // ---------------------------------------------------------------------
-// Toytown: a small ANU-area drivable subgraph cut from the SAME cached
-// extract, for the /how/ toys. Loaded by src/toys/toytown.ts and used by
-// the four interactive toys (hierarchy runs on full-Canberra render.json).
-// Reuses buildRoutingGraph verbatim on a bbox-restricted way list — same
-// drivable filter, same largest-SCC keep, same chain contraction as the main
-// Canberra graph — so this is a real subgraph, not a second pipeline to keep
-// in sync.
+// Toytown: a small drivable subgraph cut from the SAME cached extract, for
+// the /how/ toys. Loaded by src/toys/toytown.ts and used by the four
+// interactive toys (hierarchy runs on full-Canberra render.json). Reuses
+// buildRoutingGraph verbatim on a bbox-restricted way list — same drivable
+// filter, same largest-SCC keep, same chain contraction as the main Canberra
+// graph — so this is a real subgraph, not a second pipeline to keep in sync.
 //
 // Unlike routing.json, toytown.json carries no CH data: the /how/ toys
 // build their own CH from the decoded graph at load time (see src/toys/climb.ts
 // for the CH-build call) — shipping precomputed shortcuts here would just be
 // dead weight for a ≤80-node graph a browser can CH-build in milliseconds.
-// What IS shipped: node coordinates and, per edge, its full geometry, so
-// the toys can draw real street shapes instead of straight lines.
+// What IS shipped: node coordinates and, per edge, its full geometry AND its
+// road class (`cls`, the same 0-3 buckets as render.json's lines — see the
+// CLS table up top). Geometry is for drawing real street shapes instead of
+// straight lines; cls is so spec/data.test.ts's "hierarchy-rich" sensor
+// (§16.12) can check the cut against the SHIPPED artifact in CI, which never
+// has the gitignored cache a re-derivation would need. No toy currently
+// reads cls — they colour by algorithm state, not road class — so
+// src/toys/toytown.ts's decoder is untouched; the field just rides along.
 // ---------------------------------------------------------------------
 
-// Tuned against the cached extract (scratch run, not committed — see the
-// task report for the full candidate table) so the post-chain-contraction
-// node count lands inside the 40-80 target: the plan's starting bbox
-// ([149.106,-35.290]->[149.135,-35.262], the full ANU/Acton/Civic sweep)
-// produced 509 nodes — far too many for a toy a visitor reads at a glance.
-// Shrunk to the ANU campus core (Fellows/Sullivans Creek/Kambri roads) ->
-// 55 nodes / 113 edges, comfortably mid-range (candidates from 41 to 131
-// nodes were tried by growing/shrinking this box by a few percent each
-// edge; 55 was kept for the widest safety margin in both directions).
-const TOYTOWN_BBOX: [number, number, number, number] = [149.115, -35.284, 149.125, -35.274];
+// Re-cut for spec §16.12 (2026-08-16 polish round, task G4). User feedback
+// on the ANU-campus cut this constant used to hold: "use a place with clear
+// hierarchy of roads... [ANU] is all small streets, no visible arterial
+// spine" — true of the whole campus core, which tops out at tertiary
+// (cls <= 1). Moved to Northbourne Avenue's southern end at Vernon
+// Circle/City Hill, where it meets Barry Drive, London Circuit, Alinga
+// Street and Cooyong Street: Northbourne + Vernon Circle + a short stretch
+// of Elouera Street tag highway=trunk (cls 3) end to end here (each split
+// into short intersection-to-intersection ways, not one giant way, so
+// whole-way bbox inclusion doesn't drop them), Cooyong/Barry/Mort/Lonsdale
+// tag primary (cls 2), and a dozen unclassified/residential/living_street
+// locals (Bunda, Akuna, Genge, Petrie, Moore, Donaldson, Rudd St...) feed
+// into them — three hierarchy tiers in one small cut, not just one arterial
+// through a grid. Grid-searched box centers and sizes along the corridor
+// (scratch run, not committed — see the task report for the full candidate
+// table) for: 40-80 post-contraction nodes, >=1 edge with cls>=2, >=50%
+// edges cls 0, and the arterial spanning most of the CUT'S OWN shipped bbox
+// rather than clipping a corner (checked by projecting cls>=2 edges'
+// geometry extent over emitToytown's tight-fit bbox below, since that — not
+// this filter box — is what the toy actually renders against). Landed on
+// this box: 62 nodes / 116 edges, cls histogram {0: 79, 1: 2, 2: 18, 3: 17}
+// (68% cls 0, 30% cls>=2), arterial spanning 86% of the shipped bbox's
+// longitude and 98% of its latitude — comfortably inside the node target
+// with a real, visible spine rather than a corner clip.
+const TOYTOWN_BBOX: [number, number, number, number] = [149.12805, -35.28145, 149.13455, -35.27295];
 
 export interface ToytownEmitResult { nodes: number; edges: number; gzBytes: number }
 
@@ -617,17 +637,43 @@ export function waysWithinBbox(
   return ways.filter((w) => w.refs.length > 0 && w.refs.every(inBbox));
 }
 
-/** Cuts the ANU-area toy subgraph from `parsed` (the SAME parsed OSM
- * build.ts's main() already holds — no second parse) through the identical
+/** Cuts the small toy subgraph from `parsed` (the SAME parsed OSM build.ts's
+ * main() already holds — no second parse) through the identical
  * buildRoutingGraph pipeline the main graph uses. Deliberately independent
  * of the main graph's `--drop-living-street` budget lever: toytown is tiny
- * regardless of that flag, and living_street ways (Kambri, campus
- * laneways) are exactly the kind of texture worth keeping at this
- * zoomed-in scale. */
+ * regardless of that flag, and living_street ways (Bunda Street's mall
+ * frontage, in the current cut) are exactly the kind of texture worth
+ * keeping at this zoomed-in scale. */
 export function cutToytown(
   parsed: ParsedOsm, bbox: [number, number, number, number] = TOYTOWN_BBOX,
 ): RoutingGraph {
   return buildRoutingGraph({ nodes: parsed.nodes, ways: waysWithinBbox(parsed.ways, parsed.nodes, bbox) });
+}
+
+export interface ToytownHierarchyStats {
+  edges: number;
+  cls0: number;
+  cls0Frac: number;
+  maxCls: number;
+  hasArterial: boolean; // >= 1 edge with cls >= 2 (secondary/primary/trunk/motorway)
+}
+
+/** Road-class mix of a toytown cut: how much is local streets (cls 0) vs
+ * whether it contains a real arterial (cls >= 2) — the two thresholds task
+ * G4's tuning grid-searched the bbox against (see TOYTOWN_BBOX's comment).
+ * Two call sites, deliberately not sharing a single source of truth:
+ * emitToytown below logs this over the freshly-cut RoutingGraph (the number
+ * this task's tuning table and bbox comment are built from); the "hierarchy-
+ * rich" sensor in spec/data.test.ts checks the same two thresholds again but
+ * against the `cls` field emitToytown writes into toytown.json, not by
+ * calling this function — the spec test runs against the committed artifact
+ * in CI, which never has the gitignored cache this function's RoutingGraph
+ * input requires. */
+export function toytownHierarchyStats(g: RoutingGraph): ToytownHierarchyStats {
+  const edges = g.edges.length;
+  const cls0 = g.edges.filter((e) => e.cls === 0).length;
+  const maxCls = edges > 0 ? Math.max(...g.edges.map((e) => e.cls)) : -1;
+  return { edges, cls0, cls0Frac: edges > 0 ? cls0 / edges : 0, maxCls, hasArterial: maxCls >= 2 };
 }
 
 /** Quantizes `g` (relative to ITS OWN bbox, not the main graph's) and
@@ -655,6 +701,7 @@ export function emitToytown(g: RoutingGraph, outDir: string): ToytownEmitResult 
   const edges = g.edges.map((e) => ({
     from: e.from, to: e.to,
     w: Math.max(1, Math.round(e.w * 10)),
+    cls: e.cls,
     geometry: e.geometry.map(([elon, elat]): [number, number] => [qLon(elon), qLat(elat)]),
   }));
 
@@ -664,10 +711,15 @@ export function emitToytown(g: RoutingGraph, outDir: string): ToytownEmitResult 
   writeFileSync(outPath, JSON.stringify(json));
   const gzBytes = gzipSync(readFileSync(outPath)).length;
 
+  const hierarchy = toytownHierarchyStats(g);
   console.log("--- toytown ---");
   console.log(`bbox:  ${JSON.stringify(bbox)}`);
   console.log(`nodes: ${n}`);
   console.log(`edges: ${edges.length}`);
+  console.log(
+    `hierarchy: cls0 ${hierarchy.cls0}/${hierarchy.edges} (${(hierarchy.cls0Frac * 100).toFixed(0)}%), ` +
+    `maxCls ${hierarchy.maxCls}, hasArterial ${hierarchy.hasArterial}`,
+  );
   console.log(`gzip:  ${fmtKB(gzBytes)}`);
 
   return { nodes: n, edges: edges.length, gzBytes };
