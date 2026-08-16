@@ -519,39 +519,98 @@ describe("clampGeoView (against the TRUE fitted content rect, not the viewport a
 });
 
 // §16.6: starting any race zooms the viewport to the A-B bounds with ~15%
-// padding — the geo-anchored model makes this ONE call, independent of any
-// specific panel's own pixel size (see zoomToBounds's own comment).
+// padding — zoomToBounds now takes the REFERENCE panel's own w/h and routes
+// A/B through that panel's REAL fit (see the function's own comment for the
+// build-review fix this is: the old bbox-fraction formula was only exact at
+// pad=0 and an aspect-matched viewport, neither true of any real panel here
+// — PAD=24, and Canberra's bbox aspect matches no real viewport).
 describe("zoomToBounds", () => {
-  it("frames a pair with EXACTLY the requested padding on the limiting axis (hand-checked: bbox/pair/viewport chosen so cosMid=1 and the fit has zero aspect slack)", () => {
+  /** The padding fraction actually achieved on whichever edge is TIGHTEST,
+   * evaluating a zoomToBounds result against a specific panel size via the
+   * PUBLIC deriveTransform/projectPoint (never zoomToBounds's own internals)
+   * — takes min/max of the two points' own coordinates per axis (not "A's
+   * edge, B's edge") since which point ends up further north/east depends
+   * on the pair, not on argument order. A single number this small (>0)
+   * simultaneously proves "both points strictly inside" — there is no
+   * separate boundary case where all four edges have positive margin here
+   * but a point is still outside. */
+  function achievedLimitingPadding(
+    view: ViewState, bbox: [number, number, number, number], w: number, h: number,
+    lonA: number, latA: number, lonB: number, latB: number,
+  ): number {
+    const fit = fitTransform(bbox, w, h, 24); // PAD — mirrors mapRenderer.ts's own real-panel constant
+    const t = deriveTransform(view, bbox, fit, w, h);
+    const [xA, yA] = projectPoint(bbox, t, lonA, latA);
+    const [xB, yB] = projectPoint(bbox, t, lonB, latB);
+    const left = Math.min(xA, xB);
+    const right = Math.max(xA, xB);
+    const top = Math.min(yA, yB);
+    const bottom = Math.max(yA, yB);
+    return Math.min(left / w, (w - right) / w, top / h, (h - bottom) / h);
+  }
+
+  it("frames a pair with EXACTLY the requested padding on the limiting axis (hand-checked: bbox/pair/viewport chosen so cosMid=1 and both axes are equally matched, so PAD's specific pixel cost cancels out of the achieved on-screen fraction exactly — see zoomToBounds's own comment)", () => {
     // bbox centered at lat 0 (cosMid exactly 1), square in map units
-    // (mapW = mapH = 2) so a square, zero-pad, aspect-matched viewport has
-    // NO slack on either axis — the cleanest possible hand-check.
+    // (mapW = mapH = 2), square viewport — the cleanest possible hand-check.
     const bbox: [number, number, number, number] = [-1, -1, 1, 1];
     const w = 1000, h = 1000;
-    const fit = fitTransform(bbox, w, h, 0);
-    // A and B both sit on the bbox's own horizontal center line, spanning
-    // the middle half of its width (lon -0.5 to 0.5) — the wider of the
-    // two spreads (lonSpread=1 of mapW=2 => frac 0.5; latSpread=0), so lon
-    // is the limiting axis this pair's framing is matched to.
-    const view = zoomToBounds(bbox, -0.5, 0, 0.5, 0, 0.15);
+    // A and B both sit on the bbox's own horizontal center line (latSpread
+    // = 0), so lon is unambiguously the limiting axis this pair's framing
+    // is matched to.
+    const view = zoomToBounds(bbox, -0.5, 0, 0.5, 0, w, h, 0.15);
     expect(view.cLon).toBeCloseTo(0, 9);
     expect(view.cLat).toBeCloseTo(0, 9);
-    // span = frac / (1 - 2*pad) = 0.5 / 0.7
-    expect(view.span).toBeCloseTo(0.5 / 0.7, 9);
+    // Hand-derived against the REAL PAD=24 fit (scale 476, ox=oy=24):
+    // dxPx = 476, spanX = 476 / (0.7 * 1000) = 0.68 exactly.
+    expect(view.span).toBeCloseTo(0.68, 9);
 
+    const fit = fitTransform(bbox, w, h, 24); // PAD — the same real-panel constant zoomToBounds uses internally
     const t = deriveTransform(view, bbox, fit, w, h);
     const [xA] = projectPoint(bbox, t, -0.5, 0);
     const [xB] = projectPoint(bbox, t, 0.5, 0);
     expect(xA).toBeCloseTo(150, 6); // 15% of 1000px in from the left
     expect(xB).toBeCloseTo(850, 6); // 15% of 1000px in from the right
-    // Both points strictly inside the viewport (the property the design
-    // task asks to pin, verified here to the exact pixel as well).
     expect(xA).toBeGreaterThan(0);
     expect(xB).toBeLessThan(w);
   });
 
-  it("both points land strictly inside the resulting view, for random bboxes/pairs/aspect-matched viewports (property, 200 seeded)", () => {
-    const rand = mulberry32(918);
+  // build-review fix (review finding #1): measured against the REAL
+  // committed bbox (public/data/render.json) and REAL preset coordinates
+  // (src/presets.ts) at the two viewport sizes this app actually ships
+  // (desktop overlay ~1016x778, phone/compare-panel ~350x460), the OLD
+  // formula landed 17-49% padding instead of ~15% on 4 of 5 presets
+  // (ANU->Airport measured 36%/41%). [12%, 22%] rather than an exact 15%
+  // because MIN_SPAN's pre-existing 8x-zoom cap can legitimately push a
+  // pair that's close together relative to the whole bbox (ANU->Airport at
+  // the LARGER viewport specifically) above the natural 15% target — a
+  // physical zoom-cap floor, not a padding-formula bug (every other
+  // cell here lands within float noise of exactly 15%, see the console
+  // trace this suite was built against).
+  const REAL_BBOX: [number, number, number, number] = [148.9179634, -35.6505443, 149.3332927, -35.0450695];
+  const REAL_PRESETS = [
+    { id: "hill (Gungahlin -> Capital Hill)", a: [149.133, -35.186], b: [149.1245, -35.308] },
+    { id: "anu-airport", a: [149.119, -35.278], b: [149.193, -35.307] },
+    { id: "diagonal (Belconnen -> Tuggeranong)", a: [149.066, -35.24], b: [149.088, -35.415] },
+    { id: "dickson-woden", a: [149.14, -35.252], b: [149.085, -35.345] },
+    { id: "kingston-belconnen", a: [149.147, -35.316], b: [149.066, -35.24] },
+  ] as const;
+
+  describe.each([
+    { label: "desktop overlay (1016x778)", w: 1016, h: 778 },
+    { label: "phone/compare panel (350x460)", w: 350, h: 460 },
+  ])("against the real bbox + real presets: $label", ({ w, h }) => {
+    it.each(REAL_PRESETS)("$id achieves ~15% padding on the limiting axis (within [12%, 22%]), both points strictly inside", ({ a, b }) => {
+      const view = zoomToBounds(REAL_BBOX, a[0], a[1], b[0], b[1], w, h);
+      expect(Number.isFinite(view.cLon)).toBe(true);
+      expect(Number.isFinite(view.cLat)).toBe(true);
+      const pad = achievedLimitingPadding(view, REAL_BBOX, w, h, a[0], a[1], b[0], b[1]);
+      expect(pad).toBeGreaterThanOrEqual(0.12);
+      expect(pad).toBeLessThanOrEqual(0.22);
+    });
+  });
+
+  it("both points land strictly inside the resulting view, for random bboxes/pairs/PANEL SIZES (property, 200 seeded) — deliberately NOT aspect-matched or zero-pad: arbitrary aspect ratio and a real PAD are exactly what the old formula got wrong", () => {
+    const rand = mulberry32(20260817);
     for (let i = 0; i < 200; i++) {
       const minLon = 148 + rand() * 2;
       const minLat = -36 + rand() * 2;
@@ -560,21 +619,14 @@ describe("zoomToBounds", () => {
       const latA = bbox[1] + rand() * (bbox[3] - bbox[1]);
       const lonB = bbox[0] + rand() * (bbox[2] - bbox[0]);
       const latB = bbox[1] + rand() * (bbox[3] - bbox[1]);
-      // Aspect-matched, zero-pad viewport (mirrors the hand-checked case
-      // above) so BOTH axes are simultaneously limiting — the strongest
-      // version of the "inside the view" property, not weakened by
-      // whichever axis happens to have fit slack.
-      const cosMid = Math.cos(((bbox[1] + bbox[3]) / 2) * (Math.PI / 180));
-      const mapW = Math.max(1e-9, (bbox[2] - bbox[0]) * cosMid);
-      const mapH = Math.max(1e-9, bbox[3] - bbox[1]);
-      const w = 1000;
-      const h = (1000 * mapH) / mapW;
-      const fit = fitTransform(bbox, w, h, 0);
-      const view = zoomToBounds(bbox, lonA, latA, lonB, latB, 0.15);
+      const w = 200 + rand() * 1200; // comfortably > 2*PAD=48 at every draw
+      const h = 200 + rand() * 1200;
+      const view = zoomToBounds(bbox, lonA, latA, lonB, latB, w, h, 0.15);
       expect(view.span).toBeGreaterThanOrEqual(1 / 8 - 1e-9);
       expect(view.span).toBeLessThanOrEqual(1 + 1e-9);
       expect(Number.isFinite(view.cLon)).toBe(true);
       expect(Number.isFinite(view.cLat)).toBe(true);
+      const fit = fitTransform(bbox, w, h, 24);
       const t = deriveTransform(view, bbox, fit, w, h);
       for (const [lon, lat] of [[lonA, latA], [lonB, latB]] as const) {
         const [x, y] = projectPoint(bbox, t, lon, lat);
@@ -588,19 +640,33 @@ describe("zoomToBounds", () => {
 
   it("a degenerate same-point pair has no extent to frame -- clamps to MIN_SPAN (max zoom), no NaN/crash, centered exactly on the point", () => {
     const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
-    const view = zoomToBounds(bbox, 149.1, -35.3, 149.1, -35.3, 0.15);
+    const view = zoomToBounds(bbox, 149.1, -35.3, 149.1, -35.3, 900, 600, 0.15);
     expect(view).toEqual({ cLon: 149.1, cLat: -35.3, span: 1 / 8 });
   });
 
   it("a pair spanning (most of) the whole bbox clamps to MAX_SPAN (whole map) rather than requesting an impossible zoom-out", () => {
     const bbox: [number, number, number, number] = [148.9, -35.6, 149.3, -35.05];
-    const view = zoomToBounds(bbox, bbox[0], bbox[1], bbox[2], bbox[3], 0.15);
+    const view = zoomToBounds(bbox, bbox[0], bbox[1], bbox[2], bbox[3], 900, 600, 0.15);
     expect(view.span).toBe(1);
   });
 
   it("default pad is 0.15", () => {
     const bbox: [number, number, number, number] = [-1, -1, 1, 1];
-    expect(zoomToBounds(bbox, -0.5, 0, 0.5, 0)).toEqual(zoomToBounds(bbox, -0.5, 0, 0.5, 0, 0.15));
+    expect(zoomToBounds(bbox, -0.5, 0, 0.5, 0, 1000, 1000)).toEqual(zoomToBounds(bbox, -0.5, 0, 0.5, 0, 1000, 1000, 0.15));
+  });
+
+  // Regression: a hidden panel's resize() (Compare mode persisted, overlay
+  // still `display:none` when its own MapView first constructs — the exact
+  // scenario clampGeoView/zoomAbout/panGeo/baseBlitRect's own regression
+  // tests already cover) floors to a 1x1 css size, making fit.scale exactly
+  // 0. zoomToBounds has no pre-existing `view` to fall back to (unlike those
+  // four functions), so it returns the AB midpoint at MAX_SPAN instead.
+  it("regression: a degenerate viewport (fit.scale === 0, e.g. a hidden panel's 1x1 floor) returns the AB midpoint at MAX_SPAN instead of dividing by zero", () => {
+    const bbox: [number, number, number, number] = [148.9179634, -35.6505443, 149.3332927, -35.0450695];
+    const view = zoomToBounds(bbox, 149.1, -35.3, 149.15, -35.25, 1, 1, 0.15); // MapView.resize()'s own floor for a display:none canvas
+    expect(view).toEqual({ cLon: 149.125, cLat: -35.275, span: 1 });
+    expect(Number.isFinite(view.cLon)).toBe(true);
+    expect(Number.isFinite(view.cLat)).toBe(true);
   });
 });
 
@@ -734,7 +800,7 @@ describe("createViewStore (the shared pan/zoom store)", () => {
     store.subscribe(() => seenLate.push(deriveTransform(store.get(), bbox, fit, 900, 600)));
     store.set(zoomAbout(store.get(), bbox, fit, 900, 600, 450, 300, 2));
     store.set(panGeo(store.get(), bbox, fit, 900, 600, 40, -15));
-    store.set(zoomToBounds(bbox, 149.0, -35.4, 149.2, -35.2));
+    store.set(zoomToBounds(bbox, 149.0, -35.4, 149.2, -35.2, 900, 600));
     expect(seenEarly).toEqual(seenLate);
   });
 });

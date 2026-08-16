@@ -78,12 +78,14 @@ interface PanelEntry {
   algo: Algo;
   el: HTMLElement;
   view: MapView;
+  zoomFit: HTMLButtonElement;
 }
 
 interface PanelDom {
   el: HTMLElement;
   base: HTMLCanvasElement;
   overlay: HTMLCanvasElement;
+  zoomFit: HTMLButtonElement;
   zoomIn: HTMLButtonElement;
   zoomOut: HTMLButtonElement;
 }
@@ -97,10 +99,18 @@ interface PanelDom {
  * which the design spec's own palette notes fails AA contrast as small text
  * on light surfaces, never carries the label alone; the settled-count span
  * starts empty and is filled by RaceUi.setRow once a race completes, same
- * single code path that fills the scoreboard row), and its own zoom in/out
- * buttons — F2's interactions must work identically inside every panel,
- * zoom buttons included, so every panel gets a real, independently
- * labelled pair rather than sharing the single map's buttons. */
+ * single code path that fills the scoreboard row), and its own zoom
+ * fit/in/out buttons — F2's interactions must work identically inside every
+ * panel, zoom buttons included, so every panel gets a real, independently
+ * labelled set rather than sharing the single map's buttons (G2 fix, review
+ * finding #2: the overlay's own zoom-fit button lives in `.map-frame`,
+ * which applyViewMode() hides in Compare mode, so without a panel-local one
+ * the one-shot A-B/whole-map reframe was unreachable while comparing).
+ * `zoomFit`'s label/aria-label are left for updateFitButton() to set
+ * (mirrors `fitShowsWhole`, a boot()-level flag every panel shares — see
+ * that function's own comment) but start matching the DEFAULT state
+ * (fitShowsWhole=true, same default index.html's own static button ships
+ * with) so there's no unlabelled flash before that first call. */
 function buildPanelDom(algo: Algo): PanelDom {
   const el = document.createElement("div");
   el.className = "compare-panel";
@@ -123,6 +133,18 @@ function buildPanelDom(algo: Algo): PanelDom {
 
   const zoomWrap = document.createElement("div");
   zoomWrap.className = "zoom-controls";
+  // Same class as the overlay's own [data-testid="zoom-fit"] (index.html) so
+  // it picks up identical styling for free (styles.css's .zoom-fit-btn/
+  // .zoom-btn rules are class-scoped, not scoped to .map-frame — see
+  // .compare-grid-quad .zoom-btn, which already resizes every .zoom-btn
+  // inside a panel, this one included). "zoom-fit-panel" (not "zoom-fit")
+  // keeps the overlay's own spec-tested testid unique to it.
+  const zoomFit = document.createElement("button");
+  zoomFit.type = "button";
+  zoomFit.className = "zoom-btn zoom-fit-btn";
+  zoomFit.dataset.testid = "zoom-fit-panel";
+  zoomFit.textContent = "Map";
+  zoomFit.setAttribute("aria-label", `Zoom to whole map (${ALGO_LABEL[algo]})`);
   const zoomIn = document.createElement("button");
   zoomIn.type = "button";
   zoomIn.className = "zoom-btn";
@@ -133,10 +155,10 @@ function buildPanelDom(algo: Algo): PanelDom {
   zoomOut.className = "zoom-btn";
   zoomOut.textContent = "−";
   zoomOut.setAttribute("aria-label", `Zoom out (${ALGO_LABEL[algo]})`);
-  zoomWrap.append(zoomIn, zoomOut);
+  zoomWrap.append(zoomFit, zoomIn, zoomOut); // fit ABOVE the in/out pair, matching the overlay's own stack order (index.html)
   el.append(zoomWrap);
 
-  return { el, base, overlay, zoomIn, zoomOut };
+  return { el, base, overlay, zoomFit, zoomIn, zoomOut };
 }
 
 // Compare-mode persistence (build-review §14.3) — same guarded try/catch
@@ -234,9 +256,24 @@ function boot(): void {
   // its own copy of this call. Runs before `controller?.run()` (not after)
   // so the view re-frames immediately when the race starts, not once the
   // worker round-trip finishes.
+  //
+  // zoomToBounds now needs a REFERENCE panel's own w/h to compute accurate
+  // padding against (G2 fix, review finding #1 — see that function's own
+  // comment) — referenceViewport() (below) reads it off whichever view is
+  // currently live. review finding #3: this reframe happens OUTSIDE the fit
+  // button's own click handler, so fitShowsWhole is set directly too —
+  // without it, the button's state goes stale after a race (still believes
+  // the view is at its PRE-race framing), so the first fit-press after a
+  // race could silently re-request the SAME A-B framing this auto-zoom just
+  // applied — a no-op click.
   const scheduler = makeRaceScheduler((a, b) => {
     if (viewStore && renderData && graph) {
-      viewStore.set(zoomToBounds(renderData.bbox, graph.lon[a], graph.lat[a], graph.lon[b], graph.lat[b]));
+      const ref = referenceViewport();
+      if (ref) {
+        viewStore.set(zoomToBounds(renderData.bbox, graph.lon[a], graph.lat[a], graph.lon[b], graph.lat[b], ref.w, ref.h));
+        fitShowsWhole = true; // the view is now definitively at A-B bounds -- next press should offer "whole map"
+        updateFitButton();
+      }
     }
     controller?.run(a, b).catch(handleRaceError);
   }, DEBOUNCE_MS);
@@ -516,24 +553,69 @@ function boot(): void {
   // action, not a mode lock (manual pan/zoom after a press just moves
   // freely; the next press still re-frames from scratch). Its own state is
   // only "which target does the NEXT press give", flipped on every click —
-  // it does not track or reflect whatever the live view actually shows.
+  // it does not track or reflect whatever the live view actually shows,
+  // EXCEPT where a reframe happens OUTSIDE this button's own click handler
+  // (the race-start auto-zoom in the scheduler callback above, §16.6) —
+  // that call site sets fitShowsWhole directly too, for the same reason
+  // (G2 fix, review finding #3): without it, the first fit-press after a
+  // race could silently re-request the SAME A-B framing the race's own
+  // auto-zoom already applied, a no-op click.
   let fitShowsWhole = true; // starts by offering "whole map" -- the natural complement to every race's own auto-zoom-to-AB (§16.6)
-  function updateFitButton(): void {
-    if (!zoomFitBtn) return;
-    zoomFitBtn.textContent = fitShowsWhole ? "Map" : "AB";
-    zoomFitBtn.setAttribute("aria-label", fitShowsWhole ? "Zoom to whole map" : "Zoom to fit the route");
+
+  // Reads the CSS-px viewport size zoomToBounds should compute ~15% padding
+  // AGAINST (G2 fix, review finding #1 — see that function's own comment):
+  // the first currently-active view, i.e. the single overlay in Overlay
+  // mode, or the first Compare panel in Compare mode — deliberately never
+  // measures the overlay canvas directly, since it's `display:none` (0x0)
+  // while Compare mode is active, the exact hidden-panel scenario
+  // mapRenderer.ts's clampGeoView/zoomAbout/panGeo guards exist for (see
+  // that file's own MapView class comment). Every Compare panel shares one
+  // CSS aspect-ratio (styles.css's `.compare-panel { aspect-ratio: 4/3 }`),
+  // so this is exact for whichever panel is chosen and close (not
+  // bit-identical, if panels differ in absolute pixel size) for the rest.
+  function referenceViewport(): { w: number; h: number } | undefined {
+    return activeViews()[0]?.viewportSize();
   }
-  updateFitButton();
-  zoomFitBtn?.addEventListener("click", () => {
+
+  // Applies the CURRENT fitShowsWhole state's label/aria-label to the
+  // overlay's own fit button AND every Compare panel's fit button (G2 fix,
+  // review finding #2 — buildPanelDom's own zoomFit field) so every surface
+  // agrees, never a stale label on a panel built before the last toggle.
+  function updateFitButton(): void {
+    const label = fitShowsWhole ? "Map" : "AB";
+    const aria = fitShowsWhole ? "Zoom to whole map" : "Zoom to fit the route";
+    if (zoomFitBtn) {
+      zoomFitBtn.textContent = label;
+      zoomFitBtn.setAttribute("aria-label", aria);
+    }
+    for (const p of panels) {
+      p.zoomFit.textContent = label;
+      p.zoomFit.setAttribute("aria-label", `${aria} (${ALGO_LABEL[p.algo]})`);
+    }
+  }
+
+  // The shared one-shot reframe action (G2 fix, review finding #2): both the
+  // overlay's own button and every Compare panel's button (wired in
+  // syncPanels, below) call this, so the SAME fitShowsWhole flag and the
+  // SAME shared viewStore govern every surface — pressing fit in one panel
+  // reframes (and relabels) all of them, the same way pan/zoom already
+  // share one store across every panel.
+  function triggerFit(): void {
     if (!viewStore || !renderData || !graph || pinA === null || pinB === null) return;
-    viewStore.set(
-      fitShowsWhole
-        ? wholeMapView(renderData.bbox)
-        : zoomToBounds(renderData.bbox, graph.lon[pinA], graph.lat[pinA], graph.lon[pinB], graph.lat[pinB]),
-    );
+    if (fitShowsWhole) {
+      viewStore.set(wholeMapView(renderData.bbox));
+    } else {
+      const ref = referenceViewport();
+      if (!ref) return;
+      viewStore.set(
+        zoomToBounds(renderData.bbox, graph.lon[pinA], graph.lat[pinA], graph.lon[pinB], graph.lat[pinB], ref.w, ref.h),
+      );
+    }
     fitShowsWhole = !fitShowsWhole;
     updateFitButton();
-  });
+  }
+  updateFitButton();
+  zoomFitBtn?.addEventListener("click", triggerFit);
 
   // "R"/"r" re-runs the current pair (ignore browser-refresh chords). A
   // direct trigger, so it goes through scheduler.now() — cancels any
@@ -718,8 +800,9 @@ function boot(): void {
       compareGrid.append(dom.el);
       const panelView = new MapView(dom.base, dom.overlay, render, viewStore);
       wireMapInteraction(dom.overlay, () => panelView, dom.zoomIn, dom.zoomOut);
+      dom.zoomFit.addEventListener("click", triggerFit); // G2 fix (review finding #2): same one-shot reframe the overlay's own button uses
       panelResizeObserver?.observe(dom.el);
-      byAlgo.set(algo, { algo, el: dom.el, view: panelView });
+      byAlgo.set(algo, { algo, el: dom.el, view: panelView, zoomFit: dom.zoomFit });
     }
 
     panels = next.map((algo) => byAlgo.get(algo)).filter((p): p is PanelEntry => p !== undefined);
@@ -746,6 +829,7 @@ function boot(): void {
     controller.setComparePanels(panels.map((p): ComparePanel => ({ algo: p.algo, view: p.view })));
     for (const p of panels) p.view.resize();
     drawAllPinsOnly();
+    updateFitButton(); // newly-built panels' fit buttons start correctly labelled for the CURRENT fitShowsWhole state (G2 fix)
   }
 
   /** Applies `viewMode` to the DOM (map-frame vs. compare-grid visibility,

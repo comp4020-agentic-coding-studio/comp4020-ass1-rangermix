@@ -95,6 +95,15 @@ export function fitTransform(
   return { scale, ox, oy };
 }
 
+// px of margin fitTransform keeps around the fitted bbox for every REAL
+// caller in this codebase: MapView.resize() (below) and zoomToBounds' own
+// internal fit (see that function's own comment for why it needs this SAME
+// constant, not a caller-supplied one, to compute an accurate padding
+// fraction for a real on-screen panel). Defined here, ahead of both real
+// call sites, rather than down by MapView (its only user before
+// zoomToBounds needed it too).
+const PAD = 24;
+
 /** GEO-ANCHORED view state (§16.11 — replaces the old pixel-space `{scale,
  * tx, ty}`): `cLon`/`cLat` is the geo point rendered at the CENTER of
  * whichever panel's own viewport is showing this state; `span` is the
@@ -378,35 +387,73 @@ export function clampGeoView(
 
 /** Frames both A/B points with `pad` fraction of margin held back on every
  * side (design spec §16.6: "starting any race zooms the viewport to the A-B
- * bounds with pleasant padding (~15%)") — returns the geo view any panel
- * should adopt to show both points centered with that padding, independent
- * of any specific panel's own pixel size (span is panel-shape-agnostic by
- * construction — see the ViewState doc comment), which is what lets ONE
- * `viewStore.set(zoomToBounds(...))` call at the single race-start entry
- * point (home.ts) correctly frame every active panel at once, overlay and
- * every Compare panel alike. `span` is matched to whichever axis the pair
- * spans a LARGER fraction of the whole bbox on (that's the one that would
- * clip first); the other axis ends up with more than the target padding,
- * never less. Clamped to `[MIN_SPAN, MAX_SPAN]`: a pair spanning most of
- * the bbox already (e.g. the "Belconnen -> Tuggeranong" full-diagonal
- * preset) clamps to the whole map rather than requesting an impossible
- * zoom-out past it. A degenerate same-point pair (or two nodes that snapped
- * to the same node) has zero extent to frame — the fraction is then exactly
- * 0, which clamps up to MIN_SPAN (the closest legal zoom) instead of
- * needing a special-cased branch: framing a single point at max zoom ("show
- * me where this pin actually is") is exactly the sensible fallback the
- * degenerate case needs, and the formula reaches it without a division by
- * zero (mapW/mapH are bbox-derived and always positive) or a NaN. */
+ * bounds with pleasant padding (~15%)") — `w`/`h` is the REFERENCE panel's
+ * own CSS px size (home.ts passes whichever panel is currently live — see
+ * that call site's own comment) that this frames padding AGAINST: A/B are
+ * projected through THAT panel's actual fitted pixel geometry
+ * (`fitTransform(bbox, w, h, PAD)` — the exact same fit a REAL MapView of
+ * this size would compute in its own `resize()`, PAD included) rather than
+ * compared as a raw fraction of the bbox's own extent.
+ *
+ * build-review fix: the old formula (`frac = max(lonSpread/mapW,
+ * latSpread/mapH); span = frac/(1-2*pad)`) compared the pair's spread
+ * against the BBOX's own aspect ratio, which only equals the padding
+ * actually achieved on screen when the panel's fit has zero pixel padding
+ * AND an aspect ratio that exactly matches the bbox's — true of none of
+ * this app's real panels (PAD=24, and Canberra's bbox aspect matches no
+ * real viewport). Measured 17-49% achieved padding instead of ~15% against
+ * the real bbox/presets (ANU->Airport: 36%/41%). Going through a REAL fit
+ * fixes this for arbitrary aspect ratios and PAD: `span` is solved so that,
+ * when `deriveTransform` is later evaluated against THIS SAME `w`/`h` (any
+ * real panel of this exact size), the on-screen A-B distance on the
+ * LIMITING axis is exactly `(1 - 2*pad)` of `w` (or `h`) — see
+ * mapRenderer.test.ts's real-bbox/real-preset cases for the achieved-
+ * padding verification. `span` is matched to whichever axis THIS panel's
+ * own projection of the pair spans a LARGER fraction of `w`/`h` on (that's
+ * the one that would clip first); the other axis ends up with more than the
+ * target padding, never less. Because a shared `span` still means "this
+ * fraction of the SAME bbox's fit" for every panel regardless of its own
+ * size (see the ViewState doc comment), a DIFFERENT panel shape than the
+ * one passed in here ends up close to but not bit-exactly at `pad` — this
+ * app's Compare panels all share one CSS aspect-ratio (styles.css's
+ * `.compare-panel`), so that residual gap is small in practice.
+ *
+ * Clamped to `[MIN_SPAN, MAX_SPAN]`: a pair spanning most of the bbox
+ * already (e.g. the "Belconnen -> Tuggeranong" full-diagonal preset) clamps
+ * to the whole map rather than requesting an impossible zoom-out past it; a
+ * pair close together relative to the whole bbox (e.g. "ANU -> Airport" at
+ * a large viewport) can likewise hit MIN_SPAN's 8x-zoom cap before reaching
+ * exactly `pad` — achieving MORE than the target padding is the correct,
+ * physically-forced outcome there, not a bug (mapRenderer.test.ts's
+ * real-preset cases allow a tolerance band for exactly this). A degenerate
+ * same-point pair (or two nodes that snapped to the same node) has zero
+ * extent to frame — both axes' fractions are then exactly 0, which clamps
+ * up to MIN_SPAN (the closest legal zoom) instead of needing a
+ * special-cased branch: framing a single point at max zoom ("show me where
+ * this pin actually is") is exactly the sensible fallback the degenerate
+ * case needs.
+ *
+ * Guards `fit.scale <= 0` (same defensive reasoning as zoomAbout/panGeo/
+ * clampGeoView/baseBlitRect — a hidden panel's `resize()` is a real,
+ * reachable source of a degenerate fit) by returning the AB midpoint at
+ * MAX_SPAN (whole map) instead of dividing by zero: unlike those functions
+ * there's no pre-existing `view` to fall back to (this BUILDS a view from
+ * scratch), so the widest legal, still-centered, still-finite result is the
+ * safest fallback. */
 export function zoomToBounds(
-  bbox: [number, number, number, number], lonA: number, latA: number, lonB: number, latB: number, pad = 0.15,
+  bbox: [number, number, number, number], lonA: number, latA: number, lonB: number, latB: number,
+  w: number, h: number, pad = 0.15,
 ): ViewState {
-  const cosMid = cosMidLat(bbox);
-  const mapW = Math.max(1e-9, (bbox[2] - bbox[0]) * cosMid);
-  const mapH = Math.max(1e-9, bbox[3] - bbox[1]);
-  const lonSpread = Math.abs(lonB - lonA) * cosMid;
-  const latSpread = Math.abs(latB - latA);
-  const frac = Math.max(lonSpread / mapW, latSpread / mapH);
-  return { cLon: (lonA + lonB) / 2, cLat: (latA + latB) / 2, span: clampSpan(frac / (1 - 2 * pad)) };
+  const cLon = (lonA + lonB) / 2;
+  const cLat = (latA + latB) / 2;
+  const fit = fitTransform(bbox, w, h, PAD);
+  if (!(fit.scale > 0)) return { cLon, cLat, span: MAX_SPAN };
+  const [xA, yA] = projectPoint(bbox, fit, lonA, latA);
+  const [xB, yB] = projectPoint(bbox, fit, lonB, latB);
+  const avail = Math.max(1e-9, 1 - 2 * pad);
+  const spanX = Math.abs(xB - xA) / (avail * w);
+  const spanY = Math.abs(yB - yA) / (avail * h);
+  return { cLon, cLat, span: clampSpan(Math.max(spanX, spanY)) };
 }
 
 // Interaction-time base-layer caching (§16.10 — user-reported: "overlay view
@@ -570,8 +617,6 @@ export function visibleLines(lines: number[][], pctThreshold: number | null): nu
 export function strideFor(len: number, cap = 4000): number {
   return Math.max(1, Math.ceil(len / cap));
 }
-
-const PAD = 24; // px of margin fitTransform keeps around the fitted bbox
 
 // Ghost-underlay alpha for the hierarchy toy's filtered steps (round 4 fix):
 // once a pct threshold hides most of the network, the retained lines alone
@@ -858,6 +903,17 @@ export class MapView {
     this.fit = fitTransform(this.render.bbox, this.cssWidth, this.cssHeight, PAD);
     this.store.set(clampGeoView(this.store.get(), this.render.bbox, this.fit, this.cssWidth, this.cssHeight));
     this.drawBase();
+  }
+
+  /** This panel's current CSS-px viewport size (post-`resize()`) — exposed
+   * read-only so a caller that needs to compute something against THIS
+   * panel's real on-screen geometry (home.ts's `zoomToBounds` call sites,
+   * G2 fix: they need a REAL panel's `w`/`h` to frame race-start/fit-button
+   * padding accurately for it — see zoomToBounds's own comment) doesn't have
+   * to duplicate resize()'s own DOM measurement. Nothing outside resize()
+   * ever writes `cssWidth`/`cssHeight`. */
+  viewportSize(): { w: number; h: number } {
+    return { w: this.cssWidth, h: this.cssHeight };
   }
 
   /** Sets the hierarchy-slider filter (`null` = show every road) and
