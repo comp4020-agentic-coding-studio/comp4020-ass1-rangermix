@@ -529,6 +529,41 @@ toy testids keep their names (order on the page changes).
     visitor picks A/B on the MAP, and the query's progress animates in
     BOTH views simultaneously.
 
+## 17. Third build review (user, 2026-08-16 — binding; governs over earlier sections where they collide)
+
+**Home:**
+1. Route preset buttons shrink (smaller, tidier): one line at 1920×1080;
+   on the 390 phone the top of the Algorithms panel becomes visible
+   without scrolling past a tall Routes block.
+2. Scoreboard rows: algorithm name, settled count, time, and toggle on ONE
+   line at 1920×1080 (user's screenshot shows "Contraction Hierarchies"
+   wrapping and the Bidirectional toggle dropping below). Display names
+   stay the full contract strings; fit via typography/grid, not renames.
+3. The map-corner title/description overlay is REMOVED. In its place: a
+   dismissible SPLASH (user's own proposal): "Highway to Hill" (the h1),
+   a brief plain-English description carrying the core-interaction
+   sentence, and an "Explore" button. Dismissing reveals the clean map;
+   the auto-run fires only after dismissal; dismissal persists for the
+   session; reduced-motion semantics unchanged. Static markup keeps the
+   h1 + sentence (contracts intact).
+4. The Algorithms panel discloses A\*'s heuristic in one muted line when
+   A\* is enabled: guided by a straight-line travel-time estimate
+   (great-circle distance ÷ the network's fastest road speed).
+
+**How page:**
+5. The mini map shows the ACTUAL map: a faint context layer of every road
+   in the toy area (clipped from the full render geometry at build time,
+   shipped in toytown.json) beneath the toy graph, and local toy streets
+   raised in visibility — no more floating nodes with invisible
+   connections.
+6. The hierarchy (rank) view gets more vertical room and becomes
+   zoomable (wheel + buttons, drag-pan, clamped).
+7. The page's top description block ("how it works" lede) is removed —
+   the h1 and chapters carry the page.
+8. Every chapter's prose and captions rewritten in straightforward,
+   simple English — technical/academic words allowed, phrasing simple
+   and intuitive. Chapter headings (contracts) stay.
+
 ## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
