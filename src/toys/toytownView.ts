@@ -464,3 +464,135 @@ export function vbPercentXY(vb: ViewBoxRect, x: number, y: number, insetPct = 0)
   const top = ((y - vb.y) / vb.h) * span + insetPct;
   return [left, top];
 }
+
+// ---------------------------------------------------------------------
+// Roving tabindex over a toy's node-button grid (I3 gate, a11y carried
+// forward from the refine round's review): flood.ts's map and
+// climbLinked.ts's map view each place up to ~62 `.node-btn` elements at
+// real (decluttered) street-intersection positions — shipped as plain
+// `<button>`s with no `tabindex` of their own, so every single one was its
+// OWN native tab stop; a keyboard visitor had to tab through the entire
+// grid before ever reaching Play/Step/Reset. This is the standard fix
+// (WAI-ARIA APG's roving-tabindex pattern): exactly ONE button in the grid
+// is ever tabbable (`tabIndex = 0`) at a time, arrow keys move which one
+// that is, and every other button sits at `tabIndex = -1` (still
+// programmatically focusable, just skipped by Tab) — collapsing the grid
+// to ONE tab stop. Enter/Space need no separate handling: a real `<button>`
+// that already HAS focus fires its own existing `click` listener on
+// Enter/Space natively, regardless of tabIndex — tabIndex only ever gates
+// Tab-reachability, never keydown behaviour on an already-focused element.
+// Only the pure math (which button an arrow key moves to) and the small
+// DOM-wiring loop around it live here, shared by both toys — the same
+// split as advancePick above: one reducer, tested once, each toy supplies
+// its own event listeners around it.
+// ---------------------------------------------------------------------
+
+export type ArrowKey = "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight";
+
+/** `event.key` -> ArrowKey, or `null` for every other key — the one guard
+ * a keydown handler needs before calling nextRovingIndex. */
+export function asArrowKey(key: string): ArrowKey | null {
+  return key === "ArrowUp" || key === "ArrowDown" || key === "ArrowLeft" || key === "ArrowRight"
+    ? key
+    : null;
+}
+
+/**
+ * The next roving-tabindex target for one arrow-key press over a toy's
+ * node-button grid: `positions[i]` is button `i`'s on-screen (decluttered)
+ * center — same space and same index order as declutterXY's own output, so
+ * every caller can pass that array straight through — and `current` is the
+ * index the grid's single tab stop currently sits on.
+ *
+ * Picks the NEAREST other point whose displacement from `current` is more
+ * along the pressed axis than across it — a loose 90-degree cone centered
+ * on the arrow's own direction (e.g. ArrowRight only ever considers points
+ * more to the right than up-or-down, never one almost directly above), so
+ * a press feels like it moves "that way" rather than to whatever's merely
+ * closest overall. A point sitting exactly on the cone's edge (`|dx| ===
+ * |dy|`, a precise diagonal) satisfies neither axis's strict inequality, so
+ * it's never claimed by the wrong key. Ties (equal distance) keep
+ * whichever candidate index is found first — deterministic, no dependency
+ * on iteration order mattering visibly since real toytown coordinates are
+ * floating point and an exact tie is not a case any caller relies on.
+ *
+ * Returns `current` unchanged when nothing lies in that direction: this is
+ * a real, irregularly-spaced street layout, not a rectangular grid, so an
+ * edge node genuinely has no neighbour in some direction, and "stay put"
+ * reads better to a keyboard user than an arbitrary wrap to the far side.
+ */
+export function nextRovingIndex(
+  positions: readonly [number, number][],
+  current: number,
+  direction: ArrowKey,
+): number {
+  if (current < 0 || current >= positions.length) return current;
+  const [cx, cy] = positions[current];
+  let best = current;
+  let bestDist = Infinity;
+  for (let i = 0; i < positions.length; i++) {
+    if (i === current) continue;
+    const dx = positions[i][0] - cx;
+    const dy = positions[i][1] - cy;
+    const inCone =
+      direction === "ArrowRight"
+        ? dx > 0 && Math.abs(dx) > Math.abs(dy)
+        : direction === "ArrowLeft"
+          ? dx < 0 && Math.abs(dx) > Math.abs(dy)
+          : direction === "ArrowDown"
+            ? dy > 0 && Math.abs(dy) > Math.abs(dx)
+            : dy < 0 && Math.abs(dy) > Math.abs(dx); // ArrowUp
+    if (!inCone) continue;
+    const dist = Math.hypot(dx, dy);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/**
+ * Wires roving tabindex (nextRovingIndex above) over one toy's node-button
+ * grid: `buttons[i]` MUST correspond to `positions[i]` (both indexed by
+ * real node id — every caller's own declutterXY output already is, and the
+ * matching `.node-btn` markup was built from the same array in the same
+ * order). Starts with `buttons[0]` as the one tab stop; a `focusin` on any
+ * OTHER button in the grid (a mouse click, in practice — flood.ts's/
+ * climbLinked.ts's own click listeners still do the actual pair-picking,
+ * this only ever moves which button is tabbable) re-anchors the roving
+ * index there too, so tabbing away and back always returns to the
+ * last-focused node rather than snapping back to button 0. `container`
+ * just needs to be an ancestor of every button in `buttons` — it's fine
+ * for it to contain other, non-grid content too (flood.ts uses its whole
+ * `.toy-stage`, SVG map included): both listeners bail out via `indexOf`
+ * the instant the event target isn't one of `buttons`. No-ops safely on an
+ * empty grid. Tab/Shift+Tab themselves need no handling at all — native
+ * behaviour already does the right thing once there's only one tabbable
+ * button to land on. */
+export function wireRovingNodeButtons(
+  container: HTMLElement,
+  buttons: readonly HTMLButtonElement[],
+  positions: readonly [number, number][],
+): void {
+  if (buttons.length === 0) return;
+  for (const btn of buttons) btn.tabIndex = -1;
+  buttons[0].tabIndex = 0;
+
+  container.addEventListener("focusin", (e) => {
+    const i = buttons.indexOf(e.target as HTMLButtonElement);
+    if (i === -1) return;
+    for (const btn of buttons) btn.tabIndex = btn === buttons[i] ? 0 : -1;
+  });
+
+  container.addEventListener("keydown", (e) => {
+    const direction = asArrowKey(e.key);
+    if (!direction) return;
+    const i = buttons.indexOf(e.target as HTMLButtonElement);
+    if (i === -1) return;
+    const next = nextRovingIndex(positions, i, direction);
+    if (next === i) return;
+    e.preventDefault(); // arrow keys would otherwise also scroll the page
+    buttons[next].focus();
+  });
+}

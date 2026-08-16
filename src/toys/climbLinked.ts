@@ -46,6 +46,7 @@ import {
   SVG_ZOOM_MIN,
   unorderedKey,
   vbPercentXY,
+  wireRovingNodeButtons,
   type PickState,
   type ViewBoxRect,
 } from "./toytownView";
@@ -229,6 +230,20 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
   const mapNodeButtons = new Map<number, HTMLButtonElement>();
   for (const btn of mapNodesLayer?.querySelectorAll<HTMLButtonElement>(".node-btn") ?? []) {
     mapNodeButtons.set(Number(btn.dataset.node), btn);
+  }
+
+  // Roving tabindex (I3 gate, a11y): same fix, same shared substrate as
+  // flood.ts's map — see toytownView.ts's wireRovingNodeButtons. Only the
+  // MAP's buttons need it; the hierarchy's `.node-mark`s are plain,
+  // non-interactive `<div>`s by design (this file's own header comment:
+  // "the hierarchy view is display-only... its node marks carry no button
+  // role"), so there's no separate tab-stop problem to fix there. `mapXY`
+  // is already index-aligned to node id (the same array `mapButtonsMarkup`
+  // used to place these buttons), and `mapNodeButtons` has one entry per
+  // `mapXY` index by construction (same loop built both).
+  if (mapNodesLayer) {
+    const orderedMapButtons = mapXY.map((_, i) => mapNodeButtons.get(i) as HTMLButtonElement);
+    wireRovingNodeButtons(mapNodesLayer, orderedMapButtons, mapXY);
   }
 
   let from = defaultPair.from;

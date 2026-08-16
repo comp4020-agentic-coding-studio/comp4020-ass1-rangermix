@@ -20,6 +20,7 @@ import {
   MIN_NODE_DIST,
   physicalEdges,
   roadPolylineMarkup,
+  wireRovingNodeButtons,
   type PickState,
 } from "./toytownView";
 
@@ -109,6 +110,17 @@ export function mountFlood(root: HTMLElement, t: Toytown): { playDefault: () => 
   for (const btn of root.querySelectorAll<HTMLButtonElement>(".node-btn")) {
     nodeButtons.set(Number(btn.dataset.node), btn);
   }
+
+  // Roving tabindex (I3 gate, a11y): collapses the up-to-62 node buttons to
+  // ONE tab stop instead of 62 separate ones — see toytownView.ts's
+  // wireRovingNodeButtons for the full rationale. `buttonXY` is already
+  // index-aligned to node id (the same array `nodeButtonsMarkup` used to
+  // place these exact buttons on screen — see the comment above), so it's
+  // reused directly as the roving grid's own position list; `nodeButtons`
+  // has one entry per `buttonXY` index by construction (same loop built
+  // both), so the `as HTMLButtonElement` below is safe.
+  const orderedNodeButtons = buttonXY.map((_, i) => nodeButtons.get(i) as HTMLButtonElement);
+  wireRovingNodeButtons(root, orderedNodeButtons, buttonXY);
 
   let from = 0;
   let to = 0;

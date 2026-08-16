@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { decodeToytown, type ToytownArtifact } from "./toytown";
 import {
   advancePick,
+  asArrowKey,
   contextPolylineMarkup,
   declutterXY,
   driftConnectorMarkup,
@@ -10,6 +11,7 @@ import {
   edgeClsOf,
   IDLE_PICK,
   isArterial,
+  nextRovingIndex,
   physicalEdges,
   roadPolylineMarkup,
   svgPan,
@@ -17,6 +19,7 @@ import {
   svgZoomAbout,
   unorderedKey,
   vbPercentXY,
+  wireRovingNodeButtons,
 } from "./toytownView";
 
 // A tiny synthetic 3-node fixture, deliberately mixing a TWO-WAY pair
@@ -534,5 +537,168 @@ describe("vbPercentXY: viewBox user-space -> left/top percentage (H5 gate fix �
     const vb = { x: 50, y: 20, w: 100, h: 100 };
     expect(vbPercentXY(vb, 50, 20)).toEqual([0, 0]);
     expect(vbPercentXY(vb, 150, 120)).toEqual([100, 100]);
+  });
+});
+
+describe("asArrowKey: event.key -> ArrowKey guard (I3 gate — roving tabindex)", () => {
+  it("recognizes all four arrow keys", () => {
+    expect(asArrowKey("ArrowUp")).toBe("ArrowUp");
+    expect(asArrowKey("ArrowDown")).toBe("ArrowDown");
+    expect(asArrowKey("ArrowLeft")).toBe("ArrowLeft");
+    expect(asArrowKey("ArrowRight")).toBe("ArrowRight");
+  });
+
+  it("returns null for every other key, including ones a node-btn grid also sees (Enter/Space/Tab)", () => {
+    expect(asArrowKey("Enter")).toBeNull();
+    expect(asArrowKey(" ")).toBeNull();
+    expect(asArrowKey("Tab")).toBeNull();
+    expect(asArrowKey("a")).toBeNull();
+    expect(asArrowKey("")).toBeNull();
+  });
+});
+
+describe("nextRovingIndex: pure next-index math for arrow-key grid navigation (I3 gate — /how/ flood toy + climbLinked map roving tabindex)", () => {
+  // A small "plus" layout plus a couple of extra points for the trickier
+  // cases below. Index order deliberately does NOT match any spatial
+  // order, since real toytown node ids never do either.
+  const CENTER = 0; // [0, 0]
+  const RIGHT = 1; // [10, 0]
+  const LEFT = 2; // [-10, 0]
+  const UP = 3; // [0, -10]
+  const DOWN = 4; // [0, 10]
+  const FAR_RIGHT = 5; // [30, 0] -- farther right than RIGHT
+  const DIAGONAL = 6; // [10, 10] -- exactly 45 degrees off center
+  const PLUS: [number, number][] = [
+    [0, 0], // CENTER
+    [10, 0], // RIGHT
+    [-10, 0], // LEFT
+    [0, -10], // UP
+    [0, 10], // DOWN
+    [30, 0], // FAR_RIGHT
+    [10, 10], // DIAGONAL
+  ];
+
+  it("moves to the nearest point in each of the four directions from the center", () => {
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowRight")).toBe(RIGHT);
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowLeft")).toBe(LEFT);
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowUp")).toBe(UP);
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowDown")).toBe(DOWN);
+  });
+
+  it("prefers the NEARER of two candidates in the same direction", () => {
+    // From CENTER, both RIGHT and FAR_RIGHT lie to the right; RIGHT (dist
+    // 10) must win over FAR_RIGHT (dist 30).
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowRight")).toBe(RIGHT);
+  });
+
+  it("keeps moving further along the same direction once already at the nearer candidate", () => {
+    // From RIGHT, only FAR_RIGHT still lies further right (CENTER is now
+    // to the LEFT of RIGHT).
+    expect(nextRovingIndex(PLUS, RIGHT, "ArrowRight")).toBe(FAR_RIGHT);
+  });
+
+  it("stays put (returns current unchanged) when nothing lies further in that direction", () => {
+    // FAR_RIGHT is the rightmost point on this layout — no wrap-around.
+    expect(nextRovingIndex(PLUS, FAR_RIGHT, "ArrowRight")).toBe(FAR_RIGHT);
+  });
+
+  it("a point exactly on the 45-degree diagonal is claimed by NEITHER of its two adjacent directions", () => {
+    // DIAGONAL is [10, 10] from CENTER: |dx| === |dy|, so it satisfies
+    // neither ArrowRight's nor ArrowDown's strict "more along that axis"
+    // test — RIGHT/DOWN (both closer AND unambiguous) win instead.
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowRight")).not.toBe(DIAGONAL);
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowDown")).not.toBe(DIAGONAL);
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowRight")).toBe(RIGHT);
+    expect(nextRovingIndex(PLUS, CENTER, "ArrowDown")).toBe(DOWN);
+  });
+
+  it("breaks an exact distance tie by keeping the first candidate found (deterministic, not iteration-order-sensitive by accident)", () => {
+    const tie: [number, number][] = [
+      [0, 0], // current
+      [10, 1], // candidate A -- dist sqrt(101)
+      [10, -1], // candidate B -- dist sqrt(101), exactly tied with A
+    ];
+    expect(nextRovingIndex(tie, 0, "ArrowRight")).toBe(1);
+  });
+
+  it("is defensive against an out-of-range current index (returns it unchanged rather than throwing)", () => {
+    expect(nextRovingIndex(PLUS, -1, "ArrowRight")).toBe(-1);
+    expect(nextRovingIndex(PLUS, 99, "ArrowRight")).toBe(99);
+  });
+
+  it("a single-point grid never moves (no other point to move to, in any direction)", () => {
+    const solo: [number, number][] = [[0, 0]];
+    expect(nextRovingIndex(solo, 0, "ArrowRight")).toBe(0);
+    expect(nextRovingIndex(solo, 0, "ArrowUp")).toBe(0);
+  });
+});
+
+describe("wireRovingNodeButtons: DOM wiring around nextRovingIndex (I3 gate)", () => {
+  // @vitest-environment for this file is jsdom (see file header), so real
+  // .focus()/tabIndex/dispatchEvent behavior is available here, unlike
+  // home.test.ts's deliberately separate-realm fixtures.
+  function buildGrid(positions: [number, number][]): { container: HTMLElement; buttons: HTMLButtonElement[] } {
+    const container = document.createElement("div");
+    const buttons = positions.map((_, i) => {
+      const btn = document.createElement("button");
+      btn.className = "node-btn";
+      btn.dataset.node = String(i);
+      container.appendChild(btn);
+      return btn;
+    });
+    document.body.appendChild(container);
+    return { container, buttons };
+  }
+
+  const PLUS: [number, number][] = [
+    [0, 0], // 0
+    [10, 0], // 1: right
+    [-10, 0], // 2: left
+  ];
+
+  it("starts with exactly ONE button tabbable (index 0) and every other at tabIndex -1", () => {
+    const { buttons } = buildGrid(PLUS);
+    wireRovingNodeButtons(document.body, buttons, PLUS);
+    expect(buttons[0].tabIndex).toBe(0);
+    expect(buttons[1].tabIndex).toBe(-1);
+    expect(buttons[2].tabIndex).toBe(-1);
+  });
+
+  it("an arrow key on the focused button moves both DOM focus and the roving tabIndex to the next button", () => {
+    const { container, buttons } = buildGrid(PLUS);
+    wireRovingNodeButtons(container, buttons, PLUS);
+    buttons[0].focus();
+    expect(document.activeElement).toBe(buttons[0]);
+
+    const evt = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+    buttons[0].dispatchEvent(evt);
+
+    expect(document.activeElement).toBe(buttons[1]); // moved to the "right" button
+    expect(buttons[1].tabIndex).toBe(0);
+    expect(buttons[0].tabIndex).toBe(-1);
+    expect(evt.defaultPrevented).toBe(true); // arrow keys must not also scroll the page
+  });
+
+  it("a mouse click (focus without a keypress) re-anchors the roving tabIndex to the clicked button too", () => {
+    const { container, buttons } = buildGrid(PLUS);
+    wireRovingNodeButtons(container, buttons, PLUS);
+    buttons[2].focus(); // simulates the focus a real click also produces
+    expect(buttons[2].tabIndex).toBe(0);
+    expect(buttons[0].tabIndex).toBe(-1);
+  });
+
+  it("a non-arrow key (e.g. Enter) is left alone — no preventDefault, no focus move — since the button's own native click handles it", () => {
+    const { container, buttons } = buildGrid(PLUS);
+    wireRovingNodeButtons(container, buttons, PLUS);
+    buttons[0].focus();
+    const evt = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    buttons[0].dispatchEvent(evt);
+    expect(evt.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(buttons[0]);
+  });
+
+  it("no-ops safely on an empty grid", () => {
+    const container = document.createElement("div");
+    expect(() => wireRovingNodeButtons(container, [], [])).not.toThrow();
   });
 });
