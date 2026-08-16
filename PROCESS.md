@@ -37,16 +37,18 @@ rebuilt intuition-first on a real ANU street subgraph.
    task closed.
    [`d82d677...60fae72`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/d82d677...60fae72)
 
-3. **User feedback became spec before it became code.** The build review
-   ("mini-town is boring — use real ANU streets"; "I have no idea what
-   Race, To the Hill and Full diagonal means") went into the design spec
-   as twelve binding amendments (§14) with their own contract tests, then
-   through the same task/review loop as everything else. That loop earned
-   its keep twice: the "footer out of style" complaint root-caused to a
-   curly-quote `class=”site-foot”` typo a previous fix wave had shipped,
-   and the new pan-clamp's property tests caught the fixer's own first
-   attempt still being wrong (189/200 seeded failures) before it landed.
-   [`b078bfd...aa22fdb`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...aa22fdb)
+3. **User feedback became spec before it became code — twice.** Both build
+   reviews ("mini-town is boring — use real ANU streets"; "the overlay is
+   always one step behind the map") went into the design spec as binding
+   amendments (§14, §16) with their own contract tests, then through the
+   same task/review loop as everything else. That loop kept earning its
+   keep: the "footer out of style" complaint root-caused to a curly-quote
+   `class=”site-foot”` typo a previous fix wave had shipped; the pan-clamp
+   property tests caught the fixer's own first formula still being wrong
+   (189/200 seeded failures); and pixel-sampling caught canvas `Path2D`
+   batching silently deleting the search-density effect — three bugs no
+   suite in `pnpm check` could see.
+   [`b078bfd...b3b34f6`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...b3b34f6)
 
 4. **Exactness over drama.** The final review measured a 153 km/h
    quantization artifact in the graph, which made A\*'s 100 km/h heuristic
