@@ -478,54 +478,84 @@ a {
   content: "— ";
 }
 
-.hero-copy {
+/* Splash (third build review §17.3): replaces the old map-corner title/
+   description block, which sat directly on the canvas at all times and
+   could collide with a pin dragged into that same corner (the user's own
+   complaint — "the text on top left corner of the map is blocking the
+   view of map"). This is a full-map-area gate instead: shown once,
+   dismissed once (home.ts's dismiss()), never drawn over the map again
+   for the rest of the session. Sized against .map-frame exactly like
+   .zoom-controls above it (absolute, inset:0 this time rather than a
+   corner) and placed LAST among .map-frame's children so it paints over
+   both the canvas pair and the zoom buttons with no z-index needed — the
+   same later-sibling-wins convention .zoom-controls' own comment already
+   documents. Border + radius matches .map-stack's own panel treatment so
+   it reads as "the map box, showing different content right now" rather
+   than a jarring shape change once it's dismissed. */
+.splash {
   position: absolute;
-  top: 0;
-  left: 0;
-  max-width: 46ch;
-  padding: 24px 28px 44px 24px;
-  pointer-events: none;
-  background: radial-gradient(
-    120% 100% at 0% 0%,
-    color-mix(in srgb, var(--ground) 92%, transparent) 42%,
-    transparent 100%
-  );
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 32px 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--ground);
+  text-align: center;
 }
 
-/* .hero-copy is absolutely positioned over .hero's top-left corner —
-   exactly where .map-frame used to be the only thing under it. With
-   Compare active, that same top-left corner is now the FIRST panel, whose
-   own corner chip would otherwise collide with the hero text (found live:
-   both fighting for the same top-left px). Rather than reflow/reposition
-   either one, the title overlay steps aside while Compare is showing
-   panels — it's already duplicated by the nav bar's own "Highway to Hill"
-   link, so nothing is lost, only the redundant copy. Pure CSS (sibling
-   combinator off compare-grid's own [hidden] state), so overlay mode's
-   rendering is untouched either way. Placed after the base .hero-copy rule
-   (not next to .compare-grid) so this higher-specificity override stays in
-   ascending-specificity source order for the same element. */
-.compare-grid:not([hidden]) ~ .hero-copy {
+/* `[hidden]` and `.splash` are both author rules, so the class-based
+   `display: flex` above wins over the UA stylesheet's `[hidden] {
+   display: none }` and would keep the splash laid out even after
+   home.ts sets `splashEl.hidden = true` on dismiss — same fix, same
+   reason, as `.controls .load-note[hidden]` and `.board .row[hidden]`
+   elsewhere in this file. */
+.splash[hidden] {
   display: none;
 }
 
-.hero-copy h1 {
-  margin: 0 0 10px;
-  font-size: clamp(1.9rem, 3.6vw, 2.75rem);
+/* Pre-paint companion to the rule above: index.html's own inline head
+   script sets this attribute BEFORE first paint (right next to, and for
+   the same reason as, its theme stamp) so a visitor who already dismissed
+   the splash this session doesn't see it flash back in for the instant
+   before the deferred module script catches up and sets the real
+   `hidden` state itself. */
+html[data-splash-dismissed] .splash {
+  display: none;
+}
+
+.splash-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: 46ch;
+}
+
+.splash-copy h1 {
+  margin: 0;
+  font-size: clamp(2.3rem, 6vw, 3.8rem);
   font-weight: 800;
   letter-spacing: -0.02em;
   line-height: 1.05;
-  text-shadow:
-    0 0 14px var(--ground),
-    0 0 4px var(--ground);
 }
 
-.hero-copy .core {
+.splash-copy .core {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.05rem;
+}
+
+.splash-copy .splash-desc {
   margin: 0;
   color: var(--muted);
-  font-size: 0.95rem;
-  text-shadow:
-    0 0 14px var(--ground),
-    0 0 4px var(--ground);
+  font-size: 0.92rem;
+}
+
+.splash-copy .splash-explore {
+  margin-top: 8px;
 }
 
 .controls {
@@ -1087,9 +1117,12 @@ a {
     font-size: 1.05rem;
   }
 
-  .hero-copy {
+  .splash {
+    padding: 24px 18px;
+  }
+
+  .splash-copy {
     max-width: 100%;
-    padding: 18px 18px 30px;
   }
 
   /* Below 940px the Racers/Routes groups stack full-width instead of

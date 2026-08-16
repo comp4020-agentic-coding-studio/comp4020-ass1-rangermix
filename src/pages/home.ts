@@ -47,6 +47,29 @@ export function autoRunPins(pinA: number | null, pinB: number | null): [number, 
   return pinA !== null && pinB !== null ? [pinA, pinB] : null;
 }
 
+/** The auto-run timer's OTHER fire condition (third build review §17.3):
+ * whether the desktop-only 1.5s idle timer should be armed right now.
+ * `autoRunPins` (above) decides whether the PINNED PAIR is ready; this
+ * decides whether the PAGE is — data loaded, the splash no longer
+ * covering the map, not already armed (arming is one-shot per pageview;
+ * this guards the second of two possible triggers — data-ready and
+ * splash-dismissal racing each other, whichever finishes second — from
+ * scheduling a second timer), and the viewport wide enough that the
+ * design spec's "desktop only" still applies. Pure so this contract is
+ * unit-testable without a real timer/DOM/matchMedia, same rationale as
+ * autoRunPins itself; the DOM wiring that reads live values into these
+ * four booleans and actually calls setTimeout lives in boot()'s
+ * maybeArmAutoRun, untested here by the same design as the rest of
+ * boot(). */
+export function shouldArmAutoRun(
+  dataReady: boolean,
+  splashDismissed: boolean,
+  alreadyArmed: boolean,
+  isDesktopWidth: boolean,
+): boolean {
+  return dataReady && splashDismissed && !alreadyArmed && isDesktopWidth;
+}
+
 export interface PanelDiff {
   keep: Algo[];
   add: Algo[];
@@ -188,10 +211,16 @@ function boot(): void {
 
   const baseCanvas = document.getElementById("map-base");
   const overlayCanvas = document.getElementById("map-overlay");
-  const stack = document.querySelector('[data-testid="race-canvas"]');
+  // Typed HTMLElement (not the bare Element a plain querySelector call
+  // infers) because dismiss() below calls .focus() on it directly — the
+  // static tabindex="-1" in index.html is what makes that focus call land
+  // without also pulling race-canvas into the normal Tab order.
+  const stack = document.querySelector<HTMLElement>('[data-testid="race-canvas"]');
   const mapFrame = document.querySelector<HTMLElement>(".map-frame");
   const compareGrid = document.querySelector<HTMLElement>('[data-testid="compare-panels"]');
   const loadNote = document.getElementById("load-note");
+  const splashEl = document.querySelector<HTMLElement>('[data-testid="splash"]');
+  const exploreBtn = document.querySelector<HTMLButtonElement>('[data-testid="explore"]');
   const raceRunBtn = document.querySelector<HTMLButtonElement>('[data-testid="race-run"]');
   const astarToggle = document.querySelector<HTMLButtonElement>('[data-testid="algo-astar"]');
   const bidiToggle = document.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]');
@@ -226,6 +255,11 @@ function boot(): void {
   let pinB: number | null = null;
   let viewMode: "overlay" | "compare" = loadViewMode();
   let panels: PanelEntry[] = [];
+  // Splash (third build review §17.3) — see the dedicated section below
+  // (after `scheduler` is defined, since maybeArmAutoRun needs it).
+  let splashDismissed = false; // true once the splash is confirmed gone this pageview — either restored from a prior dismissal this session, or set live by dismiss()
+  let dataReady = false; // Promise.all(renderReady, routingReady) has resolved
+  let autoRunArmed = false; // guards the auto-run setTimeout from ever being scheduled twice
 
   // A race's own promise rejecting means the WORKER told us it failed (see
   // worker.ts's onmessage catch + controller.ts's dispatchResponse) — the
@@ -282,6 +316,102 @@ function boot(): void {
     if (pinA === null || pinB === null) return;
     scheduler.schedule(pinA, pinB);
   }
+
+  // ------------------------------------------------------------------
+  // Splash (third build review §17.3): a full-map gate that replaces the
+  // old map-corner title/description overlay (removed from index.html and
+  // styles.css along with this feature — see the .splash rule's own
+  // comment). Shown once; "Explore the race →" (click, or Enter/Space via
+  // native button semantics — no extra key handling needed for those two),
+  // or Escape anywhere, dismisses it for the rest of THIS session
+  // (sessionStorage, not localStorage — a fresh tab sees it again,
+  // matching a "welcome screen" rather than a permanent preference). The
+  // map-frame's zoom buttons and the desktop auto-run both stay gated
+  // until dismissal too, so nothing the splash visually covers is
+  // reachable by mouse OR keyboard while it's up.
+  // ------------------------------------------------------------------
+
+  const SPLASH_KEY = "hth-splash";
+
+  // Same guarded try/catch pattern as theme.ts's own safeGetItem/
+  // safeSetItem (private-mode/storage-disabled browsers throw on ANY
+  // storage access) — sessionStorage instead of localStorage since
+  // dismissal is a per-tab-session thing, not a persisted preference.
+  function safeSessionGet(key: string): string | null {
+    try {
+      return sessionStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function safeSessionSet(key: string, value: string): void {
+    try {
+      sessionStorage.setItem(key, value);
+    } catch {
+      /* storage unavailable — the splash still dismisses in-memory for this pageview */
+    }
+  }
+
+  // Shared by the data-ready success path AND dismiss() below: the zoom
+  // buttons live INSIDE .map-frame, spatially under the splash, so they
+  // stay disabled (native `disabled` — skipped by Tab, not just visually
+  // dimmed) until BOTH the graph has loaded AND the splash is out of the
+  // way, instead of the plain data-only gate every other control uses.
+  function updateMapControlsEnabled(): void {
+    const ready = dataReady && splashDismissed;
+    if (zoomInBtn) zoomInBtn.disabled = !ready;
+    if (zoomOutBtn) zoomOutBtn.disabled = !ready;
+    if (zoomFitBtn) zoomFitBtn.disabled = !ready;
+  }
+
+  // Reads the live DOM/timer state into shouldArmAutoRun's four pure
+  // booleans and, if it says go, arms the ONE setTimeout. Reduced motion
+  // is unaffected: this only decides WHEN the timer is armed, not how the
+  // race it eventually triggers renders (that split lives entirely in
+  // controller.ts, untouched here).
+  function maybeArmAutoRun(): void {
+    if (!shouldArmAutoRun(dataReady, splashDismissed, autoRunArmed, matchMedia("(min-width: 940px)").matches)) return;
+    autoRunArmed = true;
+    setTimeout(() => {
+      const pins = autoRunPins(pinA, pinB);
+      if (pins) scheduler.now(pins[0], pins[1]);
+    }, AUTO_RUN_MS);
+  }
+
+  function dismiss(): void {
+    if (!splashEl || splashEl.hidden) return;
+    splashEl.hidden = true;
+    splashDismissed = true;
+    safeSessionSet(SPLASH_KEY, "1");
+    updateMapControlsEnabled();
+    maybeArmAutoRun();
+    // Moves focus to the map region it just uncovered (§17.3's own "focus
+    // moves to the map region") — race-canvas carries a static
+    // tabindex="-1" (index.html) precisely so this programmatic focus
+    // works without also adding it to the normal Tab order.
+    stack?.focus();
+  }
+
+  if (safeSessionGet(SPLASH_KEY) === "1") {
+    // Pre-dismissed earlier this session: start hidden with no animation
+    // or flash — index.html's own inline head script already stamped
+    // `data-splash-dismissed` on <html> before first paint for the CSS
+    // half of that; setting `hidden` here is the JS-observable half that
+    // updateMapControlsEnabled/maybeArmAutoRun actually read.
+    splashDismissed = true;
+    if (splashEl) splashEl.hidden = true;
+  } else {
+    // First splash this session: autofocus the primary action — a real,
+    // enabled, on-screen button, safe to autofocus — so keyboard use
+    // starts right where a mouse visitor's eye lands.
+    exploreBtn?.focus();
+  }
+
+  exploreBtn?.addEventListener("click", dismiss);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") dismiss();
+  });
 
   // Which views a caller should draw pins/frames onto right now: the single
   // overlay `view` in overlay mode, or every active Compare panel's own
@@ -952,9 +1082,8 @@ function boot(): void {
       // belt-and-braces one).
       if (astarToggle) astarToggle.disabled = false;
       if (bidiToggle) bidiToggle.disabled = false;
-      if (zoomInBtn) zoomInBtn.disabled = false;
-      if (zoomOutBtn) zoomOutBtn.disabled = false;
-      if (zoomFitBtn) zoomFitBtn.disabled = false;
+      dataReady = true;
+      updateMapControlsEnabled(); // zoom buttons: gated on the splash too — see that function's own comment
       if (viewToggleBtn) viewToggleBtn.disabled = false;
 
       // Pins pre-placed on the signature preset (design spec's "Ready /
@@ -973,33 +1102,32 @@ function boot(): void {
       // and either way draws the just-placed pins onto whatever is active.
       applyViewMode();
 
-      // Auto-run on desktop only (design spec §5.1)
-      if (matchMedia("(min-width: 940px)").matches) {
-        setTimeout(() => {
-          const pins = autoRunPins(pinA, pinB);
-          if (pins) scheduler.now(pins[0], pins[1]);
-        }, AUTO_RUN_MS);
-      }
+      // Desktop-only 1.5s idle auto-run (design spec §5.1): arms now if
+      // the splash is ALSO already dismissed, else waits for dismiss() to
+      // call this same function again — see maybeArmAutoRun's own comment.
+      maybeArmAutoRun();
     })
     .catch((err: unknown) => {
       loadFailed = true;
       console.error("failed to load map/routing data", err);
       if (loadNote) loadNote.textContent = "failed to load the map — reload to retry";
-      // F6 gate fix: a visitor whose LAST session left view mode persisted
-      // as "compare" (loadViewMode(), above) hits this catch with
-      // compareGrid still showing the EMPTY `.is-loading` placeholder —
-      // syncPanels() needs `controller`/`graph`, neither of which this
-      // failure path ever sets, so it can never populate real panels. Left
-      // alone, that's a permanently blank box AND (styles.css's
-      // `.compare-grid:not([hidden]) ~ .hero-copy` rule) a hidden h1/lede,
-      // i.e. a failure state that reads as a broken blank page instead of
-      // an honest one. Falling back to the overlay DOM state re-shows
-      // whatever base map DID load (render.json is independent of
-      // routing.json) and the hero copy, through the exact same
-      // applyViewMode() the success path uses — safe here since its
-      // non-compare branch only touches `panels` (still empty),
-      // `controller`/`graph` (both optionally-chained/guarded), and `view`
-      // (already constructed if renderReady won this race). Deliberately
+      // F6 gate fix (still relevant post-§17.3): a visitor whose LAST
+      // session left view mode persisted as "compare" (loadViewMode(),
+      // above) hits this catch with compareGrid still showing the EMPTY
+      // `.is-loading` placeholder — syncPanels() needs `controller`/
+      // `graph`, neither of which this failure path ever sets, so it can
+      // never populate real panels. Left alone, that's a permanently
+      // blank box AND — since the splash now lives INSIDE .map-frame,
+      // hidden along with it whenever `mapFrame.hidden` is true — no
+      // splash/h1 either, i.e. a failure state that reads as a broken
+      // blank page instead of an honest one. Falling back to the overlay
+      // DOM state re-shows whatever base map DID load (render.json is
+      // independent of routing.json) and the splash (if not yet
+      // dismissed), through the exact same applyViewMode() the success
+      // path uses — safe here since its non-compare branch only touches
+      // `panels` (still empty), `controller`/`graph` (both
+      // optionally-chained/guarded), and `view` (already constructed if
+      // renderReady won this race). Deliberately
       // NOT persisted (no saveViewMode call): this only steadies the
       // FAILURE view, so a reload that succeeds still restores the
       // visitor's actual compare preference via the normal load path.

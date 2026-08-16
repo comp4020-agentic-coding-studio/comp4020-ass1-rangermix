@@ -12,6 +12,15 @@
         if (t === "light" || t === "dark")
           document.documentElement.setAttribute("data-theme", t);
       } catch (e) {}
+      // pre-paint splash stamp (third build review §17.3): a visitor who
+      // already dismissed the splash this session (sessionStorage, set by
+      // src/pages/home.ts's dismiss()) shouldn't see it flash back in for
+      // the instant before the deferred module script catches up — same
+      // reasoning, same try/catch-guarded read, as the theme stamp above.
+      try {
+        if (sessionStorage.getItem("hth-splash") === "1")
+          document.documentElement.setAttribute("data-splash-dismissed", "");
+      } catch (e) {}
     </script>
     <link rel="stylesheet" href="./styles.css" />
   </head>
@@ -29,7 +38,7 @@
     <main class="race-layout">
       <section class="hero">
         <div class="map-frame">
-          <div class="map-stack" data-testid="race-canvas" role="img" aria-label="Map of Canberra's road network. Drag a pin to move it, drag empty map to pan, scroll or pinch to zoom. Ready to race.">
+          <div class="map-stack" data-testid="race-canvas" role="img" tabindex="-1" aria-label="Map of Canberra's road network. Drag a pin to move it, drag empty map to pan, scroll or pinch to zoom. Ready to race.">
             <canvas id="map-base"></canvas>
             <canvas id="map-overlay"></canvas>
           </div>
@@ -38,12 +47,16 @@
             <button data-testid="zoom-in" type="button" class="zoom-btn" aria-label="Zoom in" disabled>+</button>
             <button data-testid="zoom-out" type="button" class="zoom-btn" aria-label="Zoom out" disabled>−</button>
           </div>
+          <div class="splash" data-testid="splash">
+            <div class="splash-copy">
+              <h1>Highway to Hill</h1>
+              <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
+              <p class="splash-desc">Two routing algorithms race across Canberra's real road network to find the exact same shortest route — one searches almost everywhere, the other barely looks. Drag either pin to a new spot, switch on extra algorithms, and watch the difference for yourself. Every number here is measured live in your browser, never invented.</p>
+              <button data-testid="explore" type="button" class="btn-primary splash-explore">Explore the race →</button>
+            </div>
+          </div>
         </div>
         <div class="compare-grid is-loading" data-testid="compare-panels" hidden></div>
-        <div class="hero-copy">
-          <h1>Highway to Hill</h1>
-          <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
-        </div>
         <div class="controls">
           <div class="control-group" role="group" aria-labelledby="routes-label">
             <p class="group-label" id="routes-label">Routes</p>

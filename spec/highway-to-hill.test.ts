@@ -241,6 +241,17 @@ describe("spec: home page (/) contracts", () => {
   );
 
   it(
+    "explore button [data-testid=explore] is a real button that dismisses the splash (third build review §17.3)",
+    () => {
+      const doc = pageDoc("index.html");
+      const btn = doc?.querySelector('[data-testid="explore"]');
+      expect(btn).toBeTruthy();
+      expect(btn?.tagName).toBe("BUTTON");
+      expect(btn?.textContent?.trim()).toBe("Explore the race →");
+    },
+  );
+
+  it(
     `aria-live region [data-testid=${CONTRACTS.testids.raceLive}] announces race results as text`,
     () => {
       // The region's content only becomes non-empty once a real race has
