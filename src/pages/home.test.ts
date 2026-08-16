@@ -132,12 +132,16 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
   beforeEach(() => {
     // A fresh throwaway Document per test (see the file-header comment for
     // why this is a local JSDOM instance rather than the file's own global
-    // `document`). how-cta is included specifically because it must NOT be
-    // touched by either function (build-review ruling: leaving to /how/
-    // while the splash is up is legitimate) — these tests assert that
-    // directly rather than just trusting the source comment. It sits
-    // INSIDE `.board-actions` alongside two controls that must be gated,
-    // matching the real markup's structure — the exact reason
+    // `document`). Roster round (spec §18.3/.6): the two hand-named
+    // algo-astar/algo-bidi toggles are gone — three `role="button"` roster
+    // rows (no native `disabled`, gated via aria-disabled/tabindex instead
+    // — see setDisabled's own comment) plus one real `<button>` family
+    // bidi modifier replace them. how-cta is included specifically because
+    // it must NOT be touched by either function (build-review ruling:
+    // leaving to /how/ while the splash is up is legitimate) — these tests
+    // assert that directly rather than just trusting the source comment.
+    // It sits INSIDE `.board-actions` alongside a control that must be
+    // gated, matching the real markup's structure — the exact reason
     // applyControlsEnabled/applySplashInert target leaf controls directly
     // instead of `.board` as a whole (`inert` has no per-descendant
     // opt-out once set on an ancestor).
@@ -147,8 +151,12 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
         <button class="chip route-chip" data-preset="surprise">Surprise me</button>
       </div>
       <aside class="board">
-        <button data-testid="algo-astar">Toggle A*</button>
-        <button data-testid="algo-bidi">Toggle Bidirectional</button>
+        <div class="family-bezel" data-family="searchers">
+          <button data-testid="bidi-toggle">⇄</button>
+          <div class="row row-optional" data-algo="astar-straight" role="button" aria-pressed="false">A* — straight line</div>
+          <div class="row row-optional" data-algo="astar-weighted" role="button" aria-pressed="false">A* — weighted (1.5×)</div>
+          <div class="row row-optional" data-algo="astar-greedy" role="button" aria-pressed="false">A* — greedy (direction only)</div>
+        </div>
         <div class="board-actions">
           <button data-testid="view-toggle">View: overlay</button>
           <button data-testid="race-run">Race again</button>
@@ -163,8 +171,8 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
     </body>`).window.document;
     controls = {
       raceRun: doc.querySelector<HTMLButtonElement>('[data-testid="race-run"]'),
-      astarToggle: doc.querySelector<HTMLButtonElement>('[data-testid="algo-astar"]'),
-      bidiToggle: doc.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]'),
+      rosterToggles: [...doc.querySelectorAll<HTMLElement>(".row-optional")],
+      familyBidiToggle: doc.querySelector<HTMLButtonElement>('[data-testid="bidi-toggle"]'),
       viewToggle: doc.querySelector<HTMLButtonElement>('[data-testid="view-toggle"]'),
       zoomIn: doc.querySelector<HTMLButtonElement>('[data-testid="zoom-in"]'),
       zoomOut: doc.querySelector<HTMLButtonElement>('[data-testid="zoom-out"]'),
@@ -173,8 +181,8 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
     };
     inertTargets = {
       raceRun: controls.raceRun,
-      astarToggle: controls.astarToggle,
-      bidiToggle: controls.bidiToggle,
+      rosterToggles: controls.rosterToggles,
+      familyBidiToggle: controls.familyBidiToggle,
       viewToggle: controls.viewToggle,
       routesContainer: doc.querySelector<HTMLElement>(".controls"),
     };
@@ -185,10 +193,18 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
   // a per-control loop (rather than one combined assertion) catches a
   // single wrong field/element that a copy-pasted bug might miss if it
   // happened to be wrong in the same direction as whatever's under test.
+  // The three roster rows are plain divs (no native `disabled`), so their
+  // gated state is read off `aria-disabled`/`tabIndex` instead — exactly
+  // what setDisabled (home.ts) is supposed to write for a non-button
+  // element, asserted here rather than assumed.
   function expectAllGated(disabled: boolean, inert: boolean): void {
     expect(controls.raceRun?.disabled).toBe(disabled);
-    expect(controls.astarToggle?.disabled).toBe(disabled);
-    expect(controls.bidiToggle?.disabled).toBe(disabled);
+    expect(controls.rosterToggles.length).toBe(3); // sanity: the fixture's rows were actually found
+    for (const row of controls.rosterToggles) {
+      expect(row.getAttribute("aria-disabled")).toBe(String(disabled));
+      expect(row.tabIndex).toBe(disabled ? -1 : 0);
+    }
+    expect(controls.familyBidiToggle?.disabled).toBe(disabled);
     expect(controls.viewToggle?.disabled).toBe(disabled);
     expect(controls.zoomIn?.disabled).toBe(disabled);
     expect(controls.zoomOut?.disabled).toBe(disabled);
@@ -196,8 +212,8 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
     expect(controls.routeChips.length).toBeGreaterThan(0); // sanity: the fixture's chips were actually found
     for (const chip of controls.routeChips) expect(chip.disabled).toBe(disabled);
     expect(controls.raceRun?.inert).toBe(inert);
-    expect(controls.astarToggle?.inert).toBe(inert);
-    expect(controls.bidiToggle?.inert).toBe(inert);
+    for (const row of controls.rosterToggles) expect(row.inert).toBe(inert);
+    expect(controls.familyBidiToggle?.inert).toBe(inert);
     expect(controls.viewToggle?.inert).toBe(inert);
     expect(inertTargets.routesContainer?.inert).toBe(inert);
   }

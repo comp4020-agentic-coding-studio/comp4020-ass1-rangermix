@@ -50,8 +50,9 @@
           <div class="splash" data-testid="splash">
             <div class="splash-copy">
               <h1>Highway to Hill</h1>
+              <p class="splash-desc">Highway to Hill is a live playground where two ways of finding a route race each other across Canberra's real streets.</p>
               <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
-              <p class="splash-desc">Two routing algorithms race across Canberra's real road network to find the exact same shortest route — one searches almost everywhere, the other barely looks. Drag either pin to a new spot, switch on extra algorithms, and watch the difference for yourself. Every number here is measured live in your browser, never invented.</p>
+              <p class="splash-desc">Drag either pin to a new spot, switch on extra algorithms, and watch the difference for yourself. Every number here is measured live in your browser, never invented.</p>
               <button data-testid="explore" type="button" class="btn-primary splash-explore">Explore the race →</button>
             </div>
           </div>
@@ -73,40 +74,69 @@
         </div>
       </section>
       <aside class="board" data-testid="scoreboard" aria-label="Race scoreboard">
+        <div class="board-topbar">
+          <button data-testid="view-toggle" type="button" class="chip board-topbar-btn" aria-pressed="false" disabled>View: overlay</button>
+          <button data-testid="size-toggle" type="button" class="chip board-topbar-btn" aria-pressed="false">Size: current</button>
+        </div>
         <p class="board-eyebrow">Algorithms</p>
         <p class="headline" id="board-headline"></p>
-        <div class="row" data-algo="dijkstra">
-          <span class="swatch" aria-hidden="true"></span>
-          <span class="name">Dijkstra</span><span class="val"></span>
-          <div class="track"><div class="fill"></div></div>
+
+        <div class="family-bezel" data-testid="family-searchers" data-family="searchers" data-bidi="false">
+          <div class="family-head">
+            <span class="family-label">Searchers</span>
+            <button data-testid="bidi-toggle" type="button" class="family-bidi-toggle" aria-pressed="false" aria-label="Run every active searcher bidirectionally" disabled>
+              <span aria-hidden="true">⇄</span>
+            </button>
+          </div>
+
+          <div class="row" data-algo="dijkstra">
+            <span class="swatch" aria-hidden="true"></span>
+            <span class="name">Dijkstra</span><span class="val"></span>
+            <span class="row-bidi-marker" aria-hidden="true">⇄</span>
+            <div class="track"><div class="fill"></div></div>
+          </div>
+
+          <div class="row row-optional" data-algo="astar-straight" data-active="false" role="button" tabindex="-1" aria-pressed="false" aria-disabled="true" aria-label="Toggle A* — straight line">
+            <span class="swatch" aria-hidden="true"></span>
+            <span class="name">A* — straight line</span><span class="val"></span>
+            <span class="row-bidi-marker" aria-hidden="true">⇄</span>
+            <div class="track"><div class="fill"></div></div>
+            <p class="row-note" data-testid="astar-note">guided by straight-line travel time (great-circle distance ÷ fastest road)</p>
+            <p class="row-delta" data-testid="delta-astar-straight"></p>
+          </div>
+
+          <div class="row row-optional" data-algo="astar-weighted" data-active="false" role="button" tabindex="-1" aria-pressed="false" aria-disabled="true" aria-label="Toggle A* — weighted (1.5×)">
+            <span class="swatch" aria-hidden="true"></span>
+            <span class="name">A* — weighted (1.5×)</span><span class="val"></span>
+            <span class="row-bidi-marker" aria-hidden="true">⇄</span>
+            <div class="track"><div class="fill"></div></div>
+            <p class="row-note">the same estimate, exaggerated 1.5× — bolder, sometimes picks a longer route</p>
+            <p class="row-delta" data-testid="delta-astar-weighted"></p>
+          </div>
+
+          <div class="row row-optional" data-algo="astar-greedy" data-active="false" role="button" tabindex="-1" aria-pressed="false" aria-disabled="true" aria-label="Toggle A* — greedy (direction only)">
+            <span class="swatch" aria-hidden="true"></span>
+            <span class="name">A* — greedy (direction only)</span><span class="val"></span>
+            <span class="row-bidi-marker" aria-hidden="true">⇄</span>
+            <div class="track"><div class="fill"></div></div>
+            <p class="row-note">chases the target's direction and ignores distance already travelled — fast, often wrong</p>
+            <p class="row-delta" data-testid="delta-astar-greedy"></p>
+          </div>
         </div>
-        <div class="row row-optional" data-algo="astar" data-active="false">
-          <span class="swatch" aria-hidden="true"></span>
-          <span class="name">A*</span><span class="val"></span>
-          <button data-testid="algo-astar" type="button" class="row-toggle" aria-pressed="false" aria-label="Toggle A*" disabled>
-            <span class="row-toggle-track"><span class="row-toggle-thumb"></span></span>
-          </button>
-          <div class="track"><div class="fill"></div></div>
-          <p class="astar-note" data-testid="astar-note">guided by a straight-line travel-time estimate (great-circle distance ÷ the network's fastest road speed).</p>
+
+        <div class="ch-slot">
+          <div class="row" data-algo="ch">
+            <span class="swatch" aria-hidden="true"></span>
+            <span class="name">Contraction Hierarchies</span><span class="val"></span>
+            <div class="track"><div class="fill"></div></div>
+          </div>
         </div>
-        <div class="row row-optional" data-algo="bidi" data-active="false">
-          <span class="swatch" aria-hidden="true"></span>
-          <span class="name">Bidirectional</span><span class="val"></span>
-          <button data-testid="algo-bidi" type="button" class="row-toggle" aria-pressed="false" aria-label="Toggle Bidirectional" disabled>
-            <span class="row-toggle-track"><span class="row-toggle-thumb"></span></span>
-          </button>
-          <div class="track"><div class="fill"></div></div>
-        </div>
-        <div class="row" data-algo="ch">
-          <span class="swatch" aria-hidden="true"></span>
-          <span class="name">Contraction Hierarchies</span><span class="val"></span>
-          <div class="track"><div class="fill"></div></div>
-        </div>
+
         <p class="fineprint">Times and counts are measured in your browser.
           CH did a one-off preprocessing pass before this page loaded — that
-          trade is the whole story.</p>
+          trade is the whole story. It's already inherently bidirectional,
+          so it carries no ⇄ toggle of its own.</p>
         <div class="board-actions">
-          <button data-testid="view-toggle" type="button" class="chip board-action" aria-pressed="false" disabled>View: overlay</button>
           <button data-testid="race-run" type="button" class="btn-primary board-action" disabled>▶ Race again</button>
           <a data-testid="how-cta" class="how-cta board-action" href="./how/">How is that possible? →</a>
         </div>

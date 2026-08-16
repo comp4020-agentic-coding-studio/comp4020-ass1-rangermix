@@ -1,14 +1,15 @@
 export type ThemeSetting = "system" | "light" | "dark";
 const KEY = "hth-theme";
 const ORDER: ThemeSetting[] = ["system", "dark", "light"];
-// Slim-viewport theme toggle (build-review §16.2): "◐" stands for "theme"
-// generically, the state's own first letter (S/D/L) tags which one is
-// active — shown in place of the full "Theme: <state>" label at ≤520px
-// (styles.css's own .theme-toggle-icon/.theme-toggle-label rule) so the
-// header's three items never wrap onto a second line at 390px. Purely
-// decorative: aria-label (below) carries the full sentence at every
-// viewport, so nothing accessible is lost.
-const COMPACT_ICON = "◐";
+// Fourth build review (spec §18.10): the theme button is icon-ONLY at every
+// width now (styles.css's .theme-toggle-icon/.theme-toggle-label rule hides
+// the label unconditionally, superseding build-review §16.2's ≤520px-only
+// compaction) — one glyph per state, no letter suffix needed since the
+// glyph itself already distinguishes system/dark/light. Purely decorative
+// (aria-hidden in the markup): aria-label (below) carries the full "Theme:
+// <state>" sentence a screen reader needs, since the glyph alone says
+// nothing on its own.
+const STATE_ICON: Record<ThemeSetting, string> = { system: "◐", dark: "☾", light: "☀" };
 let listeners: (() => void)[] = [];
 
 function safeGetItem(key: string): string | null {
@@ -46,20 +47,19 @@ function apply(setting: ThemeSetting): void {
     document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", setting);
   const full = `Theme: ${setting}`;
-  const compact = `${COMPACT_ICON}${setting.charAt(0).toUpperCase()}`;
   for (const btn of document.querySelectorAll<HTMLButtonElement>(
     '[data-testid="theme-toggle"]',
   )) {
-    // aria-label always carries the FULL sentence regardless of viewport —
-    // only the VISIBLE text compacts (CSS media query) — so a screen
-    // reader never loses information a sighted narrow-viewport visitor
-    // also can't see (they get the same full sentence, just via aria-label
-    // instead of the on-screen text).
-    btn.setAttribute("aria-label", `Switch theme (current: ${setting})`);
+    // Icon-only at every width now (spec §18.10) — aria-label carries the
+    // full "Theme: <state>" sentence regardless, since the on-screen glyph
+    // alone says nothing to a screen reader. .theme-toggle-label is kept
+    // in sync too (belt-and-braces for a CSS-disabled or print context)
+    // even though styles.css never shows it any more.
+    btn.setAttribute("aria-label", full);
     const label = btn.querySelector<HTMLElement>(".theme-toggle-label");
     const icon = btn.querySelector<HTMLElement>(".theme-toggle-icon");
     if (label) label.textContent = full;
-    if (icon) icon.textContent = compact;
+    if (icon) icon.textContent = STATE_ICON[setting];
   }
   for (const cb of listeners) cb();
 }
@@ -101,6 +101,23 @@ export function themeColors(): Record<string, string> {
     chGlow: read("--g-ch"),
     astarGlow: read("--g-astar"),
     bidiGlow: read("--g-bidi"),
+    // Roster round (spec §18): keyed by the roster ids verbatim
+    // (src/race/roster.ts's own RosterEntry.id strings) rather than the
+    // old fixed astar/bidi shorthand above — controller.ts's replay loop
+    // reads a racer's colour dynamically as `colors[layer.algo]` /
+    // `colors[`${layer.algo}Glow`]`, and `layer.algo` IS one of these
+    // strings post-roster-round, so the object needs an entry under the
+    // EXACT id, not a hand-translated shorthand. "dijkstra"/"ch" are
+    // unchanged ids, already covered by the keys above — only the three
+    // NEW A* variants need entries here, kept ADDITIVE (old keys untouched)
+    // so this stays correct regardless of which side of the concurrent
+    // controller.ts rewrite happens to be checked out when this runs.
+    "astar-straight": read("--c-astar"),
+    "astar-straightGlow": read("--g-astar"),
+    "astar-weighted": read("--c-astar-w"),
+    "astar-weightedGlow": read("--g-astar-w"),
+    "astar-greedy": read("--c-astar-g"),
+    "astar-greedyGlow": read("--g-astar-g"),
   };
 }
 

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { JSDOM } from "jsdom";
 import { describe, expect, it } from "vitest";
+import { ROSTER } from "../src/race/roster";
 
 // The checkable lines of the Highway to Hill design spec
 // (docs/superpowers/specs/2026-08-14-ch-explainer-design.md), written down
@@ -42,14 +43,17 @@ export const CONTRACTS = {
     presetHill: "preset-hill",
     howCta: "how-cta",
     astarNote: "astar-note",
+    sizeToggle: "size-toggle",
     toys: ["toy-flood", "toy-hierarchy", "toy-climb", "toy-contraction", "toy-order"],
   },
   attribution: "OpenStreetMap contributors",
-  // §17.4 (third build review): the Algorithms panel discloses A*'s
-  // heuristic in one muted line when A* is enabled.
-  astarHeuristic:
-    "guided by a straight-line travel-time estimate (great-circle " +
-    "distance ÷ the network's fastest road speed).",
+  // Fourth build review (spec §18.4/.5): the A* straight-line row's note —
+  // this is now src/race/roster.ts's own `note` field for the
+  // "astar-straight" entry, copied verbatim (a dedicated consistency test
+  // below asserts the two never drift apart). Superseded from the third
+  // build review's §17.4 wording, which lived on a single "A*" row that
+  // the roster round splits into three heuristic-specific rows.
+  astarHeuristic: "guided by straight-line travel time (great-circle distance ÷ fastest road)",
 } as const;
 
 function pageDoc(name: string): Document | undefined {
@@ -140,29 +144,61 @@ describe("spec: home page (/) contracts", () => {
     },
   );
 
+  // Roster round (spec §18.5/.6): the scoreboard now direct-labels all FIVE
+  // roster racers, not just Dijkstra/CH — sourced from ROSTER itself
+  // (src/race/roster.ts, this round's contract-first single source of
+  // truth) rather than a hand-copied list, so this test can't silently
+  // drift from the roster the panel is meant to be built from. The old
+  // per-racer "Bidirectional" row expectation is retired outright: bidi is
+  // now the family-wide modifier, never a row of its own, so it has no
+  // entry in ROSTER and nothing here checks for one.
   it(
-    `scoreboard [data-testid=${CONTRACTS.testids.scoreboard}] direct-labels both racers ("Dijkstra", "Contraction Hierarchies")`,
+    `scoreboard [data-testid=${CONTRACTS.testids.scoreboard}] direct-labels every roster racer with its exact contract name, in roster order`,
     () => {
       const doc = pageDoc("index.html");
       const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
-      expect(
-        board?.querySelector('[data-algo="dijkstra"] .name')?.textContent?.trim(),
-      ).toBe("Dijkstra");
-      expect(board?.querySelector('[data-algo="ch"] .name')?.textContent?.trim()).toBe(
-        "Contraction Hierarchies",
+      const names = ROSTER.map(
+        (r) => board?.querySelector(`[data-algo="${r.id}"] .name`)?.textContent?.trim(),
       );
+      expect(names).toEqual(ROSTER.map((r) => r.name));
     },
   );
 
+  it("every inexact racer's roster note renders verbatim under its own row (spec §18.5)", () => {
+    const doc = pageDoc("index.html");
+    const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
+    for (const r of ROSTER) {
+      if (!r.note) continue;
+      const note = board?.querySelector(`[data-algo="${r.id}"] .row-note`);
+      expect(note, r.id).toBeTruthy();
+      expect(note?.textContent?.trim(), r.id).toBe(r.note);
+    }
+  });
+
   it(
-    `A* heuristic note [data-testid=${CONTRACTS.testids.astarNote}] sits under the A* row with the spec §17.4 copy, verbatim`,
+    `A* — straight line's heuristic note [data-testid=${CONTRACTS.testids.astarNote}] sits under its own row, copy verbatim from roster.ts`,
     () => {
       const doc = pageDoc("index.html");
       const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
-      const astarRow = board?.querySelector('[data-algo="astar"]');
-      const note = astarRow?.querySelector(`[data-testid="${CONTRACTS.testids.astarNote}"]`);
-      expect(note, "note must live inside the A* row").toBeTruthy();
+      const row = board?.querySelector('[data-algo="astar-straight"]');
+      const note = row?.querySelector(`[data-testid="${CONTRACTS.testids.astarNote}"]`);
+      expect(note, "note must live inside the astar-straight row").toBeTruthy();
       expect(note?.textContent?.trim()).toBe(CONTRACTS.astarHeuristic);
+    },
+  );
+
+  it("CONTRACTS.astarHeuristic matches roster.ts's astar-straight note exactly (single source of truth stays in sync)", () => {
+    const entry = ROSTER.find((r) => r.id === "astar-straight");
+    expect(entry?.note).toBe(CONTRACTS.astarHeuristic);
+  });
+
+  it(
+    `size toggle [data-testid=${CONTRACTS.testids.sizeToggle}] is a real button (spec §18.9 — current/adaptive map-size control)`,
+    () => {
+      const doc = pageDoc("index.html");
+      const btn = doc?.querySelector(`[data-testid="${CONTRACTS.testids.sizeToggle}"]`);
+      expect(btn).toBeTruthy();
+      expect(btn?.tagName).toBe("BUTTON");
     },
   );
 
@@ -326,9 +362,15 @@ describe("spec: honest numbers", () => {
     const doc = pageDoc("index.html");
     const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
     expect(board).toBeTruthy();
-    // Whole-board sweep (not just .val elements) so this also covers the
-    // headline and catches any future addition that sneaks in a number —
-    // race results only ever reach the DOM via JS after a real race runs.
-    expect(board?.textContent).not.toMatch(/\d/);
+    // Whole-board sweep EXCLUDING .name/.row-note — spec §18.5's contract
+    // strings legitimately carry digits ("A* — weighted (1.5×)" and its
+    // own note's "exaggerated 1.5×"), and those are static roster copy, not
+    // a measurement. Every OTHER element that could carry a measured number
+    // (.val, .ms, the headline, the .row-delta disclosure) must still be
+    // completely digit-free until a real race runs — race results only
+    // ever reach the DOM via JS after that happens.
+    const clone = board?.cloneNode(true) as Element | undefined;
+    for (const el of [...(clone?.querySelectorAll(".name, .row-note") ?? [])]) el.remove();
+    expect(clone?.textContent).not.toMatch(/\d/);
   });
 });

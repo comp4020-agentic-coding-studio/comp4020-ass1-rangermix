@@ -19,6 +19,7 @@ import { haversine, nearestNode } from "../snap";
 import { PRESETS } from "../presets";
 import { ALGO_LABEL, RaceController, type ComparePanel, type RaceUi, formatMs } from "../race/controller";
 import { makeRaceScheduler } from "../race/scheduler";
+import { ROSTER } from "../race/roster";
 import type { Graph } from "../algos/graph";
 import type { Algo } from "../race/worker";
 
@@ -117,8 +118,16 @@ export function effectiveViewMode(mode: "overlay" | "compare", splashDismissed: 
  * neither one operates the hidden map/race. */
 export interface GatedControls {
   raceRun: HTMLButtonElement | null;
-  astarToggle: HTMLButtonElement | null;
-  bidiToggle: HTMLButtonElement | null;
+  /** The toggleable searcher rows (spec §18.3) — `role="button"` DIVs now,
+   * not `<button>`s (their content includes flow children — .track,
+   * .row-note — a button's content model doesn't strictly permit), so
+   * gating them means `aria-disabled` + `tabindex`, not the native
+   * `disabled` property. See `setDisabled` below for the branch. */
+  rosterToggles: readonly HTMLElement[];
+  /** The searchers-family bidirectional MODIFIER (spec §18.6) — a real
+   * `<button>` living on the family bezel's own header, replacing the old
+   * per-racer "Bidirectional" toggle this field used to name. */
+  familyBidiToggle: HTMLButtonElement | null;
   viewToggle: HTMLButtonElement | null;
   zoomIn: HTMLButtonElement | null;
   zoomOut: HTMLButtonElement | null;
@@ -126,28 +135,55 @@ export interface GatedControls {
   routeChips: readonly HTMLButtonElement[];
 }
 
-/** Applies the (dataReady AND splashDismissed) gate's native `disabled`
- * state to every control in `GatedControls` -- ONE function so a control
- * can never again be wired to `dataReady` alone (the bug this fixes).
- * boot() calls this from three places -- the data-ready success path, once
- * at boot for an already-dismissed session, and dismiss() -- see each call
- * site's own comment for why that particular recompute is needed.
- * Parameterized (no closure over boot()'s own mutable state), same reason
- * autoRunPins/shouldArmAutoRun above are pulled out of boot() as plain
- * exports: this one isn't pure (it mutates the elements it's given), but
- * it's still fully deterministic from its three arguments alone, so it's
+/** Gates one element against `disabled`, branching on whether it's a real
+ * button (native `disabled`) or a `role="button"` div (no such property —
+ * `aria-disabled` carries the state for assistive tech, `tabIndex` removes
+ * it from the Tab order the same way a disabled button already is). Both
+ * branches leave the element inert to click/keydown too — the roster row's
+ * own activate() handler (see wireRosterRowToggle) checks `aria-disabled`
+ * itself before doing anything, so a div can't be "clicked" via mouse even
+ * though nothing but `tabindex` stops a real disabled button natively.
+ * `tagName`, not `instanceof HTMLButtonElement`: home.test.ts (deliberately,
+ * see its own header comment) builds its fixture elements from a SEPARATE
+ * `JSDOM` instance rather than a global jsdom environment, so those
+ * elements' prototype chain runs through THAT window's own
+ * HTMLButtonElement, not this module's ambient global (which doesn't even
+ * exist in the plain-Node environment the rest of this file runs its pure
+ * exports under) — the classic cross-realm `instanceof` pitfall. `tagName`
+ * is a plain string property, unaffected by which realm the element came
+ * from, and works identically in a real browser. */
+function setDisabled(el: HTMLElement | null | undefined, disabled: boolean): void {
+  if (!el) return;
+  if (el.tagName === "BUTTON") {
+    (el as HTMLButtonElement).disabled = disabled;
+  } else {
+    el.setAttribute("aria-disabled", String(disabled));
+    el.tabIndex = disabled ? -1 : 0;
+  }
+}
+
+/** Applies the (dataReady AND splashDismissed) gate's disabled state to
+ * every control in `GatedControls` -- ONE function so a control can never
+ * again be wired to `dataReady` alone (the bug this fixes). boot() calls
+ * this from three places -- the data-ready success path, once at boot for
+ * an already-dismissed session, and dismiss() -- see each call site's own
+ * comment for why that particular recompute is needed. Parameterized (no
+ * closure over boot()'s own mutable state), same reason autoRunPins/
+ * shouldArmAutoRun above are pulled out of boot() as plain exports: this
+ * one isn't pure (it mutates the elements it's given), but it's still
+ * fully deterministic from its three arguments alone, so it's
  * unit-testable against a plain constructed DOM without any of boot()'s
  * canvas/Worker/fetch machinery. */
 export function applyControlsEnabled(controls: GatedControls, dataReady: boolean, splashDismissed: boolean): void {
   const ready = dataReady && splashDismissed;
-  if (controls.raceRun) controls.raceRun.disabled = !ready;
-  if (controls.astarToggle) controls.astarToggle.disabled = !ready;
-  if (controls.bidiToggle) controls.bidiToggle.disabled = !ready;
-  if (controls.viewToggle) controls.viewToggle.disabled = !ready;
-  if (controls.zoomIn) controls.zoomIn.disabled = !ready;
-  if (controls.zoomOut) controls.zoomOut.disabled = !ready;
-  if (controls.zoomFit) controls.zoomFit.disabled = !ready;
-  for (const chip of controls.routeChips) chip.disabled = !ready;
+  setDisabled(controls.raceRun, !ready);
+  for (const el of controls.rosterToggles) setDisabled(el, !ready);
+  setDisabled(controls.familyBidiToggle, !ready);
+  setDisabled(controls.viewToggle, !ready);
+  setDisabled(controls.zoomIn, !ready);
+  setDisabled(controls.zoomOut, !ready);
+  setDisabled(controls.zoomFit, !ready);
+  for (const chip of controls.routeChips) setDisabled(chip, !ready);
 }
 
 /** Focus containment while the splash is visible (H2 gate fix): with no
@@ -174,8 +210,8 @@ export function applyControlsEnabled(controls: GatedControls, dataReady: boolean
  * specifically. */
 export interface SplashInertTargets {
   raceRun: HTMLButtonElement | null;
-  astarToggle: HTMLButtonElement | null;
-  bidiToggle: HTMLButtonElement | null;
+  rosterToggles: readonly HTMLElement[];
+  familyBidiToggle: HTMLButtonElement | null;
   viewToggle: HTMLButtonElement | null;
   routesContainer: HTMLElement | null;
 }
@@ -183,8 +219,8 @@ export interface SplashInertTargets {
 export function applySplashInert(targets: SplashInertTargets, splashDismissed: boolean): void {
   const gated = !splashDismissed;
   if (targets.raceRun) targets.raceRun.inert = gated;
-  if (targets.astarToggle) targets.astarToggle.inert = gated;
-  if (targets.bidiToggle) targets.bidiToggle.inert = gated;
+  for (const el of targets.rosterToggles) el.inert = gated;
+  if (targets.familyBidiToggle) targets.familyBidiToggle.inert = gated;
   if (targets.viewToggle) targets.viewToggle.inert = gated;
   if (targets.routesContainer) targets.routesContainer.inert = gated;
 }
@@ -341,12 +377,22 @@ function boot(): void {
   const splashEl = document.querySelector<HTMLElement>('[data-testid="splash"]');
   const exploreBtn = document.querySelector<HTMLButtonElement>('[data-testid="explore"]');
   const raceRunBtn = document.querySelector<HTMLButtonElement>('[data-testid="race-run"]');
-  const astarToggle = document.querySelector<HTMLButtonElement>('[data-testid="algo-astar"]');
-  const bidiToggle = document.querySelector<HTMLButtonElement>('[data-testid="algo-bidi"]');
+  // Roster round (spec §18): the panel is built from src/race/roster.ts's
+  // own ROSTER array, not two hand-named toggles any more -- every
+  // NON-CORE entry (the three A* variants) gets its row looked up by its
+  // OWN `data-algo` id, so this list grows/shrinks with the roster itself
+  // rather than needing a matching edit here if the roster ever changes.
+  const rosterToggleEls = ROSTER.filter((r) => !r.core).map(
+    (r) => document.querySelector<HTMLElement>(`.board .row[data-algo="${r.id}"]`),
+  ).filter((el): el is HTMLElement => el !== null);
+  const familyBezelEl = document.querySelector<HTMLElement>('[data-family="searchers"]');
+  const familyBidiToggle = document.querySelector<HTMLButtonElement>('[data-testid="bidi-toggle"]');
   const zoomInBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-in"]');
   const zoomOutBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-out"]');
   const zoomFitBtn = document.querySelector<HTMLButtonElement>('[data-testid="zoom-fit"]');
   const viewToggleBtn = document.querySelector<HTMLButtonElement>('[data-testid="view-toggle"]');
+  const sizeToggleBtn = document.querySelector<HTMLButtonElement>('[data-testid="size-toggle"]');
+  const raceLayoutEl = document.querySelector<HTMLElement>(".race-layout");
   // H2 gate fix: the routes/controls wrapper (the inert target below) and
   // every route-preset chip (a disabled-gate target) -- one shared class
   // (`.route-chip`, index.html) picks up all six regardless of whether each
@@ -496,8 +542,8 @@ function boot(): void {
   // comment for why that particular recompute is needed).
   const gatedControls: GatedControls = {
     raceRun: raceRunBtn,
-    astarToggle,
-    bidiToggle,
+    rosterToggles: rosterToggleEls,
+    familyBidiToggle,
     viewToggle: viewToggleBtn,
     zoomIn: zoomInBtn,
     zoomOut: zoomOutBtn,
@@ -506,8 +552,8 @@ function boot(): void {
   };
   const splashInertTargets: SplashInertTargets = {
     raceRun: raceRunBtn,
-    astarToggle,
-    bidiToggle,
+    rosterToggles: rosterToggleEls,
+    familyBidiToggle,
     viewToggle: viewToggleBtn,
     routesContainer: controlsEl,
   };
@@ -963,7 +1009,23 @@ function boot(): void {
         })
       : undefined;
 
-  const ui: RaceUi = {
+  // Widened locally rather than editing controller.ts's own `RaceUi`
+  // (READ-ONLY this round — src/race/controller.ts is the sibling
+  // implementer's file, landing the multi-heuristic roster + per-racer
+  // route-delta plumbing concurrently in this same checkout). `extends`
+  // rather than a bare object type so every OTHER member still gets
+  // contextual parameter typing from the real `RaceUi` below, and so this
+  // stays correct whichever side of that concurrent edit is checked out
+  // when this file builds: before it lands, `RaceUi` simply has no
+  // `setRowDelta` yet and this only ADDS the optional member; once it
+  // lands with a compatible signature, this declaration is redundant but
+  // harmless (TS methods compare parameters bivariantly, so `id: string`
+  // stays assignable even if the landed signature narrows it to the
+  // roster's own id union). The I3 gate reconciles the exact contract.
+  interface ExtendedRaceUi extends RaceUi {
+    setRowDelta?(id: string, pct: number): void;
+  }
+  const ui: ExtendedRaceUi = {
     setRow(algo, settled, total) {
       const row = document.querySelector(`.board .row[data-algo="${algo}"]`);
       const val = row?.querySelector(".val");
@@ -1007,6 +1069,20 @@ function boot(): void {
       if (live) live.textContent = text;
       const canvas = document.querySelector('[data-testid="race-canvas"]');
       if (canvas) canvas.setAttribute("aria-label", text);
+    },
+    setRowDelta(id, pct) {
+      // Spec §18.4's honesty rule: a disclosed variant's row must SAY SO
+      // live, "+X% longer route" — computed from measured distances by the
+      // controller/worker (this file's own concern is only rendering
+      // whatever it's told). Honest-empty by construction: pct<=0 (this
+      // race's route WAS optimal, or the racer isn't disclosed) clears the
+      // slot back to nothing rather than ever printing "+0% longer route",
+      // matching styles.css's own `:not(:empty)` visibility gate on
+      // `.row-delta` — an empty slot collapses out of the layout instead
+      // of reserving dead space.
+      const row = document.querySelector(`.board .row[data-algo="${id}"]`);
+      const delta = row?.querySelector<HTMLElement>(".row-delta");
+      if (delta) delta.textContent = pct > 0 ? `+${pct.toFixed(0)}% longer route` : "";
     },
   };
 
@@ -1194,33 +1270,127 @@ function boot(): void {
     applyViewMode();
   });
 
-  // The two optional racers (A*, Bidirectional) get a real aria-pressed
-  // toggle switch INSIDE their own scoreboard row now (build-review
-  // §16.1/§16.5 — algorithm selection merges into the scoreboard itself;
-  // Dijkstra/CH have no equivalent toggle, they race unconditionally, the
-  // disable-proof core comparison). Toggling updates the controller's
-  // participation state for every future race, rebuilds the Compare panel
-  // set if Compare mode is active (a racer toggle changes which panels
-  // SHOULD exist), AND re-races the current pins right away, through the
-  // same cancel-first `scheduler.now()` every other direct trigger already
-  // goes through. The row's own `data-active` attribute (styles.css) is
-  // what actually dims it and hides its bar/value while off — set here
-  // alongside the toggle's own aria-pressed so the two can never disagree;
-  // a row is never `hidden` anymore (build-review §16.1 — it stays
-  // visible, just dimmed with a hollow swatch).
-  function wireAlgoToggle(toggle: HTMLButtonElement | null, algo: "astar" | "bidi"): void {
-    toggle?.addEventListener("click", () => {
-      const active = toggle.getAttribute("aria-pressed") !== "true";
-      toggle.setAttribute("aria-pressed", String(active));
-      controller?.setAlgoActive(algo, active);
-      const row = document.querySelector(`.board .row[data-algo="${algo}"]`);
-      if (row instanceof HTMLElement) row.dataset.active = String(active);
+  // Roster round (spec §18.3/.6): every toggleable searcher row and the
+  // family-wide bidirectional modifier get a real aria-pressed control now
+  // (superseding build-review §16.1/§16.5's per-racer toggle switch) —
+  // Dijkstra/CH have no equivalent, they race unconditionally, the
+  // disable-proof core comparison. A loosely-typed view of `controller`
+  // (see ControllerApiShim below) is how this file calls into the
+  // sibling's concurrently-landing controller.ts API without depending on
+  // its exact (still-changing) method signatures — every call is optional
+  // chained, so it's a harmless no-op until that wiring lands, and the I3
+  // gate reconciles the exact contract once both sides are merged.
+  interface ControllerApiShim {
+    setAlgoActive?: (id: string, active: boolean) => void;
+    setRacerActive?: (id: string, active: boolean) => void;
+    setBidiActive?: (active: boolean) => void;
+    setFamilyBidi?: (active: boolean) => void;
+  }
+  function controllerApi(): ControllerApiShim | undefined {
+    return controller as unknown as ControllerApiShim | undefined;
+  }
+
+  /** Wires ONE toggleable searcher row. It's a `role="button"` div, not a
+   * real `<button>` (its content includes flow children — .track,
+   * .row-note, .row-delta — a button's content model doesn't strictly
+   * permit, and spec §18.3 explicitly sanctions "button or role=button"
+   * for exactly this reason), so unlike a real button it gets no native
+   * Enter/Space activation — both paths funnel through the same
+   * `activate` so aria-pressed/data-active/the controller call/the
+   * re-race can never drift between the two input methods. `node` (not
+   * the parameter directly) so the null-check above narrows correctly
+   * inside the nested closures regardless of TS's cross-closure narrowing
+   * rules for reassignable bindings. */
+  function wireRosterRowToggle(el: HTMLElement | null, id: string): void {
+    if (!el) return;
+    const node = el;
+    function activate(): void {
+      if (node.getAttribute("aria-disabled") === "true") return;
+      const active = node.getAttribute("aria-pressed") !== "true";
+      node.setAttribute("aria-pressed", String(active));
+      node.dataset.active = String(active);
+      const api = controllerApi();
+      api?.setAlgoActive?.(id, active);
+      api?.setRacerActive?.(id, active);
       if (viewMode === "compare") syncPanels();
       if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB); // direct trigger: cancels any pending debounce
+    }
+    node.addEventListener("click", activate);
+    node.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault(); // Space must not also scroll the page
+      activate();
     });
   }
-  wireAlgoToggle(astarToggle, "astar");
-  wireAlgoToggle(bidiToggle, "bidi");
+  for (const entry of ROSTER.filter((r) => !r.core)) {
+    wireRosterRowToggle(document.querySelector<HTMLElement>(`.board .row[data-algo="${entry.id}"]`), entry.id);
+  }
+
+  /** The searchers-family bidirectional MODIFIER (spec §18.6): a real
+   * button on the bezel's own header, not a per-racer toggle — flips
+   * every ACTIVE family member's form for the next race. `data-bidi` on
+   * the bezel itself (styles.css) is what shows/hides each active row's
+   * own ⇄ marker. */
+  function wireFamilyBidiToggle(btn: HTMLButtonElement | null, bezel: HTMLElement | null): void {
+    btn?.addEventListener("click", () => {
+      const active = btn.getAttribute("aria-pressed") !== "true";
+      btn.setAttribute("aria-pressed", String(active));
+      bezel?.setAttribute("data-bidi", String(active));
+      const api = controllerApi();
+      api?.setBidiActive?.(active);
+      api?.setFamilyBidi?.(active);
+      if (viewMode === "compare") syncPanels();
+      if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
+    });
+  }
+  wireFamilyBidiToggle(familyBidiToggle, familyBezelEl);
+
+  // Size control (spec §18.9): "current" (default) vs "adaptive" — a pure
+  // layout preference, same category as the theme toggle, so unlike
+  // view-toggle it's deliberately left OUTSIDE the splash/data gating
+  // (GatedControls above): it doesn't operate the hidden map/race any more
+  // than switching themes under the splash does. Persisted the same
+  // guarded try/catch way as `hth-view`/`hth-theme` — private-mode/
+  // storage-disabled browsers throw on ANY localStorage access, and
+  // cycling should still work in-memory when that happens.
+  const SIZE_KEY = "hth-size";
+
+  function loadSizeMode(): "current" | "adaptive" {
+    try {
+      return localStorage.getItem(SIZE_KEY) === "adaptive" ? "adaptive" : "current";
+    } catch {
+      return "current";
+    }
+  }
+
+  function saveSizeMode(mode: "current" | "adaptive"): void {
+    try {
+      localStorage.setItem(SIZE_KEY, mode);
+    } catch {
+      /* storage unavailable — cycling still works in-memory */
+    }
+  }
+
+  let sizeMode: "current" | "adaptive" = loadSizeMode();
+
+  function applySizeMode(): void {
+    raceLayoutEl?.classList.toggle("is-adaptive", sizeMode === "adaptive");
+    if (sizeToggleBtn) {
+      sizeToggleBtn.setAttribute("aria-pressed", String(sizeMode === "adaptive"));
+      sizeToggleBtn.textContent = `Size: ${sizeMode}`;
+    }
+  }
+  applySizeMode();
+
+  sizeToggleBtn?.addEventListener("click", () => {
+    sizeMode = sizeMode === "adaptive" ? "current" : "adaptive";
+    saveSizeMode(sizeMode);
+    applySizeMode();
+    // No explicit resize call needed: relaxing/restoring .race-layout's
+    // max-width reflows the map-stack element the existing ResizeObserver
+    // (further up boot()) already watches, which repaints the base layer
+    // and every active overlay at the new box size on its own.
+  });
 
   // render.json and routing.json load independently — nothing orders one
   // before the other — so routingReady's rejection can land BEFORE
@@ -1257,9 +1427,10 @@ function boot(): void {
       controller = new RaceController(view, ui);
       if (loadNote) loadNote.hidden = true;
       dataReady = true;
-      // H2 gate fix: ONE call now gates race-run, the two optional-racer
-      // toggles, the view-mode toggle, every route-preset chip, and the
-      // zoom trio together on (dataReady AND splashDismissed) — previously
+      // H2 gate fix: ONE call now gates race-run, every toggleable roster
+      // row, the family bidi modifier, the view-mode toggle, every
+      // route-preset chip, and the zoom trio together on (dataReady AND
+      // splashDismissed) — previously
       // these flipped `disabled=false` on `dataReady` alone (the exact
       // review finding this fixes: a keyboard user could Tab past Explore
       // straight to a live Race-again while the splash was still up).

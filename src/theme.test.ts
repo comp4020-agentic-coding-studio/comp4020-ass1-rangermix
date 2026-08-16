@@ -62,15 +62,22 @@ describe("theme", () => {
     expect(btn?.textContent).toContain("dark");
   });
 
-  it("writes the full sentence into aria-label and the label span, and a compact icon+letter into the icon span, regardless of viewport (build-review §16.2)", () => {
+  it("writes the full 'Theme: <state>' sentence into aria-label and the label span, and the state's own glyph into the icon span, at every width (spec §18.10 — icon-only theme button)", () => {
     initTheme();
     const btn = document.querySelector<HTMLButtonElement>(
       '[data-testid="theme-toggle"]',
     );
+    expect(btn?.getAttribute("aria-label")).toBe("Theme: system");
+    expect(btn?.querySelector(".theme-toggle-icon")?.textContent).toBe("◐");
+
     btn?.click(); // -> dark
-    expect(btn?.getAttribute("aria-label")).toBe("Switch theme (current: dark)");
+    expect(btn?.getAttribute("aria-label")).toBe("Theme: dark");
     expect(btn?.querySelector(".theme-toggle-label")?.textContent).toBe("Theme: dark");
-    expect(btn?.querySelector(".theme-toggle-icon")?.textContent).toBe("◐D");
+    expect(btn?.querySelector(".theme-toggle-icon")?.textContent).toBe("☾");
+
+    btn?.click(); // -> light
+    expect(btn?.getAttribute("aria-label")).toBe("Theme: light");
+    expect(btn?.querySelector(".theme-toggle-icon")?.textContent).toBe("☀");
   });
 
   it("cycles and applies themes in-memory when localStorage throws", () => {
