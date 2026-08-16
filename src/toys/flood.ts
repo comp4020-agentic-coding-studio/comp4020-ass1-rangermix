@@ -82,7 +82,7 @@ export function mountFlood(root: HTMLElement, t: Toytown): { playDefault: () => 
   root.innerHTML =
     `<div class="toy-stage">` +
     `<svg class="toy-svg" viewBox="${VIEWBOX}" role="img" ` +
-    `aria-label="Street network used to demonstrate Dijkstra's search.">` +
+    `aria-label="Street map used to show Dijkstra's search.">` +
     `<g class="context-layer" aria-hidden="true">${contextPolylineMarkup(t)}</g>` +
     `<g class="edges">${roadPolylineMarkup(roads)}</g>` +
     `<g class="drift-layer" aria-hidden="true">${driftConnectorMarkup(driftConnectors(t.xy, buttonXY))}</g>` +

@@ -30,9 +30,9 @@ const STEP_LABELS = ["every road", "top 35%", "top 12%", "top 2%"];
 // filtered steps read as fragments instead of a skeleton OF the city.
 const STEP_CAPTIONS = [
   "every drivable street",
-  "suburbia fades; the arterial skeleton emerges",
-  "only the arterials and their junctions remain",
-  "the load-bearing heart: the lake crossings and the interchanges everything funnels through",
+  "the small streets fade; the arterial roads stand out",
+  "only the arterial roads and their junctions are left",
+  "just the lake crossings and the interchanges everything funnels through",
 ];
 
 /** The byte-valued `pct` threshold (0-255) that keeps (at least) `keepFrac`

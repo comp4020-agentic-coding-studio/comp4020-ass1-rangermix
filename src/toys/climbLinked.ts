@@ -160,8 +160,8 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
     `<p class="climb-view-label">Street map — click to pick A and B</p>` +
     `<div class="toy-stage climb-map-stage">` +
     `<svg class="toy-svg" viewBox="${VIEWBOX}" role="img" ` +
-    `aria-label="Street map — click two intersections to climb your own pair; ` +
-    `the hierarchy above mirrors the same climb.">` +
+    `aria-label="Street map — click two intersections to pick your own start ` +
+    `and end; the hierarchy above follows along.">` +
     // Context (§17.5) BENEATH the toy's own roads; drift connectors (§17.5
     // delta 3) ABOVE them so a displaced node's leader line reads clearly
     // over the road it's leaving from.
@@ -175,7 +175,7 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
     `</div>` +
     `</div>` +
     `</div>` +
-    `<p class="toy-subhead">Click two intersections on the map to climb your
+    `<p class="toy-subhead">Click two intersections on the map to pick your
       own pair — first is the start, second is the end.</p>` +
     `<div class="toy-controls">` +
     `<button class="chip" type="button" data-action="play">&#9658; play</button>` +

@@ -1163,19 +1163,14 @@ html[data-splash-dismissed] .splash {
 
 .how-intro {
   max-width: 68ch;
-  margin: 0 auto 24px;
+  margin: 0 auto 40px;
 }
 
 .how-intro h1 {
-  margin: 0 0 10px;
+  margin: 0;
   font-size: clamp(1.9rem, 3.6vw, 2.75rem);
   font-weight: 800;
   letter-spacing: -0.02em;
-}
-
-.how-intro .lede {
-  margin: 0;
-  color: var(--muted);
 }
 
 .chapter {

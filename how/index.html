@@ -29,20 +29,15 @@
     <main class="how-layout">
       <div class="how-intro">
         <h1>How it works</h1>
-        <p class="lede">Five short chapters, a real city-centre street grid,
-          the same search code that just raced across Canberra. Nothing below
-          is simulated for effect — press play (or just scroll) and it's the
-          real algorithm, small enough to watch by hand.</p>
       </div>
 
       <section class="chapter" aria-labelledby="ch1-h">
         <h2 id="ch1-h">What Dijkstra actually does</h2>
-        <p>Dijkstra never guesses — it settles the closest unvisited
-          intersection first, always, which is exactly why it always finds
-          the true shortest route. The catch: it can't know which streets
-          are irrelevant before visiting them, so it explores in every
-          direction at once. Press play and watch the frontier bloom
-          outward — perfect, and blind.</p>
+        <p>Dijkstra never guesses. It checks the closest unvisited
+          intersection first, every time, so it always finds the true
+          shortest route. It can't tell which streets don't matter until
+          it's already checked them — press play and watch the orange dots
+          spread out in every direction: perfect, and blind.</p>
         <div class="toy" data-testid="toy-flood"></div>
         <p class="caption">What to notice: the flood reaches streets nowhere
           near the winning route — Dijkstra can't skip them without already
@@ -51,30 +46,29 @@
 
       <section class="chapter" aria-labelledby="ch2-h">
         <h2 id="ch2-h">The hierarchy, revealed</h2>
-        <p>Every contraction order secretly ranks every intersection — and
-          on a real road network that ranking isn't random. Bridges,
-          parkways, the handful of roads everything else feeds into: these
-          survive to the top, because deleting them early would demand
-          shortcuts everywhere. The tour below plays itself — or drag the
-          slider and take the wheel any time.</p>
+        <p>Every contraction order ranks every intersection — and on a real
+          road network, that ranking isn't random. The busiest roads —
+          bridges, parkways, the ones everything else feeds into — rank
+          highest, because removing them early would need shortcuts
+          everywhere. The tour below plays itself, or drag the slider and
+          take the wheel any time.</p>
         <div class="toy" data-testid="toy-hierarchy"></div>
         <p class="caption">What to notice: the lake bridges survive to the
-          very top — bottleneck nodes rank high.</p>
+          top — bottleneck nodes rank high.</p>
       </section>
 
       <section class="chapter" aria-labelledby="ch3-h">
         <h2 id="ch3-h">The query: only ever climb</h2>
-        <p>Once every intersection has a rank, answering "what's the
-          shortest route" is almost boring: climb upward from the start,
-          climb upward from the end, and stop where they meet. No route can
-          be missed, because every shortest path has a highest-ranked point
-          somewhere along it, and shortcuts guarantee both climbs can reach
-          that summit without ever stepping down. Press play and watch it
-          happen twice at once: the climb above, the same route unzipping
-          street by street on the real map below.</p>
+        <p>Once every intersection has a rank, finding the shortest route is
+          simple: climb up from the start, climb up from the end, and stop
+          where they meet. This never misses a route — every shortest path
+          has one highest point on it, and shortcuts guarantee both climbs
+          can reach that summit without ever stepping down. Press play and
+          watch it happen twice at once: the climb above, the same route
+          unzipping street by street on the real map below.</p>
         <div class="toy" data-testid="toy-climb"></div>
-        <p class="caption">What to notice: the climbs only ever move to a
-          higher rank, never down — they barely touch the map below, and the
+        <p class="caption">What to notice: the climbs only ever move up in
+          rank, never down — they barely touch the map below, and the
           winning route rides the big road.</p>
       </section>
 
@@ -82,7 +76,7 @@
         <h2 id="ch4-h">Shortcuts: the price of forgetting</h2>
         <figure class="shortcut-intro">
           <svg class="shortcut-intro-svg" viewBox="0 0 300 110" role="img"
-            aria-label="Diagram: node B is removed; a dashed shortcut edge connects A directly to C, preserving the same distance.">
+            aria-label="Diagram: node B is removed. A dashed shortcut connects A straight to C, keeping the same distance.">
             <path class="shortcut-intro-arc" d="M 40,58 Q 150,14 260,58" />
             <line class="shortcut-intro-ghost" x1="40" y1="58" x2="150" y2="58" />
             <line class="shortcut-intro-ghost" x1="150" y1="58" x2="260" y2="58" />
@@ -102,31 +96,31 @@
           <figcaption>delete B, keep the distance — that dashed edge is a
             shortcut.</figcaption>
         </figure>
-        <p>Contraction Hierarchies gets its speed by deleting intersections
-          — but only if nothing breaks. Before removing one, it checks every
-          pair of roads that passed through it: a detour that's already just
-          as short gets a free pass (a witness); otherwise a shortcut is
-          added, quietly encoding the trip through the node about to
-          disappear. Click any intersection below to contract it and watch
+        <p>Contraction Hierarchies gets its speed by deleting intersections,
+          one at a time — but only if nothing breaks. Before removing one,
+          it checks every pair of roads that met there: an existing detour
+          just as short earns a free pass (a witness); otherwise, it adds a
+          shortcut that stands in for the trip through the node about to
+          disappear. Click any intersection below to contract it, and watch
           which neighbour pairs pay the shortcut price.</p>
         <div class="toy" data-testid="toy-contraction"></div>
-        <p class="caption">What to notice: a witness means a detour already
-          existed; a dashed shortcut means contracting this node would have
-          broken a shortest path without one.</p>
+        <p class="caption">What to notice: a witness means there's already a
+          detour just as short; a dashed shortcut means one had to be added
+          to keep the distance correct.</p>
       </section>
 
       <section class="chapter" aria-labelledby="ch5-h">
         <h2 id="ch5-h">Order is everything</h2>
         <p>Contracting one intersection at a time raises an obvious
           question: which one first? Contract a busy hub too early and every
-          path through it now needs a shortcut, so the graph gets denser
-          before it gets simpler — a good heuristic prefers quiet
-          cul-de-sacs first, busy junctions last. Run the buttons below to
-          compare orders, then try "your turn" and see if you can beat the
+          path through it needs a new shortcut, so the graph gets messier
+          before it gets simpler — a good heuristic contracts quiet dead
+          ends first and busy junctions last. Run the buttons below to
+          compare orders, then try "your turn" to see if you can beat the
           heuristic yourself.</p>
         <div class="toy" data-testid="toy-order"></div>
         <p class="caption">What to notice: the smart order isn't luck — it
-          consistently beats random and worst-case orders, run after run.</p>
+          beats random and worst-case orders every time.</p>
         <p class="closer-echo" data-testid="closer-echo">Loading your race numbers…</p>
         <p class="closer-cta" data-testid="closer-cta">Now go see it at full scale.
           <a class="cta-link" href="../">Back to the race →</a></p>
