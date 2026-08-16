@@ -270,6 +270,19 @@ interface AlgoLayer {
   total: number;
   stride: number;
   path: number[];
+  /** spec §18.4's honesty rule, carried through to Compare-mode's per-panel
+   * route rendering: true when THIS racer's own distance is longer than the
+   * shared optimal (`routeDeltaPct(result.dist, optimalDist) > 0` — the
+   * exact same predicate reportResults uses to decide whether a row's
+   * numeric "+X% longer route" disclosure shows). renderAt's Compare-mode
+   * branch passes this straight to MapView.drawRoute's `dashed` option, so
+   * a disclosed variant's own panel shows a dashed route — the visual echo
+   * of its numeric disclosure — without touching route colour/width (see
+   * mapRenderer.ts's drawRoute doc). Always false on the overlay's single
+   * shared route (it's always the true optimal path — see run()'s own
+   * comment on `path` — so renderAt's overlay branch never reads this
+   * field, only the Compare branch does). */
+  dashed: boolean;
 }
 
 interface Frame {
@@ -516,16 +529,19 @@ export class RaceController {
         // — every completed race result has a valid own-path; also covers
         // a panel whose racer toggled off mid-race, before the next panel
         // rebuild catches up). Panel isolation (one racer's cloud+route
-        // per panel) is what makes two different routes legible without
-        // any extra styling — which route is whose is unambiguous from
-        // WHICH panel it's drawn on; a colour/dash distinction, if wanted,
-        // is the UI task's to add (this seam only carries the data
-        // through — see AlgoLayer.path's own doc and run()'s comment on
-        // the {algo, path, routeDeltaPct}-per-racer shape).
+        // per panel) already makes two different routes legible from WHICH
+        // panel they're on; `dashed` (AlgoLayer's own precomputed
+        // routeDeltaPct>0 flag — see its doc) adds the colour-free "not the
+        // shortest" signal spec §18.4 asks for directly on a disclosed
+        // panel's own route, without touching its identity colour. A
+        // fallback-to-`c.path` draw (degenerate own-path) is never dashed
+        // — `c.path` is always the true optimal route, see the comment
+        // above — hence `layer?.dashed` only, not applied unconditionally.
         for (const panel of this.comparePanels) {
           const layer = c.layers.find((l) => l.algo === panel.algo);
           const routePath = layer && layer.path.length >= 2 ? layer.path : c.path;
-          panel.view.drawRoute(routePath, c.graph.lon, c.graph.lat);
+          const dashed = layer && layer.path.length >= 2 ? layer.dashed : false;
+          panel.view.drawRoute(routePath, c.graph.lon, c.graph.lat, { dashed });
         }
       } else {
         for (const v of targets) v.drawRoute(c.path, c.graph.lon, c.graph.lat);
@@ -580,15 +596,39 @@ export class RaceController {
     if (token !== this.raceToken) return;
 
     // The core comparison — always requested (roster.ts: dijkstra/ch are
-    // `core: true`) — looked up by PLAIN workerKey specifically, never a
-    // bidi form, even when familyBidi is on: dijkstra/bidijkstra agree on
-    // DISTANCE exactly (equivalence-tested) but bidijkstra's own path can
-    // legitimately differ under ties, and spec §18.4 says the overlay's
-    // shared route is THE optimal one — anchoring it to the always-plain
-    // keys keeps that route stable regardless of the modifier, rather than
-    // silently swapping which concrete path gets drawn based on a toggle
-    // that isn't supposed to change what "the" route means.
-    const dij = res.results.dijkstra;
+    // `core: true`). CH has no bidi form (roster.ts: no `bidiKey`), so its
+    // request key is always the literal `"ch"` regardless of the modifier —
+    // that lookup stays hardcoded safely. Dijkstra's is NOT: it flips to
+    // `"bidi:dijkstra"` exactly like every other searchers-family racer once
+    // setFamilyBidi(true) is active (activeRacers()), so it must be looked
+    // up via `active0`'s own resolved key for the dijkstra entry (always
+    // present — dijkstra is core), not the hardcoded string `"dijkstra"`.
+    //
+    // I3 integration fix: a hardcoded `res.results.dijkstra` here was a real
+    // live-race bug, caught only by an end-to-end bidi race (neither wave's
+    // own unit tests constructed a real bidi RaceRequest through run()) —
+    // the worker only ever POPULATES the key it was actually ASKED for
+    // (worker.ts's handleRequest), so once familyBidi requests
+    // `bidi:dijkstra` instead of `dijkstra`, `res.results.dijkstra` is
+    // always `undefined` and the guard below silently returned before
+    // reportResults/renderAt ever ran — the ENTIRE race (scoreboard, replay,
+    // aria announcement) silently no-op'd the instant bidi was toggled on,
+    // not merely a stale settled-count.
+    //
+    // Reading dist/settledCount off whichever form actually ran is exactly
+    // right, not merely safe: dijkstra/bidijkstra agree on DISTANCE exactly
+    // (equivalence-tested in variants.test.ts), and the app's own "every
+    // number is measured live" ethos means the headline SHOULD reflect
+    // bidirectional's genuinely-lower settled count once that's what's
+    // racing, not a phantom plain-form number nothing actually computed this
+    // race. Only `dij.path` can legitimately differ under ties, and it's
+    // read below ONLY as a fallback for a degenerate `ch.path` (< 2 nodes,
+    // i.e. a from===to query) — a case already so degenerate that which
+    // form's (equally degenerate) path fills it is immaterial; spec §18.4's
+    // "the overlay's shared route is THE optimal one" is about not
+    // substituting a DIFFERENT racer's route, which this doesn't do.
+    const dijKey = active0.find((a) => a.algo === "dijkstra")?.key;
+    const dij = dijKey ? res.results[dijKey] : undefined;
     const ch = res.results.ch;
     if (!dij || !ch) return; // worker only omits a key if we didn't ask for it
 
@@ -596,20 +636,40 @@ export class RaceController {
       .map((a) => ({ algo: a.algo, label: ALGO_LABEL[a.algo], result: res.results[a.key] }))
       .filter((a): a is { algo: RacerId; label: string; result: AlgoResult } => a.result !== undefined);
 
+    // spec §18.4's honesty rule: every racer's OWN measured distance
+    // against the true optimum. dijkstra and CH always agree on distance
+    // (equivalence-tested elsewhere), so either works as `optimalDist`;
+    // routeDeltaPct clamps floating-point noise and the from===to
+    // degenerate case to 0 rather than a spurious negative or a
+    // divide-by-zero. Computed ONCE here and threaded through to both
+    // AlgoLayer.dashed (Compare-mode's per-panel route styling, below) and
+    // reportResults' own per-row disclosure (passed through, not
+    // recomputed there) — one source of truth, never two accumulators
+    // that could drift apart.
+    const optimalDist = Math.min(dij.dist, ch.dist);
+
     // The {algo, path, routeDeltaPct}-per-racer data shape this seam
     // agrees on (controller.ts <-> the UI task's compare-panel rendering —
     // "extend the panel render seam minimally, the UI task styles it"):
     // `algo` and `path` are carried through the replay Frame via
-    // AlgoLayer (below), read by renderAt's Compare-mode route drawing
-    // above; `routeDeltaPct` is NOT stored on the frame — it's computed
-    // once in reportResults, after replay, and pushed to the UI via
-    // ui.setRowDelta(algo, pct), which a real implementation mirrors into
-    // both the scoreboard row AND that racer's compare-panel chip (see
-    // RaceUi.setRowDelta's own doc) — one source of truth for the
-    // percentage, never a second accumulator on the frame that could drift.
+    // AlgoLayer (below), read by renderAt's Compare-mode route drawing;
+    // `dashed` is routeDeltaPct's own >0 predicate, precomputed here so
+    // renderAt (a per-frame hot path) never has to — see AlgoLayer.dashed's
+    // own doc. The exact percentage itself is NOT stored on the frame —
+    // it's computed again in reportResults, after replay, and pushed to
+    // the UI via ui.setRowDelta(algo, pct), which a real implementation
+    // mirrors into both the scoreboard row AND that racer's compare-panel
+    // chip (see RaceUi.setRowDelta's own doc).
     const layers: AlgoLayer[] = active.map(({ algo, result }) => {
       const order = new Uint32Array(result.settled);
-      return { algo, order, total: result.settledCount, stride: strideFor(order.length, DRAW_CAP), path: result.path };
+      return {
+        algo,
+        order,
+        total: result.settledCount,
+        stride: strideFor(order.length, DRAW_CAP),
+        path: result.path,
+        dashed: routeDeltaPct(result.dist, optimalDist) > 0,
+      };
     });
     const path = ch.path.length >= 2 ? ch.path : dij.path; // THE shared optimal route — see the comment above
 
@@ -624,12 +684,12 @@ export class RaceController {
     else await this.animate(token, REPLAY_MS);
     if (token !== this.raceToken) return;
 
-    this.reportResults(active, dij, ch, graph, path);
+    this.reportResults(active, dij, ch, graph, path, optimalDist);
   }
 
   private reportResults(
     active: { algo: RacerId; label: string; result: AlgoResult }[],
-    dij: AlgoResult, ch: AlgoResult, graph: Graph, path: number[],
+    dij: AlgoResult, ch: AlgoResult, graph: Graph, path: number[], optimalDist: number,
   ): void {
     for (const a of active) this.ui.setTime(a.algo, a.result.ms);
     // The headline stat is always Dijkstra-vs-CH specifically (the site's
@@ -639,15 +699,11 @@ export class RaceController {
     // shared overlay route is anchored to them the same way).
     this.ui.setHeadline(headlineText(dij.settledCount, ch.settledCount));
     const km = pathKm(graph, path);
-    // spec §18.4's honesty rule: every racer's OWN measured distance
-    // against the true optimum. dijkstra and CH always agree on distance
-    // (equivalence-tested elsewhere), so either works as `optimalDist`;
-    // routeDeltaPct clamps floating-point noise and the from===to
-    // degenerate case to 0 rather than a spurious negative or a
-    // divide-by-zero. Computed ONCE per racer and reused for both the
-    // aria sentence and each row's live disclosure below — one source of
-    // truth, never two accumulators that could drift apart.
-    const optimalDist = Math.min(dij.dist, ch.dist);
+    // `optimalDist` is run()'s own computation, passed through rather than
+    // re-derived here — see that call site's comment for why (also feeds
+    // AlgoLayer.dashed). Reused for both the aria sentence and each row's
+    // live disclosure below — one source of truth, never two accumulators
+    // that could drift apart.
     const deltas = active.map((a) => ({ algo: a.algo, pct: routeDeltaPct(a.result.dist, optimalDist) }));
     const deltaByAlgo = new Map(deltas.map((d) => [d.algo, d.pct] as const));
     this.ui.announce(

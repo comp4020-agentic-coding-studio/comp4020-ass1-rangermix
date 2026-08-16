@@ -249,6 +249,13 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
 // rationale as the rest of boot() — verified live instead), so a racer
 // toggle or a view-mode switch only creates/destroys the panels that
 // actually changed instead of tearing down and rebuilding the whole grid.
+// I3 reconciliation: the roster round's `RacerId` migration (diffPanels was
+// generic `Algo[]`/plain strings pre-roster-round) narrowed these fixtures
+// to a real 5-value union — the old placeholder ids "astar"/"bidi" (never
+// real roster ids even before this round) no longer typecheck, so this
+// block uses two real non-core ids ("astar-straight"/"astar-weighted") as
+// the stand-ins instead; the set-membership logic under test doesn't care
+// which two, only that they're distinct.
 describe("diffPanels (panel-set diffing: current panel algos vs. the next desired active-racer set)", () => {
   it("both empty: nothing to add, keep, or remove", () => {
     expect(diffPanels([], [])).toEqual({ keep: [], add: [], remove: [] });
@@ -267,41 +274,41 @@ describe("diffPanels (panel-set diffing: current panel algos vs. the next desire
   });
 
   it("a racer toggled ON: existing panels are kept as-is, the new one is the only add", () => {
-    expect(diffPanels(["dijkstra", "ch"], ["dijkstra", "astar", "ch"])).toEqual({
+    expect(diffPanels(["dijkstra", "ch"], ["dijkstra", "astar-straight", "ch"])).toEqual({
       keep: ["dijkstra", "ch"],
-      add: ["astar"],
+      add: ["astar-straight"],
       remove: [],
     });
   });
 
   it("racers toggled OFF: they move to remove, survivors stay in keep", () => {
-    expect(diffPanels(["dijkstra", "astar", "bidi", "ch"], ["dijkstra", "ch"])).toEqual({
+    expect(diffPanels(["dijkstra", "astar-straight", "astar-weighted", "ch"], ["dijkstra", "ch"])).toEqual({
       keep: ["dijkstra", "ch"],
       add: [],
-      remove: ["astar", "bidi"],
+      remove: ["astar-straight", "astar-weighted"],
     });
   });
 
   it("simultaneous add and remove (one racer swapped for another) in a single diff", () => {
-    expect(diffPanels(["dijkstra", "astar", "ch"], ["dijkstra", "bidi", "ch"])).toEqual({
+    expect(diffPanels(["dijkstra", "astar-straight", "ch"], ["dijkstra", "astar-weighted", "ch"])).toEqual({
       keep: ["dijkstra", "ch"],
-      add: ["bidi"],
-      remove: ["astar"],
+      add: ["astar-weighted"],
+      remove: ["astar-straight"],
     });
   });
 
   it("switching OFF Compare mode entirely: next is empty, every current panel is a remove", () => {
-    expect(diffPanels(["dijkstra", "astar", "ch"], [])).toEqual({
+    expect(diffPanels(["dijkstra", "astar-straight", "ch"], [])).toEqual({
       keep: [],
       add: [],
-      remove: ["dijkstra", "astar", "ch"],
+      remove: ["dijkstra", "astar-straight", "ch"],
     });
   });
 
   it("keep and remove preserve CURRENT's own order; add preserves NEXT's own order — a plain set-membership diff, not a re-sort by ROSTER order", () => {
-    const result = diffPanels(["ch", "astar", "dijkstra"], ["dijkstra", "bidi", "ch"]);
+    const result = diffPanels(["ch", "astar-straight", "dijkstra"], ["dijkstra", "astar-weighted", "ch"]);
     expect(result.keep).toEqual(["ch", "dijkstra"]);
-    expect(result.remove).toEqual(["astar"]);
-    expect(result.add).toEqual(["bidi"]);
+    expect(result.remove).toEqual(["astar-straight"]);
+    expect(result.add).toEqual(["astar-weighted"]);
   });
 });

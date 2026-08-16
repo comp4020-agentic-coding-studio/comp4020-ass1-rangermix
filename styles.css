@@ -631,6 +631,7 @@ html[data-splash-dismissed] .splash {
    .headline — so the run control, the always-on/toggle racers, and the route
    presets read as three distinct clusters instead of one undifferentiated
    chip soup. */
+
 /* width:100% (spec §18.1 — fourth build review: "Routes section matches the
    MAP's width, not the full layout"): `.controls` is a ROW-direction flex
    container (`display:flex`, no explicit `flex-direction`), and without an
@@ -803,8 +804,7 @@ html[data-splash-dismissed] .splash {
 
 .board .row .name,
 .board .row .val,
-.board .row .ms,
-.board .row .row-bidi-marker {
+.board .row .ms {
   font-family: var(--mono);
   white-space: nowrap;
 }
@@ -857,8 +857,10 @@ html[data-splash-dismissed] .splash {
   grid-column: 5;
   display: none;
   color: var(--muted);
+  font-family: var(--mono);
   font-size: 0.75rem;
   text-align: right;
+  white-space: nowrap;
 }
 
 .board .row .track {
@@ -989,13 +991,13 @@ html[data-splash-dismissed] .splash {
   cursor: pointer;
 }
 
-.family-bidi-toggle:hover:not(:disabled) {
-  border-color: var(--c-ch);
-}
-
 .family-bidi-toggle:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.family-bidi-toggle:hover:not(:disabled) {
+  border-color: var(--c-ch);
 }
 
 .family-bidi-toggle[aria-pressed="true"] {

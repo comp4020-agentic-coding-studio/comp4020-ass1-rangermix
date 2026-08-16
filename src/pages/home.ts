@@ -17,11 +17,10 @@ import { loadRender, loadRouting } from "../data";
 import { assignStaggerSlots, createViewStore, MapView, wholeMapView, zoomToBounds, type RenderData, type ViewStore } from "../viz/mapRenderer";
 import { haversine, nearestNode } from "../snap";
 import { PRESETS } from "../presets";
-import { ALGO_LABEL, RaceController, type ComparePanel, type RaceUi, formatMs } from "../race/controller";
+import { ALGO_LABEL, RaceController, type ComparePanel, type RacerId, type RaceUi, formatMs } from "../race/controller";
 import { makeRaceScheduler } from "../race/scheduler";
 import { ROSTER } from "../race/roster";
 import type { Graph } from "../algos/graph";
-import type { Algo } from "../race/worker";
 
 const DEBOUNCE_MS = 250;
 const AUTO_RUN_MS = 1500;
@@ -226,9 +225,9 @@ export function applySplashInert(targets: SplashInertTargets, splashDismissed: b
 }
 
 export interface PanelDiff {
-  keep: Algo[];
-  add: Algo[];
-  remove: Algo[];
+  keep: RacerId[];
+  add: RacerId[];
+  remove: RacerId[];
 }
 
 /** Diffs the CURRENT Compare-mode panel algos (in their existing order)
@@ -242,7 +241,7 @@ export interface PanelDiff {
  * of this file and this repo already uses). `keep`/`remove` preserve
  * CURRENT's own order; `add` preserves NEXT's own order — a plain
  * set-membership diff, not a re-sort. */
-export function diffPanels(current: Algo[], next: Algo[]): PanelDiff {
+export function diffPanels(current: RacerId[], next: RacerId[]): PanelDiff {
   const nextSet = new Set(next);
   const currentSet = new Set(current);
   return {
@@ -253,7 +252,7 @@ export function diffPanels(current: Algo[], next: Algo[]): PanelDiff {
 }
 
 interface PanelEntry {
-  algo: Algo;
+  algo: RacerId;
   el: HTMLElement;
   view: MapView;
   zoomFit: HTMLButtonElement;
@@ -289,7 +288,7 @@ interface PanelDom {
  * that function's own comment) but start matching the DEFAULT state
  * (fitShowsWhole=true, same default index.html's own static button ships
  * with) so there's no unlabelled flash before that first call. */
-function buildPanelDom(algo: Algo): PanelDom {
+function buildPanelDom(algo: RacerId): PanelDom {
   const el = document.createElement("div");
   el.className = "compare-panel";
   el.dataset.algo = algo;
@@ -1009,23 +1008,13 @@ function boot(): void {
         })
       : undefined;
 
-  // Widened locally rather than editing controller.ts's own `RaceUi`
-  // (READ-ONLY this round — src/race/controller.ts is the sibling
-  // implementer's file, landing the multi-heuristic roster + per-racer
-  // route-delta plumbing concurrently in this same checkout). `extends`
-  // rather than a bare object type so every OTHER member still gets
-  // contextual parameter typing from the real `RaceUi` below, and so this
-  // stays correct whichever side of that concurrent edit is checked out
-  // when this file builds: before it lands, `RaceUi` simply has no
-  // `setRowDelta` yet and this only ADDS the optional member; once it
-  // lands with a compatible signature, this declaration is redundant but
-  // harmless (TS methods compare parameters bivariantly, so `id: string`
-  // stays assignable even if the landed signature narrows it to the
-  // roster's own id union). The I3 gate reconciles the exact contract.
-  interface ExtendedRaceUi extends RaceUi {
-    setRowDelta?(id: string, pct: number): void;
-  }
-  const ui: ExtendedRaceUi = {
+  // I3 reconciliation: controller.ts's `RaceUi.setRowDelta` landed as a
+  // REQUIRED member (roster round, spec §18.4) — the defensive optional
+  // `ExtendedRaceUi` widening this used to need (back when controller.ts
+  // was landing concurrently and might not have had `setRowDelta` yet) is
+  // now redundant, since `ui` below already implements it unconditionally.
+  // Typed directly against the real `RaceUi`.
+  const ui: RaceUi = {
     setRow(algo, settled, total) {
       const row = document.querySelector(`.board .row[data-algo="${algo}"]`);
       const val = row?.querySelector(".val");
@@ -1079,10 +1068,12 @@ function boot(): void {
       // slot back to nothing rather than ever printing "+0% longer route",
       // matching styles.css's own `:not(:empty)` visibility gate on
       // `.row-delta` — an empty slot collapses out of the layout instead
-      // of reserving dead space.
+      // of reserving dead space. `toFixed(1)`, not `(0)`: controller.ts's
+      // routeDeltaPct contract computes and tests 1-decimal values (I1/I3
+      // reconciliation) — this only renders whatever precision it's given.
       const row = document.querySelector(`.board .row[data-algo="${id}"]`);
       const delta = row?.querySelector<HTMLElement>(".row-delta");
-      if (delta) delta.textContent = pct > 0 ? `+${pct.toFixed(0)}% longer route` : "";
+      if (delta) delta.textContent = pct > 0 ? `+${pct.toFixed(1)}% longer route` : "";
     },
   };
 
@@ -1274,16 +1265,16 @@ function boot(): void {
   // family-wide bidirectional modifier get a real aria-pressed control now
   // (superseding build-review §16.1/§16.5's per-racer toggle switch) —
   // Dijkstra/CH have no equivalent, they race unconditionally, the
-  // disable-proof core comparison. A loosely-typed view of `controller`
-  // (see ControllerApiShim below) is how this file calls into the
-  // sibling's concurrently-landing controller.ts API without depending on
-  // its exact (still-changing) method signatures — every call is optional
-  // chained, so it's a harmless no-op until that wiring lands, and the I3
-  // gate reconciles the exact contract once both sides are merged.
+  // disable-proof core comparison. I3 reconciliation: controller.ts landed
+  // exactly `setRacerActive(id: RacerId, active: boolean)` and
+  // `setFamilyBidi(active: boolean)` — the shim's other two guessed names
+  // (`setAlgoActive`, `setBidiActive`) never existed and are dropped. Kept
+  // as an optional-chained shim (rather than calling `controller` directly)
+  // so a still-loading `controller` (undefined before data/routing ready)
+  // stays a harmless no-op, same as every other `controller?.` call site
+  // in this file.
   interface ControllerApiShim {
-    setAlgoActive?: (id: string, active: boolean) => void;
-    setRacerActive?: (id: string, active: boolean) => void;
-    setBidiActive?: (active: boolean) => void;
+    setRacerActive?: (id: RacerId, active: boolean) => void;
     setFamilyBidi?: (active: boolean) => void;
   }
   function controllerApi(): ControllerApiShim | undefined {
@@ -1301,7 +1292,7 @@ function boot(): void {
    * the parameter directly) so the null-check above narrows correctly
    * inside the nested closures regardless of TS's cross-closure narrowing
    * rules for reassignable bindings. */
-  function wireRosterRowToggle(el: HTMLElement | null, id: string): void {
+  function wireRosterRowToggle(el: HTMLElement | null, id: RacerId): void {
     if (!el) return;
     const node = el;
     function activate(): void {
@@ -1309,9 +1300,7 @@ function boot(): void {
       const active = node.getAttribute("aria-pressed") !== "true";
       node.setAttribute("aria-pressed", String(active));
       node.dataset.active = String(active);
-      const api = controllerApi();
-      api?.setAlgoActive?.(id, active);
-      api?.setRacerActive?.(id, active);
+      controllerApi()?.setRacerActive?.(id, active);
       if (viewMode === "compare") syncPanels();
       if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB); // direct trigger: cancels any pending debounce
     }
@@ -1336,9 +1325,7 @@ function boot(): void {
       const active = btn.getAttribute("aria-pressed") !== "true";
       btn.setAttribute("aria-pressed", String(active));
       bezel?.setAttribute("data-bidi", String(active));
-      const api = controllerApi();
-      api?.setBidiActive?.(active);
-      api?.setFamilyBidi?.(active);
+      controllerApi()?.setFamilyBidi?.(active);
       if (viewMode === "compare") syncPanels();
       if (pinA !== null && pinB !== null) scheduler.now(pinA, pinB);
     });

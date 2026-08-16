@@ -1462,8 +1462,24 @@ export class MapView {
   }
 
   /** Draws the shared shortest route (a sequence of node indices) as a
-   * single stroked path in the theme's route color. */
-  drawRoute(path: number[], lon: Float64Array, lat: Float64Array): void {
+   * single stroked path in the theme's route color. `opts.dashed` (default
+   * false; spec §18.4, Compare mode): true strokes the SAME route colour
+   * and width with a dash pattern instead of a solid line — the visual
+   * echo of a disclosed variant's own numeric "+X% longer route" row, so
+   * "not the shortest" reads from the route itself at a glance, without
+   * changing identity colour (that stays panel/theme-derived either way —
+   * only the stroke PATTERN carries the honesty signal, same principle as
+   * this app's other route-colour rule: identity never encodes correctness).
+   * Never passed for the overlay's own single shared route, which is
+   * always the true optimal path (see controller.ts's run()) — only a
+   * Compare-mode panel's OWN racer route can legitimately be the longer
+   * one. Dash unit [8, 6] scales this route's 2.4px stroke up from
+   * toytownView's own precedent for "dashed = not the direct/expected
+   * line" (styles.css's `.edge-line.edge-oneway { stroke-dasharray: 5 4 }`
+   * at a 1.6px stroke — same ~3:1 dash:stroke-width ratio, rounded to
+   * clean canvas units). `ctx.restore()` below reverts the dash list too
+   * (canvas state), so no separate reset is needed between calls. */
+  drawRoute(path: number[], lon: Float64Array, lat: Float64Array, opts?: { dashed?: boolean }): void {
     if (path.length < 2) return;
     const ctx = this.overlayCtx;
     const colors = themeColors();
@@ -1474,6 +1490,7 @@ export class MapView {
     ctx.lineWidth = 2.4;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
+    if (opts?.dashed) ctx.setLineDash([8, 6]);
     ctx.beginPath();
     const [x0, y0] = projectPoint(this.render.bbox, t, lon[path[0]], lat[path[0]]);
     ctx.moveTo(x0, y0);
