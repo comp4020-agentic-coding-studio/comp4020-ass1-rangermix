@@ -37,18 +37,21 @@ rebuilt intuition-first on a real ANU street subgraph.
    task closed.
    [`d82d677...60fae72`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/d82d677...60fae72)
 
-3. **User feedback became spec before it became code — twice.** Both build
-   reviews ("mini-town is boring — use real ANU streets"; "the overlay is
-   always one step behind the map") went into the design spec as binding
-   amendments (§14, §16) with their own contract tests, then through the
-   same task/review loop as everything else. That loop kept earning its
-   keep: the "footer out of style" complaint root-caused to a curly-quote
-   `class=”site-foot”` typo a previous fix wave had shipped; the pan-clamp
-   property tests caught the fixer's own first formula still being wrong
-   (189/200 seeded failures); and pixel-sampling caught canvas `Path2D`
-   batching silently deleting the search-density effect — three bugs no
-   suite in `pnpm check` could see.
-   [`b078bfd...b3b34f6`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...b3b34f6)
+3. **User feedback became spec before it became code — four rounds of
+   it.** Every build review ("mini-town is boring — use real ANU streets";
+   "the overlay is always one step behind the map"; "show what heuristic
+   A\* is using") went into the design spec as binding amendments
+   (§14–§18) with contract tests, then through the same task/review loop.
+   That loop kept earning its keep: a "footer out of style" complaint
+   root-caused to a curly-quote `class=”site-foot”` typo a fix wave had
+   shipped; pan-clamp property tests caught the fixer's own first formula
+   still wrong (189/200 seeded failures); and when inadmissible A\*
+   heuristics joined the race, the honesty rule became a sensor — any
+   longer-than-optimal route must disclose itself ("+67.4% longer" on the
+   default preset), enforced by tests, and an integration-only bug that
+   silently no-op'd every bidirectional race was caught by racing the
+   integrated build, not by either half's own suites.
+   [`b078bfd...960c9b0`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...960c9b0)
 
 4. **Exactness over drama.** The final review measured a 153 km/h
    quantization artifact in the graph, which made A\*'s 100 km/h heuristic
