@@ -1665,11 +1665,16 @@ html[data-splash-dismissed] .splash {
    so the layout doesn't jump when narration arrives or wraps at 390px. */
 .toy-narration {
   margin: 8px 0 0;
-  min-height: 2.4em;
+
+  /* Reserve two REAL rendered lines (the site line-height is 1.55, so a
+     plain 2.4em under-reserved and the layout jiggled ~9px whenever the
+     verdict wrapped at 390px — final-review minor). */
+  min-height: 3.1em;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
+  line-height: 1.55;
 }
 
 .toy-subhead {

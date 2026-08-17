@@ -6,7 +6,7 @@
 // chapter's copy claims actually hold). "Your turn" below reuses chapter
 // 4's tap-to-contract pattern, but compares your RUNNING total against
 // what the heuristic's own first k contractions would have cost — live,
-// after every tap, no need to contract all 55 nodes to see how you're
+// after every tap, no need to contract all 62 nodes to see how you're
 // doing.
 
 import { buildCh, createContractor, orderedShortcutCount } from "../algos/chBuild";
@@ -394,7 +394,7 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
   // the running count would lie. The heuristic's FULL order is computed
   // once (pure function of the graph alone, independent of the visitor's
   // choices) and re-sliced to the current k on every tap — measured at
-  // <0.4ms per call on the real 55-node toytown graph (see the F5 report),
+  // <0.4ms per call on the real 62-node toytown graph (see the F5 report),
   // comfortably under the 50ms-per-tap budget, so no memoization is needed
   // beyond this one-time heuristicOrder() call.
   const contractor = createContractor(t.graph);

@@ -153,10 +153,10 @@ describe("replayScript: the per-step record the ch5 replay animates (spec §21.2
   });
 });
 
-describe("orderedShortcutCount: performance on a 55-node-scale graph", () => {
+describe("orderedShortcutCount: performance on a 62-node-scale graph", () => {
   it("a partial fixed order (heuristic prefix, as the your-turn comparison calls it) stays well under budget", () => {
     // The your-turn comparison re-runs orderedShortcutCount(g,
-    // heuristicOrder.slice(0,k)) on every tap against the REAL 55-node
+    // heuristicOrder.slice(0,k)) on every tap against the REAL 62-node
     // toytown graph; measured there at <0.4ms per call (see the F5
     // report). This is a smoke check on a smaller synthetic graph (no
     // fetch/DOM needed) that a partial order — most of the graph left

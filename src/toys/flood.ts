@@ -25,7 +25,7 @@ import {
   type PickState,
 } from "./toytownView";
 
-const STEP_MS = 80; // 55 nodes x 80ms ~= a 4.5s full flood — brisk, not draggy
+const STEP_MS = 80; // 62 nodes x 80ms ~= a 5s full flood — brisk, not draggy
 
 function reducedMotion(): boolean {
   return matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -75,7 +75,7 @@ function labelFor(i: number, n: number, from: number, to: number): string {
 export function mountFlood(root: HTMLElement, t: Toytown): { playDefault: () => void } {
   const roads = physicalEdges(t);
   // Same declutter run nodeButtonsMarkup does internally (pure/deterministic
-  // — recomputing is cheap at toytown's ~55-node scale) so the drift
+  // — recomputing is cheap at toytown's ~62-node scale) so the drift
   // connectors below (design spec §17.5 delta 3) know each button's TRUE
   // vs SHOWN position without threading a return value through the markup
   // helper.
