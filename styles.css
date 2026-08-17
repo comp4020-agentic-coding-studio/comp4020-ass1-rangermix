@@ -2257,12 +2257,14 @@ html[data-splash-dismissed] .splash {
    gone). The zoom feature itself, and its own extra height, moved to
    hierarchy.ts/its .hier-stack rule further down this file. */
 
-/* overflow:hidden here is defensive rather than load-bearing now that
-   neither stage this class serves (hierarchy above, climb-map-stage below)
-   is zoomable — every node-mark's left/top percentage is always within
-   [0,100]% by construction (declutterXY already clamps to the fixed
-   VIEWBOX_W/VIEWBOX_H box). Left in place rather than removed outright:
-   harmless belt-and-braces, and .climb-meet (a SIBLING, not a descendant of
+/* overflow:hidden here clips node glyphs whose CENTER is in-bounds but
+   whose 24px box overhangs the stage edge — which really happened (seventh
+   build review, item 1): declutterXY's clamp used to pin centers onto the
+   stage walls and this clip cropped them to half dots. The real guarantee
+   is now toytownView's NODE_CLAMP_BOUNDS, inset a half node box (12px,
+   matching .node-btn/.node-mark's 24px above) from every stage edge,
+   sensor-tested against the real artifact in toytownView.test.ts. The clip
+   itself stays: belt-and-braces, and .climb-meet (a SIBLING, not a descendant of
    this) still needs to render past this box's own top edge into the
    stage's 80px margin-top headroom when the meet node sits near the top of
    the range (see .climb-view .toy-stage's own comment) — clipping at the

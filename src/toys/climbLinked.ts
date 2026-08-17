@@ -37,6 +37,7 @@ import {
   driftConnectors,
   IDLE_PICK,
   MIN_NODE_DIST,
+  NODE_CLAMP_BOUNDS,
   physicalEdges,
   roadPolylineMarkup,
   unorderedKey,
@@ -102,7 +103,7 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
   // The map's node-button layout is fixed real geography — computed ONCE,
   // unlike the hierarchy's rank-lift layout below, which is rescaled per
   // query (see recomputeHierXY).
-  const mapXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+  const mapXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
   const mapButtonsMarkup = mapXY
     .map(([x, y], i) => {
       const left = ((x / VIEWBOX_W) * 100).toFixed(3);
@@ -268,7 +269,7 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
       x,
       rankY(touched.has(i) ? ch.rank[i] : 0, rankStepPx),
     ]);
-    hierXY = declutterXY(raw, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+    hierXY = declutterXY(raw, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
   }
 
   function hierNodeXY(i: number): [number, number] {

@@ -18,6 +18,7 @@ import {
   driftConnectorMarkup,
   driftConnectors,
   MIN_NODE_DIST,
+  NODE_CLAMP_BOUNDS,
   physicalEdges,
   roadPolylineMarkup,
 } from "./toytownView";
@@ -140,7 +141,7 @@ function runButtonsMarkup(): string {
 // real toytown layout has intersections as little as ~2px apart on screen,
 // which no hit-circle padding alone can make individually clickable.
 function nodeButtonsMarkup(t: Toytown): string {
-  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
   return buttonXY
     .map(([x, y], i) => {
       const left = ((x / VIEWBOX_W) * 100).toFixed(3);
@@ -157,7 +158,7 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
   const roads = physicalEdges(t);
   // Same declutter run nodeButtonsMarkup does internally — see flood.ts's
   // matching comment (design spec §17.5 delta 3).
-  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
 
   root.innerHTML =
     `<div class="order-tiles" data-role="tiles">${tilesMarkup()}</div>` +

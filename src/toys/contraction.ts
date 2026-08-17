@@ -26,6 +26,7 @@ import {
   driftConnectorMarkup,
   driftConnectors,
   MIN_NODE_DIST,
+  NODE_CLAMP_BOUNDS,
   physicalEdges,
   roadPolylineMarkup,
   unorderedKey,
@@ -124,7 +125,7 @@ function graphFromEdges(n: number, edges: { from: number; to: number; w: number 
 // Shortcut curves still anchor to `t.xy` directly (drawShortcut), so they
 // stay geometrically accurate even where their endpoint's button nudged.
 function nodeButtonsMarkup(t: Toytown): string {
-  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
   return buttonXY
     .map(([x, y], i) => {
       const left = ((x / VIEWBOX_W) * 100).toFixed(3);
@@ -144,7 +145,7 @@ export function mountContraction(root: HTMLElement, t: Toytown): void {
   const roads = physicalEdges(t);
   // Same declutter run nodeButtonsMarkup does internally — see flood.ts's
   // matching comment (design spec §17.5 delta 3).
-  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
 
   root.innerHTML =
     `<div class="toy-stage">` +

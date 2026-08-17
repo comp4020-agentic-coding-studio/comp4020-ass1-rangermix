@@ -38,7 +38,7 @@
 //    shares — moved here (from a private copy in contraction.ts) once a
 //    second file needed the exact same key.
 
-import type { Toytown } from "./toytown";
+import { VIEWBOX_H, VIEWBOX_W, type Toytown } from "./toytown";
 
 export interface PhysicalEdge {
   a: number;
@@ -250,6 +250,25 @@ export const MIN_NODE_DIST = 35;
 /** [minX, minY, maxX, maxY] — a box to keep every declutterXY'd point
  * inside. */
 export type Bounds = [number, number, number, number];
+
+/** How far inside the stage a node CENTER must stay: half the 24px
+ * .node-btn/.node-mark box (styles.css) — the largest glyph drawn at a
+ * center (hit area; the 22px endpoint disc and 13px dot both fit inside
+ * it). Seventh build review, item 1: with a zero inset, declutter repulsion
+ * pinned centers onto the clamp walls (real data: one node at the exact
+ * (460, 300) corner) and climbLinked's overflow:hidden .climb-nodes layer
+ * cropped them to half/quarter dots. */
+export const NODE_EDGE_INSET = 12;
+
+/** The clamp box every toy passes to declutterXY for its node layout —
+ * shared here so all four toytown toys (flood, contraction, order, climb's
+ * two linked views) keep the same edge behavior. */
+export const NODE_CLAMP_BOUNDS: Bounds = [
+  NODE_EDGE_INSET,
+  NODE_EDGE_INSET,
+  VIEWBOX_W - NODE_EDGE_INSET,
+  VIEWBOX_H - NODE_EDGE_INSET,
+];
 
 function clampToBounds(p: [number, number], bounds: Bounds): void {
   p[0] = Math.min(bounds[2], Math.max(bounds[0], p[0]));

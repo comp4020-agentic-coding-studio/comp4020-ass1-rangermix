@@ -18,6 +18,7 @@ import {
   driftConnectors,
   IDLE_PICK,
   MIN_NODE_DIST,
+  NODE_CLAMP_BOUNDS,
   physicalEdges,
   roadPolylineMarkup,
   wireRovingNodeButtons,
@@ -51,7 +52,7 @@ export function findFarPair(g: Graph): { from: number; to: number } {
  * route path and every other geometry-accurate draw stays on `t.xy` — only
  * the button LAYER moves. */
 function nodeButtonsMarkup(t: Toytown): string {
-  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
   return buttonXY
     .map(([x, y], i) => {
       const left = ((x / VIEWBOX_W) * 100).toFixed(3);
@@ -78,7 +79,7 @@ export function mountFlood(root: HTMLElement, t: Toytown): { playDefault: () => 
   // connectors below (design spec §17.5 delta 3) know each button's TRUE
   // vs SHOWN position without threading a return value through the markup
   // helper.
-  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, [0, 0, VIEWBOX_W, VIEWBOX_H]);
+  const buttonXY = declutterXY(t.xy, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
 
   root.innerHTML =
     `<div class="toy-stage">` +

@@ -1,6 +1,18 @@
 // @vitest-environment jsdom
+import { existsSync, readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { describe, expect, it } from "vitest";
-import { decodeToytown, type ToytownArtifact } from "./toytown";
+import { buildCh } from "../algos/chBuild";
+import { chQuery } from "../algos/chQuery";
+import {
+  countArterialSegments,
+  findDefaultClimbPair,
+  MIN_TOUCHED,
+  rankStep,
+  rankY,
+  touchedNodes,
+} from "./climb";
+import { decodeToytown, VIEWBOX_H, VIEWBOX_W, type ToytownArtifact } from "./toytown";
 import {
   advancePick,
   asArrowKey,
@@ -11,7 +23,9 @@ import {
   edgeClsOf,
   IDLE_PICK,
   isArterial,
+  MIN_NODE_DIST,
   nextRovingIndex,
+  NODE_CLAMP_BOUNDS,
   physicalEdges,
   roadPolylineMarkup,
   svgPan,
@@ -311,6 +325,88 @@ describe("declutterXY: nudges near-coincident points apart", () => {
       const out = declutterXY(pts, 24, 60, [0, 0, 460, 300]);
       expect(out[0][0]).toBeGreaterThanOrEqual(0);
       expect(out[0][1]).toBeLessThanOrEqual(300);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------
+// Seventh build review, item 1: nodes in the query demo rendered as HALF
+// dots at the stage edges. Root cause: NODE_CLAMP_BOUNDS kept node CENTERS
+// inside the stage box, but a center ON the boundary still hangs half its
+// glyph (24px hit box, 22px endpoint disc, 13px visual dot) outside it —
+// and climbLinked's .climb-nodes layer clips with overflow:hidden, so the
+// outside half was cropped. The clamp box must therefore stay a half-box
+// (12px) inside every stage edge. These sensors run the REAL production
+// layouts (same artifact, same calls the toys make) so a future bounds or
+// declutter change that re-pins a node to a wall goes red here.
+// ---------------------------------------------------------------------
+
+describe("NODE_CLAMP_BOUNDS keeps whole node glyphs inside the stage clip", () => {
+  // Half the 24px .node-btn/.node-mark box (styles.css) — the largest thing
+  // drawn at a node center, and also its hit area.
+  const HALF_NODE_BOX = 12;
+
+  it("the clamp box itself sits at least a half node box inside every viewBox edge", () => {
+    const [minX, minY, maxX, maxY] = NODE_CLAMP_BOUNDS;
+    expect(minX).toBeGreaterThanOrEqual(HALF_NODE_BOX);
+    expect(minY).toBeGreaterThanOrEqual(HALF_NODE_BOX);
+    expect(maxX).toBeLessThanOrEqual(VIEWBOX_W - HALF_NODE_BOX);
+    expect(maxY).toBeLessThanOrEqual(VIEWBOX_H - HALF_NODE_BOX);
+  });
+
+  // The real committed artifact, decoded exactly as the /how/ page does.
+  // Gated like spec/data.test.ts's toytown sensors: skip (loudly, via the
+  // suite name) if the artifact is missing rather than fake a pass.
+  const artifactPath = resolvePath(__dirname, "../../public/data/toytown.json");
+  const haveArtifact = existsSync(artifactPath);
+
+  describe.runIf(haveArtifact)("against the real toytown artifact", () => {
+    const town = decodeToytown(
+      JSON.parse(readFileSync(artifactPath, "utf8")) as ToytownArtifact,
+    );
+
+    function offenders(pts: [number, number][]): [number, number, number][] {
+      const out: [number, number, number][] = [];
+      pts.forEach(([x, y], i) => {
+        if (
+          x < HALF_NODE_BOX ||
+          x > VIEWBOX_W - HALF_NODE_BOX ||
+          y < HALF_NODE_BOX ||
+          y > VIEWBOX_H - HALF_NODE_BOX
+        )
+          out.push([i, x, y]);
+      });
+      return out;
+    }
+
+    it("street-map layout: every decluttered node center clears every edge by a half node box", () => {
+      // The exact call flood/contraction/order/climbLinked make for their
+      // map-node buttons.
+      const mapXY = declutterXY(town.xy, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
+      expect(offenders(mapXY)).toEqual([]);
+    });
+
+    it("hierarchy layout at the default pair: rank-lifted + baseline nodes all clear the edges too", () => {
+      // Reconstructs climbLinked's recomputeHierXY for the pair the toy
+      // actually mounts with — ghosts collapse onto the BASE_Y baseline,
+      // the densest row the rank-lift produces, which is what shoved nodes
+      // into the walls.
+      const ch = buildCh(town.graph);
+      const pair = findDefaultClimbPair(ch, MIN_TOUCHED, (result) =>
+        countArterialSegments(town, result.path),
+      );
+      expect(pair).not.toBeNull();
+      if (!pair) return;
+      const result = chQuery(ch, pair.from, pair.to);
+      const touched = touchedNodes(result);
+      const maxRank = Math.max(0, ...[...touched].map((i) => ch.rank[i]));
+      const step = rankStep(maxRank);
+      const raw: [number, number][] = town.xy.map(([x], i) => [
+        x,
+        rankY(touched.has(i) ? ch.rank[i] : 0, step),
+      ]);
+      const hierXY = declutterXY(raw, MIN_NODE_DIST, undefined, NODE_CLAMP_BOUNDS);
+      expect(offenders(hierXY)).toEqual([]);
     });
   });
 });
