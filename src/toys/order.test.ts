@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildCh, orderedShortcutCount } from "../algos/chBuild";
 import { buildCsr, type Graph } from "../algos/graph";
-import { degreeDescendingOrder, heuristicOrder, seededShuffleOrder } from "./order";
+import {
+  degreeDescendingOrder,
+  heuristicOrder,
+  replayScript,
+  seededShuffleOrder,
+} from "./order";
 
 // Chapter-5 toy's honesty contract: every tile's number is a REAL,
 // deterministic run of the real CH build — never a scripted figure. These
@@ -103,6 +108,48 @@ describe("order toy: shortcut-count inequalities on a real (directed) graph", ()
     );
     expect(rankOrder).toEqual(smartOrder);
     expect(orderedShortcutCount(g, rankOrder)).toBe(smartCount);
+  });
+});
+
+describe("replayScript: the per-step record the ch5 replay animates (spec §21.2)", () => {
+  // The replay's honesty contract: the animated run IS the tile's number.
+  // replayScript re-runs the real contractor step by step, and its
+  // concatenated shortcut counts must equal orderedShortcutCount's total for
+  // the SAME order — otherwise the map would show one story and the
+  // scoreboard another. Checked for all three production orders the buttons
+  // actually run (seeded random, high-degree-first, heuristic).
+  const g = hubFixture();
+  const orders: [string, number[]][] = [
+    ["seeded random (seed 7)", seededShuffleOrder(7, g.n)],
+    ["worst (high-degree-first)", degreeDescendingOrder(g)],
+    ["smart (heuristic)", heuristicOrder(g)],
+  ];
+
+  it.each(orders)("%s: one ReplayStep per node of the order, in order", (_name, order) => {
+    const script = replayScript(g, order);
+    expect(script.map((s) => s.node)).toEqual(order);
+  });
+
+  it.each(orders)(
+    "%s: step shortcut counts sum to orderedShortcutCount's total for the same order",
+    (_name, order) => {
+      const script = replayScript(g, order);
+      const sum = script.reduce((acc, s) => acc + s.shortcuts.length, 0);
+      expect(sum).toBe(orderedShortcutCount(g, order));
+    },
+  );
+
+  it("records the contracted node itself as every step shortcut's `via`", () => {
+    for (const [, order] of orders) {
+      for (const step of replayScript(g, order)) {
+        for (const s of step.shortcuts) expect(s.via).toBe(step.node);
+      }
+    }
+  });
+
+  it("is deterministic: the same order twice gives deeply-equal scripts", () => {
+    const order = seededShuffleOrder(7, g.n);
+    expect(replayScript(g, order)).toEqual(replayScript(g, order));
   });
 });
 

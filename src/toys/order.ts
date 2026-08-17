@@ -15,6 +15,7 @@ import { VIEWBOX, VIEWBOX_H, VIEWBOX_W, type Toytown } from "./toytown";
 import {
   contextPolylineMarkup,
   declutterXY,
+  drawShortcutCurve,
   driftConnectorMarkup,
   driftConnectors,
   MIN_NODE_DIST,
@@ -24,6 +25,17 @@ import {
 } from "./toytownView";
 
 const RANDOM_SEED = 7;
+
+/** ~80ms per contraction: a full 55-node replay lands in ≈4.5s — long
+ * enough to SEE the worst order bury the map early, short enough to invite
+ * pressing all three buttons (spec §21.2's ~80ms cadence). */
+const REPLAY_STEP_MS = 80;
+
+// Same convention as climbLinked/flood/hierarchy: reduced-motion visitors
+// get final states, never intervals.
+function prefersReducedMotion(): boolean {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
 
 // mulberry32 — the same small seeded PRNG used in src/algos/dijkstra.test.ts
 // and src/algos/ch.test.ts: deterministic so the "random order" tile
@@ -107,6 +119,28 @@ const KIND_NOTE: Record<Kind, string> = {
   smart: "edge-difference heuristic",
 };
 
+export interface ReplayStep {
+  node: number;
+  shortcuts: { a: number; b: number; via: number; w: number }[];
+}
+
+/** The per-contraction record the ch5 replay animates: one entry per node
+ * of `order`, in order, each carrying the shortcuts THAT contraction added
+ * (endpoints a→b, the contracted node as `via`, real measured weight).
+ * Pure — a fresh contractor per call, so the same order always yields the
+ * same script, and the concatenated shortcut counts equal
+ * orderedShortcutCount(g, order) (order.test.ts pins both): the animated
+ * run IS the tile's number, not a parallel story. */
+export function replayScript(g: Graph, order: number[]): ReplayStep[] {
+  const contractor = createContractor(g);
+  return order.map((node) => ({
+    node,
+    shortcuts: contractor
+      .contract(node)
+      .shortcuts.map(({ from, to, w }) => ({ a: from, b: to, via: node, w })),
+  }));
+}
+
 function orderFor(g: Graph, kind: Kind): number[] {
   switch (kind) {
     case "random":
@@ -154,6 +188,20 @@ function nodeButtonsMarkup(t: Toytown): string {
     .join("");
 }
 
+// The replay stage's nodes: .node-btn's display-only twin (.node-mark, a
+// div — no role, no focus, no pointer events) at the SAME decluttered
+// positions as the your-turn buttons below, so the two maps read as the
+// same town.
+function nodeMarksMarkup(buttonXY: [number, number][]): string {
+  return buttonXY
+    .map(([x, y], i) => {
+      const left = ((x / VIEWBOX_W) * 100).toFixed(3);
+      const top = ((y / VIEWBOX_H) * 100).toFixed(3);
+      return `<div class="node-mark" data-node="${i}" style="left:${left}%;top:${top}%"></div>`;
+    })
+    .join("");
+}
+
 export function mountOrder(root: HTMLElement, t: Toytown): void {
   const roads = physicalEdges(t);
   // Same declutter run nodeButtonsMarkup does internally — see flood.ts's
@@ -163,6 +211,19 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
   root.innerHTML =
     `<div class="order-tiles" data-role="tiles">${tilesMarkup()}</div>` +
     `<div class="toy-controls">${runButtonsMarkup()}</div>` +
+    // ONE shared replay stage all three order buttons play onto (spec
+    // §21.2) — display only (aria-hidden, .node-mark divs, no buttons):
+    // the same town as "your turn" below, but it exists to be WATCHED,
+    // not tapped, so the clutter each order causes is seen, not read.
+    `<div class="toy-stage order-replay-stage" aria-hidden="true">` +
+    `<svg class="toy-svg" viewBox="${VIEWBOX}">` +
+    `<g class="context-layer">${contextPolylineMarkup(t)}</g>` +
+    `<g class="edges">${roadPolylineMarkup(roads)}</g>` +
+    `<g class="drift-layer">${driftConnectorMarkup(driftConnectors(t.xy, buttonXY))}</g>` +
+    `<g class="shortcuts"></g>` +
+    `</svg>` +
+    nodeMarksMarkup(buttonXY) +
+    `</div>` +
     `<div class="order-yourturn">` +
     `<p class="toy-subhead">Your turn: tap intersections below in the order you'd
       contract them — watch how you're doing against the heuristic as you go.</p>` +
@@ -171,6 +232,7 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
     `<g class="context-layer">${contextPolylineMarkup(t)}</g>` +
     `<g class="edges">${roadPolylineMarkup(roads)}</g>` +
     `<g class="drift-layer">${driftConnectorMarkup(driftConnectors(t.xy, buttonXY))}</g>` +
+    `<g class="shortcuts"></g>` +
     `</svg>` +
     nodeButtonsMarkup(t) +
     `</div>` +
@@ -189,7 +251,9 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
   function renderTiles(): void {
     const known = KINDS.map((k) => counts[k]).filter((v): v is number => v !== undefined);
     if (known.length === 0) return;
-    const max = Math.max(...known);
+    // The floor of 1 only matters in the first replay frames, when the sole
+    // known count can still be 0 — without it 0/0 makes the bar width NaN.
+    const max = Math.max(...known, 1);
     for (const kind of KINDS) {
       const count = counts[kind];
       if (count === undefined) continue;
@@ -212,12 +276,92 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
     smartTile?.classList.toggle("win", wins);
   }
 
+  // ---- the replay engine: pressing an order button plays that order's
+  // replayScript on the shared stage at REPLAY_STEP_MS per contraction —
+  // node grays out, its shortcuts curve in (unlabelled — volume is the
+  // point, spec §21.4), the tile's count climbs. The script is a fresh,
+  // pure run per press (no shared state), and its total IS
+  // orderedShortcutCount's number for that order (order.test.ts pins it),
+  // so the final tile figures are exactly what the instant version showed.
+  const replayStage = root.querySelector<HTMLElement>(".order-replay-stage");
+  const replayShortcuts = replayStage?.querySelector<SVGGElement>(".shortcuts");
+  let replayTimer: number | null = null;
+  // The running replay's (kind, final total): when another press interrupts
+  // it, its tile completes to the full run's REAL total instantly — the
+  // scoreboard never keeps a half-run figure (same convention as ch4's
+  // mid-script node switch, spec §21.1).
+  let running: { kind: Kind; total: number } | null = null;
+
+  function clearReplayStage(): void {
+    if (replayShortcuts) replayShortcuts.innerHTML = "";
+    for (const mark of replayStage?.querySelectorAll(".node-mark.contracted") ?? []) {
+      mark.classList.remove("contracted");
+    }
+  }
+
+  function cancelReplay(): void {
+    if (replayTimer !== null) {
+      clearInterval(replayTimer);
+      replayTimer = null;
+    }
+    if (running) {
+      counts[running.kind] = running.total;
+      running = null;
+    }
+  }
+
+  function drawStepCurves(step: ReplayStep, group: SVGGElement | null | undefined): void {
+    if (!group) return;
+    for (const s of step.shortcuts) {
+      drawShortcutCurve(group, t.xy, s.a, s.b, s.via, { flip: s.a > s.b });
+    }
+  }
+
+  function runReplay(kind: Kind): void {
+    cancelReplay();
+    clearReplayStage();
+    const script = replayScript(t.graph, orderFor(t.graph, kind));
+    const total = script.reduce((acc, step) => acc + step.shortcuts.length, 0);
+
+    const applyStep = (step: ReplayStep): void => {
+      replayStage
+        ?.querySelector(`.node-mark[data-node="${step.node}"]`)
+        ?.classList.add("contracted");
+      drawStepCurves(step, replayShortcuts);
+    };
+
+    if (prefersReducedMotion()) {
+      // No interval: the full end state — every mark contracted, every
+      // curve drawn, the final count — lands instantly.
+      for (const step of script) applyStep(step);
+      counts[kind] = total;
+      renderTiles();
+      return;
+    }
+
+    running = { kind, total };
+    let k = 0;
+    let runningTotal = 0;
+    counts[kind] = 0;
+    renderTiles();
+    replayTimer = window.setInterval(() => {
+      const step = script[k];
+      applyStep(step);
+      runningTotal += step.shortcuts.length;
+      counts[kind] = runningTotal;
+      renderTiles();
+      k++;
+      if (k === script.length) {
+        clearInterval(replayTimer as number);
+        replayTimer = null;
+        running = null;
+      }
+    }, REPLAY_STEP_MS);
+  }
+
   for (const btn of root.querySelectorAll<HTMLButtonElement>("[data-run]")) {
     const kind = btn.dataset.run as Kind;
-    btn.addEventListener("click", () => {
-      counts[kind] = orderedShortcutCount(t.graph, orderFor(t.graph, kind));
-      renderTiles();
-    });
+    btn.addEventListener("click", () => runReplay(kind));
   }
 
   // ---- "your turn": one persistent contractor for this mount's whole
@@ -236,6 +380,11 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
   const counter = root.querySelector<HTMLElement>('[data-role="yourturn-counter"]');
   const result = root.querySelector<HTMLElement>('[data-role="yourturn-result"]');
   const resetBtn = root.querySelector<HTMLButtonElement>('[data-action="reset"]');
+  // The your-turn stage's own curve layer: every tap draws the shortcuts
+  // THAT contraction just added (unlabelled, same drawing as the replay
+  // above), so the visitor's clutter accumulates on their own map exactly
+  // as the replayed orders' clutter does on the shared one (spec §21.2).
+  const yourturnShortcuts = root.querySelector<SVGGElement>(".order-yourturn .shortcuts");
 
   function updateCounter(): void {
     if (!counter) return;
@@ -272,7 +421,14 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
 
   function onNodeClick(v: number): void {
     if (contractor.contracted(v)) return;
-    contractor.contract(v);
+    const outcome = contractor.contract(v);
+    if (yourturnShortcuts) {
+      for (const s of outcome.shortcuts) {
+        drawShortcutCurve(yourturnShortcuts, t.xy, s.from, s.to, v, {
+          flip: s.from > s.to,
+        });
+      }
+    }
     contractedCount++;
     markContracted(v);
     updateCounter();
@@ -287,6 +443,7 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
   resetBtn?.addEventListener("click", () => {
     contractor.reset();
     contractedCount = 0;
+    if (yourturnShortcuts) yourturnShortcuts.innerHTML = "";
     if (result) {
       result.hidden = true;
       result.textContent = "";
