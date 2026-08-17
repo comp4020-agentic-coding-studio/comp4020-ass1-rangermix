@@ -41,6 +41,7 @@ import {
   computeChromeHeight,
   diffPanels,
   effectiveViewMode,
+  reopenSplashDom,
   shouldArmAutoRun,
   shouldShowSplashOnBoot,
   type GatedControls,
@@ -138,6 +139,44 @@ describe("shouldShowSplashOnBoot (§19.5 — session dismissal OR the persistent
 
   it("both flags set: still suppressed (not a special/different state)", () => {
     expect(shouldShowSplashOnBoot(true, true)).toBe(false);
+  });
+});
+
+// J3 gate-review Important finding: this is the regression cover for a bug
+// that was ONLY caught live (a screenshot showed the splash staying
+// invisible after clicking ⓘ on a reloaded pageview, even though every
+// JS-observable side of open() — gate/inert/view-mode state — checked out
+// correctly in isolation). index.html's pre-paint script stamps
+// `data-splash-dismissed` on `<html>` before home.ts loads whenever the
+// splash was already dismissed earlier this session; styles.css's
+// `html[data-splash-dismissed] .splash { display:none }` is more specific
+// than the plain `.splash` rule the `hidden` PROPERTY relies on, so on a
+// reloaded pageview, clearing `.hidden` alone leaves the splash CSS-hidden
+// regardless. reopenSplashDom is open()'s fix, pulled into its own
+// parameterized function precisely so this has real jsdom coverage instead
+// of relying on the live screenshot alone.
+describe("reopenSplashDom (§19.5 — the live-caught stale data-splash-dismissed bug fix, J3 gate review Important finding)", () => {
+  it("simulating a reloaded, already-dismissed pageview (the stamp present, splash hidden): clears the stamp AND unhides the splash", () => {
+    const doc = new JSDOM(`<!doctype html><body><div class="splash" hidden></div></body>`).window.document;
+    doc.documentElement.setAttribute("data-splash-dismissed", "");
+    const splashEl = doc.querySelector<HTMLElement>(".splash")!;
+    expect(splashEl.hidden).toBe(true); // sanity: the fixture starts in the buggy pre-fix state
+
+    reopenSplashDom(doc, splashEl);
+
+    expect(doc.documentElement.hasAttribute("data-splash-dismissed")).toBe(false);
+    expect(splashEl.hidden).toBe(false);
+  });
+
+  it("a fresh pageview with no stamp present: still unhides (a no-op removeAttribute, not an error)", () => {
+    const doc = new JSDOM(`<!doctype html><body><div class="splash" hidden></div></body>`).window.document;
+    const splashEl = doc.querySelector<HTMLElement>(".splash")!;
+    expect(doc.documentElement.hasAttribute("data-splash-dismissed")).toBe(false); // sanity
+
+    reopenSplashDom(doc, splashEl);
+
+    expect(doc.documentElement.hasAttribute("data-splash-dismissed")).toBe(false);
+    expect(splashEl.hidden).toBe(false);
   });
 });
 

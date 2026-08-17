@@ -121,6 +121,31 @@ export function shouldShowSplashOnBoot(sessionDismissed: boolean, permanentlyOff
   return !sessionDismissed && !permanentlyOff;
 }
 
+/** §19.5's own live-caught bug fix, pulled out of open() (below) into its
+ * own parameterized, testable function — same pure/DOM-mutator pattern as
+ * applyControlsEnabled/applySplashInert above (mutates real elements, but
+ * takes no closure over boot()'s own state, so a plain constructed DOM tree
+ * is enough to exercise it directly). The bug: index.html's pre-paint
+ * script stamps `data-splash-dismissed` on `<html>` BEFORE this module even
+ * loads, whenever either the per-tab sessionStorage dismissal or the
+ * persistent "don't show this again" localStorage preference already said
+ * "don't show it" at that load — true on any reloaded/returning pageview
+ * this session, once the splash has been dismissed at least once.
+ * styles.css's own `html[data-splash-dismissed] .splash { display:none }`
+ * rule is MORE SPECIFIC than the bare `.splash` rule the `hidden` PROPERTY
+ * alone relies on (an attribute selector + a class beats a class alone), so
+ * on exactly those pageviews, clearing `.hidden` isn't enough by itself —
+ * the stamp keeps the splash CSS-hidden regardless. Found live (a
+ * screenshot caught the splash staying invisible after clicking ⓘ following
+ * a page RELOAD, even though every JS-observable side of open() — the gate/
+ * inert/view-mode state — checked out correctly): dismiss() never had to
+ * clear this stamp, since it only ever moves the SAME direction the stamp
+ * already pushes; only open() (the reverse direction) needs to. */
+export function reopenSplashDom(doc: Document, splashEl: HTMLElement): void {
+  splashEl.hidden = false;
+  doc.documentElement.removeAttribute("data-splash-dismissed");
+}
+
 /** The full set of controls gated by (dataReady AND splashDismissed) --
  * everything that OPERATES the hidden map/race (H2 gate fix, a build-review
  * finding against the splash this subsumes into: ".splash only covers
@@ -704,24 +729,12 @@ function boot(): void {
    * rewound one. */
   function open(): void {
     if (!splashEl || !splashEl.hidden) return; // already open (or no splash element at all) -- nothing to do
-    splashEl.hidden = false;
-    // The pre-paint pass (index.html's inline head script) stamps
-    // `data-splash-dismissed` on <html> BEFORE this module even loads,
-    // whenever EITHER SPLASH_KEY (sessionStorage) or SPLASH_OFF_KEY
-    // (localStorage) already said "don't show it" at that load — which, on
-    // any reloaded/returning pageview this session, is true the instant
-    // after the FIRST dismissal. styles.css's own
-    // `html[data-splash-dismissed] .splash { display:none }` rule is
-    // MORE SPECIFIC than the bare `.splash` rule the `hidden` PROPERTY
-    // above relies on (an attribute selector + a class beats a class
-    // alone), so on exactly those pageviews, clearing `.hidden` here isn't
-    // enough by itself — the stamp would keep it CSS-hidden regardless.
-    // Removing the stamp here is what makes a reopened splash actually
-    // paint (found live: the gating/focus/view-mode side of open() all
-    // checked out correctly while the splash itself silently stayed
-    // display:none — dismiss() never had to clear this because it only
-    // ever moves the SAME direction the stamp already pushes).
-    document.documentElement.removeAttribute("data-splash-dismissed");
+    // reopenSplashDom (above, jsdom-tested) is what makes a reopened splash
+    // actually paint on a RELOADED pageview — see its own comment for the
+    // stale pre-paint stamp this clears; a bare `splashEl.hidden = false`
+    // alone checked out correctly in isolated JS assertions but silently
+    // stayed display:none on screen until this was added.
+    reopenSplashDom(document, splashEl);
     splashDismissed = false;
     updateControlsEnabled(); // re-gates every dataReady-gated control, exactly like a fresh splash
     updateSplashInert(); // re-traps focus/the accessibility tree the same way
@@ -1540,9 +1553,11 @@ function boot(): void {
    * the `.hero` column except the map area: header, .race-layout's own
    * top/bottom padding, .hero's own row gap, and the Routes strip) onto
    * `.race-layout` as an inline custom property, which styles.css's own
-   * `@media (width > 1440px) .race-layout.is-adaptive .map-stack`/
+   * `@media (height > 900px) .race-layout.is-adaptive .map-stack`/
    * `.compare-grid` rule reads via `calc(100dvh - var(--chrome-h))` — see
-   * that rule's own comment for the >1440px threshold and the max(72vh,…)
+   * that rule's own comment for the height>900px threshold (J4 gate fix:
+   * decoupled from the size-toggle's own width>1440px threshold — this
+   * property is read purely by height now, not width) and the max(72vh,…)
    * floor. Live-measured (getComputedStyle + offsetHeight), not a
    * hardcoded pixel guess: the header's own height isn't fixed (this exact
    * round added a second chip to its nav, §19.5's ⓘ button) and neither is
@@ -1552,7 +1567,7 @@ function boot(): void {
    * styles.css's real numbers the moment either changed. The arithmetic
    * itself is computeChromeHeight() (pure, unit-tested); this is only the
    * DOM-reading half, untested here like the rest of boot()'s glue. Harmless
-   * to run even in "current" mode or below the 1440px threshold — the
+   * to run even in "current" mode or below the height threshold — the
    * custom property just goes unread by any CSS rule at that point. */
   function updateChromeHeight(): void {
     if (!raceLayoutEl || !siteHeadEl || !controlsEl || !heroEl) return;

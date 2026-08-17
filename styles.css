@@ -292,7 +292,14 @@ a {
    rules below can never both fire on the same element. Ordered before the
    margin rule (lower specificity first) to satisfy stylelint's
    no-descending-specificity, same convention .route-chip's own comment
-   documents elsewhere in this file. */
+   documents elsewhere in this file.
+   Visual-only fix (no DOM structure or aria contract changed — jsdom can't
+   see line-wrap layout, see spec/highway-to-hill.test.ts's own markup-only
+   scope), so its regression evidence is the live screenshot sweep, not a
+   unit test: `.superpowers/sdd/2026-08-17-pacing-round/shots/
+   j3-mobile-390x844.png` (the failing case this fix targets, ⓘ+Theme
+   correctly clustered as one wrapped pair) — verified live at 390, 1024,
+   1920, and 2400px, per the J3 report. */
 .nav-icons {
   display: flex;
   align-items: center;
@@ -361,12 +368,29 @@ a {
    even on a viewport too short for the calc'd figure to clear it (a
    wide-but-short window); it never shrinks the map.
 
-   Gated behind the SAME >1440px threshold as the size toggle's own
-   visibility (below): below that width `.is-adaptive` must be a true no-op
-   on BOTH axes, never a still-stretching map behind a hidden control with
-   no visible way to undo it (the width rule above is already a no-op there
-   for a different reason — see the size-toggle comment below — so gating
-   only needed adding here).
+   J4 gate fix (adopted reviewer recommendation — decouples the two axes,
+   superseding J3's original single width>1440px gate for BOTH rules): this
+   rule now gates on its OWN height headroom, not the width threshold below.
+   J3's original reasoning (a hidden size-toggle button must never leave an
+   invisible, un-undoable effect still active) still holds, but tying the
+   VERTICAL effect to a WIDTH threshold over-applied it — a tall-but-narrow
+   viewport (e.g. ~1300×1500) genuinely has height to gain even with zero
+   width to gain, and used to get neither. The fix instead makes the
+   size-toggle's own visibility (below) an OR of both axes' headroom, so the
+   button is never hidden while EITHER effect would be real.
+   The number: this rule's own min-height only ever adds real height once
+   `100dvh - chromeH` clears "current" mode's fixed 72vh floor, i.e. once
+   `0.28 * viewportHeight > chromeH` (28% being 100%-72%) — at chromeH's own
+   live-measured value at any width the desktop (>940px) grid uses without
+   route-chip wrapping (227px, read live via home.ts's updateChromeHeight —
+   see the J4 gate report for the measurement sweep across widths), that
+   crossover lands at ~811px (227/0.28). 900px is that crossover plus a
+   buffer comfortably clear of the graded 390×844 phone viewport (mobile's
+   own single-column layout, gated separately below 940px width — see that
+   block further down — is a different regime this rule was never meant to
+   reach, and must stay a true no-op there regardless of height) — same
+   "buffer past the exact crossover" reasoning the 1440px width threshold
+   below already uses over ITS own exact 1400px crossover.
 
    .compare-grid gets the identical min-height treatment (§19.2: "compare
    grid rows adapt too") — aspect-ratio still governs each panel's own
@@ -380,8 +404,10 @@ a {
    distorted by this) turns that dead gap into even top/bottom framing
    instead — reads as an intentional layout, not a bug, and costs nothing
    when the natural content already fills the box (more active racers,
-   more rows, or a narrower window). */
-@media (width > 1440px) {
+   more rows, or a narrower window). Ledger note (gate review, watch only):
+   at extreme panel/row-count ratios this centring could theoretically read
+   oddly — no live case has shown it, not acted on. */
+@media (height > 900px) and (width > 940px) {
   .race-layout.is-adaptive .map-stack,
   .race-layout.is-adaptive .compare-grid {
     min-height: max(72vh, calc(100dvh - var(--chrome-h, 0px)));
@@ -392,29 +418,58 @@ a {
   }
 }
 
-/* Size toggle visibility (spec §19.1): hidden once the viewport is too
-   narrow for adaptive to add anything worth having. Two independent reasons
-   land on the same number: .race-layout's own max-width (1400px, and —
+/* Size toggle visibility (spec §19.1): hidden once NEITHER axis has
+   headroom worth adaptive extending — hidden only when BOTH the width test
+   AND the height test say there's nothing to gain (De Morgan's dual of
+   "visible whenever EITHER axis would gain something"; see the vertical
+   rule's own comment above for why the two axes were decoupled, J4 gate
+   fix). `and` (not a comma, which would mean OR) between the two `@media`
+   features in the first rule below is what implements that
+   AND-of-no-headroom.
+
+   Width half: .race-layout's own max-width (1400px, and —
    box-sizing:border-box, the global rule at the top of this file — already
    INCLUSIVE of its own 20px side padding) stops binding at that exact
    width (below it "current" and "adaptive" render at the identical width,
-   the viewport itself being what's constraining, not the cap), and the
-   vertical rule above is gated at the same threshold by construction. 1440,
-   not the mathematically exact 1400: a 40px buffer so the control doesn't
+   the viewport itself being what's constraining, not the cap). 1440, not
+   the mathematically exact 1400: a 40px buffer so the control doesn't
    flicker back into view for a 1-to-40px gain nobody would perceive as "the
-   map extended" — it shows only once relaxing the cap would add a width
-   actually worth having.
+   map extended".
+   Height half: 900px, mirroring the vertical rule's own derivation above
+   (same crossover math, same number) — so this button's own visibility can
+   never disagree with whether toggling it would actually change anything.
+
+   Third rule (J4 gate fix, live-caught while verifying the decoupled gate):
+   width<=940px — this file's own existing mobile breakpoint (below) —
+   unconditionally, regardless of height. Without it, a merely-narrow-but-
+   VERY-tall phone (e.g. ~430×932 — taller than the 900px height half above,
+   but still well inside the mobile single-column regime) would satisfy
+   "height has headroom" and show a desktop-shaped Size toggle inside the
+   mobile layout; toggling it on would then let the vertical rule above (no
+   width floor of its own beyond >940px) override the mobile block's own
+   tuned 55vh figure with the desktop 72vh one. A comma between this and the
+   first rule would read as one combined OR (valid CSS — commas separate
+   whole media queries — but two separate rules with the same one-line body
+   are the more obviously-correct-at-a-glance form for "hidden if EITHER
+   applies," so that's what's below).
 
    Static markup (index.html) keeps the button in the DOM at every width —
    spec/highway-to-hill.test.ts's own existence check is unaffected, this
-   is visibility only. If the visitor toggled adaptive ON at a wide viewport
-   and then shrank the window below this line, `hth-size` stays stored as
-   "adaptive" (home.ts never clears it) but — since both rules above are
-   gated at the identical threshold — the rendered layout is indistinguishable
-   from "current" the whole time it's below the line; widening the window
-   back past 1440px snaps both the button and the extra space back on
-   together, with nothing left half-applied in between. */
-@media (width <= 1440px) {
+   is visibility only. If the visitor toggled adaptive ON at a size with
+   headroom on at least one axis and then resized the window into the
+   neither-axis-has-headroom corner (or into the mobile regime), `hth-size`
+   stays stored as "adaptive" (home.ts never clears it) but the rendered
+   layout is indistinguishable from "current" for as long as it stays there;
+   regaining headroom outside the mobile regime snaps the button and that
+   axis's extra space back on together, with nothing left half-applied in
+   between. */
+@media (width <= 1440px) and (height <= 900px) {
+  .size-toggle {
+    display: none;
+  }
+}
+
+@media (width <= 940px) {
   .size-toggle {
     display: none;
   }
