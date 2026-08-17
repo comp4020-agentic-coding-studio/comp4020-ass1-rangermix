@@ -51,7 +51,7 @@ rebuilt intuition-first on a real ANU street subgraph.
    default preset), enforced by tests, and an integration-only bug that
    silently no-op'd every bidirectional race was caught by racing the
    integrated build, not by either half's own suites.
-   [`b078bfd...960c9b0`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...960c9b0)
+   [`b078bfd...454b6d7`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...454b6d7)
 
 4. **Exactness over drama.** The final review measured a 153 km/h
    quantization artifact in the graph, which made A\*'s 100 km/h heuristic
