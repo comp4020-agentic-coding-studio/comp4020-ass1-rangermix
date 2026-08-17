@@ -749,6 +749,24 @@ ch3's climb.
    and the ch4/ch5 testids stay. No new hues — existing witness-flash
    and shortcut classes carry the visuals.
 
+## 22. Eighth build review (user, 2026-08-18 — binding)
+
+1. **Splash rewrite.** The `h1` title stays exactly. The copy reframes
+   the site as a live playground — feel how powerful CH is, then see how
+   it works — and gains SHORT instructions for the main surfaces (map:
+   drag pins/pan/zoom; algorithms: row toggles + ⇄; routes presets; the
+   How-it-works page). The core-interaction sentence remains verbatim
+   (it is a page contract). The "don't show this again" option is
+   REMOVED entirely — checkbox, `hth-splash-off` persistence, §19.5's
+   binding line for it, and its spec-test pin are all retired; the
+   splash now shows on every visit until dismissed, with only the
+   per-tab session dismissal and the ⓘ reopen surviving. Explore/Escape
+   dismissal semantics, dialog semantics, and control gating unchanged.
+2. **Header fits one line on phones.** At 390×844 all header items
+   (wordmark, "How it works", ⓘ, theme) sit on ONE row — today the
+   icon pair wraps to a second row. Compaction (padding/gap/type size
+   at narrow widths) rather than dropping any control.
+
 ## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
