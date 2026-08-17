@@ -18,13 +18,11 @@
       // the instant before the deferred module script catches up — same
       // reasoning, same try/catch-guarded read, as the theme stamp above.
       try {
-        // §19.5 (fifth build review): the pre-paint splash-hidden stamp now
-        // also honours the LOCALSTORAGE "don't show this again" preference,
-        // not just this tab's own sessionStorage dismissal — a visitor who
-        // checked that box on a past visit shouldn't see the splash flash
-        // in for an instant on a brand-new tab either, same reasoning as
-        // the sessionStorage half this already covered.
-        if (sessionStorage.getItem("hth-splash") === "1" || localStorage.getItem("hth-splash-off") === "1")
+        // §22 (eighth build review) retired §19.5's persistent
+        // "don't show this again" preference — the splash now shows on
+        // every visit, so the stamp honours ONLY this tab's own
+        // sessionStorage dismissal again.
+        if (sessionStorage.getItem("hth-splash") === "1")
           document.documentElement.setAttribute("data-splash-dismissed", "");
       } catch (e) {}
     </script>
@@ -59,14 +57,22 @@
           <div class="splash" data-testid="splash" role="dialog" aria-modal="true" aria-labelledby="splash-title">
             <div class="splash-copy">
               <h1 id="splash-title">Highway to Hill</h1>
-              <p class="splash-desc">Highway to Hill is a live playground where two ways of finding a route race each other across Canberra's real streets.</p>
+              <p class="splash-desc">This site is a live playground: feel how
+                much work Contraction Hierarchies saves on Canberra's real
+                streets, then see exactly how it does it. Every number is
+                measured live in your browser, never invented.</p>
               <p class="core">Drop two pins on Canberra. Watch Dijkstra flood the city while Contraction Hierarchies thread a handful of shortcuts — same route, a fraction of the work.</p>
-              <p class="splash-desc">Drag either pin to a new spot, switch on extra algorithms, and watch the difference for yourself. Every number here is measured live in your browser, never invented.</p>
+              <ul class="splash-how">
+                <li><strong>Map</strong> — drag pin A or B anywhere; drag the
+                  empty map to pan, scroll or pinch to zoom.</li>
+                <li><strong>Algorithms</strong> — switch extra racers on in the
+                  Algorithms panel; ⇄ runs a searcher from both ends.</li>
+                <li><strong>Routes</strong> — try a preset under the map, or
+                  Surprise me.</li>
+                <li><strong>How it works</strong> — five short hands-on
+                  chapters explain the trick.</li>
+              </ul>
               <button data-testid="explore" type="button" class="btn-primary splash-explore">Explore the race →</button>
-              <label class="splash-suppress">
-                <input data-testid="splash-suppress" type="checkbox" />
-                Don't show this again
-              </label>
             </div>
           </div>
         </div>

@@ -107,25 +107,18 @@ export function effectiveViewMode(mode: "overlay" | "compare", splashDismissed: 
   return splashDismissed ? mode : "overlay";
 }
 
-/** §19.5 (fifth build review — the ⓘ splash-reopen control): whether the
- * splash should be visible at BOOT, now decided by two independent flags
- * instead of one — the pre-existing per-tab sessionStorage dismissal
- * (`sessionDismissed`) and the new persistent "don't show this again"
- * localStorage preference (`permanentlyOff`, home.ts's loadSplashOff()).
- * Either one alone is enough to keep the splash hidden on load; neither
- * clears the other (a visitor who unchecks the box mid-session still
- * starts dismissed on THIS tab's next reload via sessionStorage, and one
- * who never checked it but already clicked Explore this session stays
- * dismissed regardless of the box). Pure so this two-flag decision is
- * unit-testable without any DOM/storage, same rationale as
- * autoRunPins/shouldArmAutoRun/effectiveViewMode above — boot()'s own
- * `if (!shouldShowSplashOnBoot(...))` branch (which also sets
- * `splashDismissed`/`splashEl.hidden` and, via the SAME
- * updateControlsEnabled()/updateSplashInert() calls that branch already
- * made before this round, arms every gated control immediately) is the
- * thin, untested-here DOM consumer. */
-export function shouldShowSplashOnBoot(sessionDismissed: boolean, permanentlyOff: boolean): boolean {
-  return !sessionDismissed && !permanentlyOff;
+/** Whether the splash should be visible at BOOT. §22 (eighth build
+ * review) retired §19.5's second flag — the persistent "don't show this
+ * again" preference is gone, so the splash shows on every visit and the
+ * only suppressor left is the pre-existing per-tab sessionStorage
+ * dismissal (`sessionDismissed`). Still pure and exported, same
+ * rationale as autoRunPins/shouldArmAutoRun/effectiveViewMode above —
+ * boot()'s own `if (!shouldShowSplashOnBoot(...))` branch (which also
+ * sets `splashDismissed`/`splashEl.hidden` and, via the SAME
+ * updateControlsEnabled()/updateSplashInert() calls, arms every gated
+ * control immediately) is the thin, untested-here DOM consumer. */
+export function shouldShowSplashOnBoot(sessionDismissed: boolean): boolean {
+  return !sessionDismissed;
 }
 
 /** §19.5's own live-caught bug fix, pulled out of open() (below) into its
@@ -497,31 +490,6 @@ function saveViewMode(mode: "overlay" | "compare"): void {
   }
 }
 
-// §19.5 (fifth build review) — the splash's own "don't show this again"
-// preference: same guarded try/catch pattern, and same PERSISTENT
-// localStorage (not sessionStorage — deliberately outlives this tab/session,
-// unlike SPLASH_KEY below, which is the existing per-tab dismissal flag).
-// Read at boot by shouldShowSplashOnBoot (pure, unit-tested) alongside that
-// per-tab flag; written whenever the splash's own checkbox (index.html)
-// changes — see the `splashSuppressCheckbox` wiring further down.
-const SPLASH_OFF_KEY = "hth-splash-off";
-
-function loadSplashOff(): boolean {
-  try {
-    return localStorage.getItem(SPLASH_OFF_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function saveSplashOff(off: boolean): void {
-  try {
-    localStorage.setItem(SPLASH_OFF_KEY, off ? "1" : "0");
-  } catch {
-    /* storage unavailable — the checkbox still works in-memory for this pageview */
-  }
-}
-
 function boot(): void {
   initTheme();
 
@@ -537,10 +505,8 @@ function boot(): void {
   const loadNote = document.getElementById("load-note");
   const splashEl = document.querySelector<HTMLElement>('[data-testid="splash"]');
   const exploreBtn = document.querySelector<HTMLButtonElement>('[data-testid="explore"]');
-  // §19.5: the header's ⓘ button (re-opens the splash at any time) and the
-  // splash's own "don't show this again" checkbox.
+  // §19.5: the header's ⓘ button — re-opens the splash at any time.
   const splashOpenBtn = document.querySelector<HTMLButtonElement>('[data-testid="splash-open"]');
-  const splashSuppressCheckbox = document.querySelector<HTMLInputElement>('[data-testid="splash-suppress"]');
   const raceRunBtn = document.querySelector<HTMLButtonElement>('[data-testid="race-run"]');
   // Roster round (spec §18): the panel is built from src/race/roster.ts's
   // own ROSTER array, not two hand-named toggles any more -- every
@@ -817,21 +783,18 @@ function boot(): void {
     exploreBtn?.focus(); // same autofocus-the-primary-action treatment a fresh splash gets
   }
 
-  // §19.5: boot-time visibility now depends on TWO independent preferences,
-  // not just the per-tab sessionStorage dismissal — see shouldShowSplashOnBoot's
-  // own comment for why neither flag clears the other.
-  if (!shouldShowSplashOnBoot(safeSessionGet(SPLASH_KEY) === "1", loadSplashOff())) {
-    // Pre-dismissed earlier this session, or permanently suppressed via the
-    // splash's own checkbox on an earlier visit: start hidden with no
-    // animation or flash — index.html's own inline head script already
-    // stamped `data-splash-dismissed` on <html> before first paint for the
-    // CSS half of that (both reasons, see its own updated comment); setting
-    // `hidden` here is the JS-observable half that
+  // §22 retired the persistent off-preference: boot-time visibility is the
+  // per-tab sessionStorage dismissal alone again.
+  if (!shouldShowSplashOnBoot(safeSessionGet(SPLASH_KEY) === "1")) {
+    // Pre-dismissed earlier this session: start hidden with no animation
+    // or flash — index.html's own inline head script already stamped
+    // `data-splash-dismissed` on <html> before first paint for the CSS
+    // half of that; setting `hidden` here is the JS-observable half that
     // updateControlsEnabled/updateSplashInert/maybeArmAutoRun actually read.
     splashDismissed = true;
     if (splashEl) splashEl.hidden = true;
   } else {
-    // First splash this session, not suppressed: autofocus the primary
+    // First splash this session: autofocus the primary
     // action — a real, enabled, on-screen button, safe to autofocus — so
     // keyboard use starts right where a mouse visitor's eye lands.
     exploreBtn?.focus();
@@ -861,24 +824,6 @@ function boot(): void {
   // already get, see GatedControls' own comment) and simply calls open()
   // above; open() itself already no-ops if the splash is already showing.
   splashOpenBtn?.addEventListener("click", open);
-
-  // §19.5: the splash's own "don't show this again" checkbox — starts
-  // matching whatever was persisted on an earlier visit (so reopening via
-  // ⓘ after having checked it before shows it still checked), and persists
-  // on every change. Purely a preference write: unlike Explore/Escape, it
-  // never itself dismisses or reopens the CURRENT splash instance (spec
-  // §19.5: "the Explore/Escape dismissal semantics... are unchanged").
-  if (splashSuppressCheckbox) {
-    splashSuppressCheckbox.checked = loadSplashOff();
-    // Captured into its own const (not the outer parameter-like reference)
-    // so the null-narrowing above still holds inside this nested closure —
-    // same cross-closure-narrowing idiom, same reason, as wireRosterRowToggle's
-    // own `node` capture further down.
-    const checkbox = splashSuppressCheckbox;
-    checkbox.addEventListener("change", () => {
-      saveSplashOff(checkbox.checked);
-    });
-  }
 
   // Which views a caller should draw pins/frames onto right now: the single
   // overlay `view` in overlay mode, or every active Compare panel's own

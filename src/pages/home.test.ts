@@ -121,26 +121,16 @@ describe("effectiveViewMode (H5 gate fix — the persisted-Compare splash deadlo
   });
 });
 
-// §19.5 (fifth build review — the ⓘ splash-reopen control): boot-time splash
-// visibility now depends on TWO independent, never-mutually-clearing flags
-// instead of one. Each test flips exactly one flag away from "show" to pin
-// down that both are independently load-bearing, matching the same
-// one-flag-at-a-time discipline shouldArmAutoRun's own tests above use.
-describe("shouldShowSplashOnBoot (§19.5 — session dismissal OR the persistent \"don't show this again\" preference, either alone suppresses)", () => {
-  it("shows the splash when neither flag is set (a genuinely first visit)", () => {
-    expect(shouldShowSplashOnBoot(false, false)).toBe(true);
+// §22 (eighth build review) retired §19.5's persistent "don't show this
+// again" preference: boot-time splash visibility is the per-tab session
+// dismissal alone again — the splash shows on every visit until dismissed.
+describe("shouldShowSplashOnBoot (§22 — session dismissal is the only suppressor)", () => {
+  it("shows the splash on any visit that hasn't dismissed it this session", () => {
+    expect(shouldShowSplashOnBoot(false)).toBe(true);
   });
 
-  it("off-pref set (localStorage \"hth-splash-off\") suppresses the splash even on a fresh session with no sessionStorage dismissal", () => {
-    expect(shouldShowSplashOnBoot(false, true)).toBe(false);
-  });
-
-  it("session dismissal alone (the pre-existing rule) still suppresses, off-pref or not", () => {
-    expect(shouldShowSplashOnBoot(true, false)).toBe(false);
-  });
-
-  it("both flags set: still suppressed (not a special/different state)", () => {
-    expect(shouldShowSplashOnBoot(true, true)).toBe(false);
+  it("session dismissal suppresses it for the rest of this tab's session", () => {
+    expect(shouldShowSplashOnBoot(true)).toBe(false);
   });
 });
 

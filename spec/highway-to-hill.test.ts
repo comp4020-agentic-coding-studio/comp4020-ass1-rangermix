@@ -45,7 +45,6 @@ export const CONTRACTS = {
     astarNote: "astar-note",
     sizeToggle: "size-toggle",
     splashOpen: "splash-open",
-    splashSuppress: "splash-suppress",
     toys: ["toy-flood", "toy-hierarchy", "toy-climb", "toy-contraction", "toy-order"],
   },
   attribution: "OpenStreetMap contributors",
@@ -174,22 +173,15 @@ describe("spec: home page (/) contracts", () => {
     },
   );
 
-  // §19.5: the splash's own "don't show this again" preference — a real
-  // checkbox so its state (and native label association) needs no
-  // bespoke ARIA; home.ts's loadSplashOff/saveSplashOff own the persistence
-  // (untestable from static HTML, exercised in home.test.ts instead).
-  it(
-    `"don't show this again" checkbox [data-testid=${CONTRACTS.testids.splashSuppress}] exists inside the splash, a real checkbox input (spec §19.5)`,
-    () => {
-      const doc = pageDoc("index.html");
-      const splash = doc?.querySelector('[data-testid="splash"]');
-      const input = doc?.querySelector(`[data-testid="${CONTRACTS.testids.splashSuppress}"]`);
-      expect(input).toBeTruthy();
-      expect(input?.tagName).toBe("INPUT");
-      expect(input?.getAttribute("type")).toBe("checkbox");
-      expect(splash?.contains(input as Node)).toBe(true);
-    },
-  );
+  // §22 (eighth build review) RETIRED §19.5's "don't show this again"
+  // preference — the splash shows on every visit now, so this test's old
+  // twin (the checkbox-exists pin) is gone and its inverse is pinned
+  // instead: no suppress control may quietly return.
+  it("the retired don't-show-this-again control stays retired — no splash-suppress checkbox anywhere on the page (spec §22.1)", () => {
+    const doc = pageDoc("index.html");
+    expect(doc?.querySelector('[data-testid="splash-suppress"]')).toBeNull();
+    expect(doc?.querySelector(".splash input")).toBeNull();
+  });
 
   it(
     `race canvas [data-testid=${CONTRACTS.testids.raceCanvas}] has role=img and a non-empty aria-label`,

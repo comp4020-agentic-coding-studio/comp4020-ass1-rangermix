@@ -295,6 +295,20 @@ a {
   margin-left: auto;
 }
 
+/* §22.2 (eighth build review): at phone widths ALL header items sit on ONE
+   row — before this, the .nav-icons pair wrapped to a second row at 390
+   (the J3-era comment above documents why it wraps as a PAIR; that wrapper
+   stays as ultra-narrow insurance, but with this compaction it no longer
+   needs to wrap at any graded viewport). Trimmed paddings/gaps plus one
+   type step: 390 needs ~410px at desktop metrics, ~365px with these. */
+@media (width <= 430px) {
+  .site-head nav {
+    gap: 8px 12px;
+    padding: 14px 12px;
+    font-size: 0.8rem;
+  }
+}
+
 /* Fourth build review (spec §18.10): the theme button is icon-only at EVERY
    width now, not just slim viewports (superseding build-review §16.2's
    520px-only compaction below) — theme.ts writes the state's glyph (system
@@ -730,12 +744,18 @@ a {
    documents. Border + radius matches .map-stack's own panel treatment so
    it reads as "the map box, showing different content right now" rather
    than a jarring shape change once it's dismissed. */
+/* Centering via the CHILD's `margin: auto` (below), never
+   `align-items/justify-content: center` here: on a flex SCROLL container
+   those center the overflowing child so its TOP half sticks out above the
+   scrollable range, unreachable — found live at 390×844 when §22.1's
+   instruction list made the copy taller than the phone-height map frame
+   (the title was the part cut off). Auto margins center identically when
+   the content fits and collapse to a normal top-anchored scroll when it
+   doesn't. */
 .splash {
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
   overflow-y: auto;
   padding: 32px 24px;
   border: 1px solid var(--line);
@@ -770,6 +790,7 @@ html[data-splash-dismissed] .splash {
   align-items: center;
   gap: 16px;
   max-width: 46ch;
+  margin: auto; /* see .splash's own comment — safe centering on a scroll container */
 }
 
 .splash-copy h1 {
@@ -796,29 +817,31 @@ html[data-splash-dismissed] .splash {
   margin-top: 8px;
 }
 
-/* §19.5 (fifth build review): the "don't show this again" preference, a
-   real <label> wrapping the checkbox (not a separate <label for>) so the
-   WHOLE row is the click/tap target, not just the 18px box — min-height:44px
-   keeps that target at the same WCAG 2.5.8 floor every other control on
-   this page uses (see .chip's own min-height for the convention this
-   matches). Styling only — home.ts's loadSplashOff/saveSplashOff
-   (localStorage, "hth-splash-off") own the persistence; this rule just
-   gives the row its shape and touch target. */
-.splash-suppress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 4px 2px;
+/* §22.1's instruction list — one line per surface (Map / Algorithms /
+   Routes / How it works), left-aligned inside the otherwise-centered
+   splash column so the strong lead-ins line up and scan as a legend.
+   (§19.5's .splash-suppress checkbox rules lived here until §22 retired
+   the whole don't-show-this-again preference.) */
+.splash-how {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
   color: var(--muted);
-  font-size: 0.85rem;
-  cursor: pointer;
+  font-size: 0.88rem;
 }
 
-.splash-suppress input {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
+.splash-how li {
+  margin: 0 0 6px;
+}
+
+.splash-how li:last-child {
+  margin-bottom: 0;
+}
+
+.splash-how strong {
+  color: var(--ink);
+  font-weight: 600;
 }
 
 .controls {
