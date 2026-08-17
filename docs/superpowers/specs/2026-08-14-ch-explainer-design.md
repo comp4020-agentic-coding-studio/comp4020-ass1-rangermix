@@ -689,6 +689,66 @@ colour of its own.
    Canberra canvas the extra vertical room AND wheel/button zoom + pan
    (its own local view state — never the home page's shared store).
 
+## 21. Seventh build review (user, 2026-08-17 — binding)
+
+Two items. Item 1 (query-demo nodes cropped at stage edges) was diagnosed
+and fixed inline before this section landed: declutterXY's clamp bounds
+equalled the stage box, so repulsion pinned node centers onto the walls
+and `.climb-nodes`' overflow clip cropped them to half dots — fixed by
+the shared `NODE_CLAMP_BOUNDS` inset (half the 24 px node box) with two
+real-artifact sensors. Item 2 is this round: the user finds chapters 4–5
+(shortcuts + ordering) "still confusing and not straightforward"; the
+approved direction is the full treatment — narrate the decision AND show
+the consequence AND tell one story. Diagnosis on record: ch4's click
+shows all witness/shortcut outcomes at once (a firework, not a
+decision), ch5's tiles show bare integers (the claimed "messier before
+simpler" is never SEEN), and neither chapter ties back to ch2's ranks or
+ch3's climb.
+
+1. **Chapter 4 becomes a narrated contraction.** Clicking an
+   intersection starts a stepped sequence over its neighbour pairs, one
+   pair per beat (~1.2 s auto-advance, with play/step/reset chips per
+   the ch3 toy's convention): (a) the pair's two through-legs highlight
+   with the through cost in seconds; (b) the best detour avoiding the
+   doomed intersection flashes on the real streets with its cost (or
+   "no detour exists"); (c) a narration line under the stage stamps the
+   verdict with the real measured numbers — witness/free pass, or
+   shortcut added (the dashed curve draws and persists only now). A
+   single-neighbour dead end narrates its degenerate case ("nothing
+   meets through here — free to remove"). Clicking another node
+   mid-sequence completes the current sequence instantly, then starts
+   the new one. `prefers-reduced-motion` jumps to the end state. The
+   running shortcut counter stays. All numbers are the contractor's own
+   measured weights — never scripted.
+2. **Chapter 5's order buttons become map replays.** Pressing an order
+   button replays that contraction order on ONE shared stage: nodes
+   gray out in order (~80 ms cadence, ≈5 s per full run) while
+   unlabelled dashed shortcut curves accumulate live and the tile's
+   count climbs. Pressing a different order clears the curves and
+   replays. Tiles keep their totals + bars as the scoreboard (numbers
+   remain live runs, never cached figures); reduced motion shows the
+   final state instantly. "Your turn" draws the same curves as the
+   visitor taps, so their own clutter accumulates against the
+   heuristic's count.
+3. **One story in the copy.** Chapter 4's body copy reframes
+   contraction as the demolition schedule behind ch2's ranking: remove
+   intersections quietest-first under one rule — no travel time may
+   ever change; detour already exists = free pass (witness), otherwise
+   pave a bypass (shortcut) carrying exactly the through time. Chapter
+   5's copy closes the loop: contract quiet streets first and the
+   survivors are exactly the big roads — the hierarchy ch2 revealed,
+   and why ch3's climb works. Chapter HEADINGS stay contract-exact
+   (unchanged); body copy and both "What to notice" captions rewrite.
+4. **Shared drawing, tested.** The shortcut-curve helpers
+   (curveNormal/controlPoint/draw) move from contraction.ts into
+   toytownView.ts so both chapters draw identical curves — ch4 keeps
+   weight labels (its narration device), ch5's replay omits them
+   (volume is the point). New sensors: pair-sequence order + verdict
+   math from real weights, replay determinism, reduced-motion jump,
+   your-turn curve accumulation; order.test.ts's pinned inequalities
+   and the ch4/ch5 testids stay. No new hues — existing witness-flash
+   and shortcut classes carry the visuals.
+
 ## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
