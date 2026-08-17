@@ -1,38 +1,30 @@
-// Multi-heuristic A* roster (spec §18.4): three named variants sharing one
-// admissible base estimate (haversine-to-target / a per-graph speed
-// ceiling — see astar.ts's own doc for why the ceiling is graph-derived,
-// not a fixed constant), differing only in how that estimate is USED:
+// Multi-heuristic A* roster (spec §18.4, weighted removed by spec §20.2):
+// two named variants sharing ONE admissible base estimate (haversine-to-
+// target / a per-graph speed ceiling — see astar.ts's own doc for why the
+// ceiling is graph-derived, not a fixed constant), differing only in how
+// that estimate is USED:
 //
 //   straight  — astar.ts's existing astar(), unchanged: key = g + h,
 //               h admissible -> exact (equivalence-tested against dijkstra).
-//   weighted  — same g+h search, but h is exaggerated WEIGHTED_FACTOR x
-//               first: inadmissible on purpose, so the search can (and
-//               sometimes does) settle `to` via a longer-than-optimal
-//               route. Still the SAME astar() search loop as straight —
-//               only which `h` gets built differs (see makeHeuristic) — so
-//               reuses astar.ts's own tested implementation and scratch
-//               pool rather than duplicating it.
-//   greedy    — the UNSCALED admissible h (same value as straight), but the
-//               search key is h ALONE: `g` is still tracked (needed to
-//               report the found route's true cost) but never enters the
-//               priority the heap orders by. This genuinely is a different
-//               search loop from astar() (greedySearch below), not just a
-//               different h, so it keeps its own persistent scratch pool.
+//   greedy    — the SAME admissible h as straight, but the search key is h
+//               ALONE: `g` is still tracked (needed to report the found
+//               route's true cost) but never enters the priority the heap
+//               orders by. This genuinely is a different search loop from
+//               astar() (greedySearch below), not just a different h, so it
+//               keeps its own persistent scratch pool.
 //
-// bidiAstar.ts reuses makeHeuristic (never re-derives the weighted scaling
-// itself) to build its own balanced bidirectional forms of all three.
+// bidiAstar.ts reuses makeHeuristic to build its own bidirectional forms:
+// straight through the balanced (Ikeda average-function) framework, greedy
+// through FIRST-FRONTIER-MEET instead (spec §20.4 — see that file's header
+// for why the balanced framework's termination proof needs g+potential
+// lower-bound keys throughout, which greedy's h-only key doesn't provide).
 import { MinHeap } from "./heap.ts";
 import { astar, routeCost } from "./astar";
 import type { Graph } from "./graph";
 import type { SearchResult } from "./dijkstra";
 import { haversine } from "../snap";
 
-export type HeuristicKind = "straight" | "weighted" | "greedy";
-
-/** spec §18.4: "A* — weighted (1.5x)" — the exact, named scale factor,
- * exported so bidiAstar.ts (via makeHeuristic) and variants.test.ts both
- * read the SAME constant rather than risking two copies drifting apart. */
-export const WEIGHTED_FACTOR = 1.5;
+export type HeuristicKind = "straight" | "greedy";
 
 /**
  * Builds the heuristic function for one A* variant, bound to a specific
@@ -42,29 +34,30 @@ export const WEIGHTED_FACTOR = 1.5;
  * variants.test.ts's synthetic graphs pass the fixed `MAX_SPEED_MPS` they
  * also build their OWN weights from — see astar.ts's doc on why a fixed
  * ceiling isn't safe enough for the real graph but is fine, by
- * construction, for those). "straight" and "greedy" share the identical
- * unscaled, admissible estimate — greedy's disclosed suboptimality comes
- * entirely from astarVariant's h-only priority key (see greedySearch's own
- * doc below), never from a different h value, matching spec §18.4's
- * "direction guided" framing: it still knows the honest direction, it just
- * stops caring how far it has already come. "weighted" is that SAME
- * estimate scaled by WEIGHTED_FACTOR — deliberately inadmissible.
+ * construction, for those). "straight" and "greedy" share this IDENTICAL
+ * admissible estimate — greedy's disclosed suboptimality comes entirely
+ * from astarVariant's h-only priority key (see greedySearch's own doc
+ * below) or bidiGreedyFirstMeet's own stopping rule (bidiAstar.ts), never
+ * from a different h value here, matching spec §18.4's "direction guided"
+ * framing: it still knows the honest direction, it just stops caring how
+ * far it has already come. (Before spec §20.2 removed weighted A*, this
+ * function's return value DID depend on which kind was passed — scaling h
+ * by WEIGHTED_FACTOR for "weighted". With that kind gone, straight and
+ * greedy compute the exact same expression, but every caller still passes
+ * its kind through the same call shape the roster dispatches on elsewhere.)
  */
-export function makeHeuristic(
-  kind: HeuristicKind, graph: Graph, vMax: number, to: number,
-): (v: number) => number {
-  const base = (v: number) => haversine(graph.lon[v], graph.lat[v], graph.lon[to], graph.lat[to]) / vMax;
-  return kind === "weighted" ? (v: number) => base(v) * WEIGHTED_FACTOR : base;
+export function makeHeuristic(graph: Graph, vMax: number, to: number): (v: number) => number {
+  return (v: number) => haversine(graph.lon[v], graph.lat[v], graph.lon[to], graph.lat[to]) / vMax;
 }
 
-// Own persistent scratch for greedySearch ONLY — straight/weighted delegate
-// to astar.ts's astar(), which already has its own pool; this one is
+// Own persistent scratch for greedySearch ONLY — straight delegates to
+// astar.ts's astar(), which already has its own pool; this one is
 // independent of that (and of dijkstra.ts's, bidijkstra.ts's, bidiAstar.ts's)
 // for the same reason every algorithm racing in the same worker keeps its
 // own pool (see astar.ts's header comment): greedySearch can run in the
-// SAME race as astar-straight/weighted (a family bezel may have several
-// active rows at once), so sharing a pool would mean one overwriting the
-// other's in-flight generation.
+// SAME race as astar-straight (a family bezel may have several active rows
+// at once), so sharing a pool would mean one overwriting the other's
+// in-flight generation.
 let scratchN = 0;
 let dist = new Float64Array(0);
 let parent = new Int32Array(0);
@@ -150,14 +143,13 @@ function withRecomputedDist(g: Graph, r: SearchResult): SearchResult {
 /**
  * Runs one named A* variant and returns its SearchResult, `dist` ALWAYS
  * being the returned route's true recomputed cost (see routeCost and
- * withRecomputedDist above) — never a heap key, for any kind: straight and
- * weighted delegate to astar.ts's own astar() (identical search loop,
- * different `h` — see this file's header comment), greedy uses
- * greedySearch above. Suboptimality is never hidden: for "weighted"/
- * "greedy", `dist` is whatever route THIS variant actually found, exactly
- * as measured — the caller (worker.ts / controller.ts) is what compares it
- * against the always-exact dijkstra/CH result and discloses the gap
- * (spec §18.4's honesty rule).
+ * withRecomputedDist above) — never a heap key, for either kind: straight
+ * delegates to astar.ts's own astar() (identical search loop — see this
+ * file's header comment), greedy uses greedySearch above. Suboptimality is
+ * never hidden: for "greedy", `dist` is whatever route THIS variant
+ * actually found, exactly as measured — the caller (worker.ts /
+ * controller.ts) is what compares it against the always-exact dijkstra/CH
+ * result and discloses the gap (spec §18.4's honesty rule).
  */
 export function astarVariant(
   kind: HeuristicKind, g: Graph, from: number, to: number, h: (v: number) => number,

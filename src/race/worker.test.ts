@@ -3,21 +3,17 @@ import { ROSTER } from "./roster";
 import { getHeuristicKind } from "../algos/heuristicKind";
 
 describe("getHeuristicKind (registry heuristic-kind lookup)", () => {
-  it("covers exactly the roster's astar ids (astar-straight, astar-weighted, astar-greedy)", () => {
+  it("covers exactly the roster's astar ids (astar-straight, astar-greedy — astar-weighted removed by spec §20.2)", () => {
     const astarIds = ROSTER.filter((e) => e.id.startsWith("astar")).map((e) => e.id);
-    expect(astarIds).toEqual(["astar-straight", "astar-weighted", "astar-greedy"]);
+    expect(astarIds).toEqual(["astar-straight", "astar-greedy"]);
     for (const id of astarIds) {
       const kind = getHeuristicKind(id);
-      expect(["straight", "weighted", "greedy"]).toContain(kind);
+      expect(["straight", "greedy"]).toContain(kind);
     }
   });
 
   it("maps astar-straight to 'straight'", () => {
     expect(getHeuristicKind("astar-straight")).toBe("straight");
-  });
-
-  it("maps astar-weighted to 'weighted'", () => {
-    expect(getHeuristicKind("astar-weighted")).toBe("weighted");
   });
 
   it("maps astar-greedy to 'greedy'", () => {

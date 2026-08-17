@@ -49,8 +49,9 @@ import type { Csr, Graph } from "../algos/graph";
  * itself types workerKey/bidiKey as plain strings (its whole point is to be
  * the SINGLE place those literal values live). This is deliberately NOT the
  * same concept as a racer's stable UI identity (roster.ts's
- * `RosterEntry["id"]`, five values, re-exported by controller.ts as
- * `RacerId`) — a searcher's id never changes, but which Algo key represents
+ * `RosterEntry["id"]`, four values since spec §20.2 removed weighted A*,
+ * re-exported by controller.ts as `RacerId`) — a searcher's id never
+ * changes, but which Algo key represents
  * it flips between workerKey and bidiKey as the family bidirectional
  * modifier toggles (spec §18.6). controller.ts owns translating between the
  * two; see that file's own header comment for the exact seam.
@@ -162,13 +163,13 @@ function fnFor(id: Exclude<RosterEntry["id"], "ch">, bidi: boolean): AlgoFn {
       ? (graph, from, to) => bidijkstra(graph, getGRev(graph), from, to)
       : (graph, from, to) => dijkstraCsr(graph.n, graph.fwd, from, to);
   }
-  // astar-straight | astar-weighted | astar-greedy — derived from registry
-  // entry lookup via getHeuristicKind (fail-loud on unknown), not silent string
-  // prefix slicing.
+  // astar-straight | astar-greedy — derived from registry entry lookup via
+  // getHeuristicKind (fail-loud on unknown), not silent string prefix
+  // slicing.
   const kind = getHeuristicKind(id);
   return bidi
     ? (graph, from, to) => bidiAstar(kind, graph, getGRev(graph), from, to, getVMax(graph))
-    : (graph, from, to) => astarVariant(kind, graph, from, to, makeHeuristic(kind, graph, getVMax(graph), to));
+    : (graph, from, to) => astarVariant(kind, graph, from, to, makeHeuristic(graph, getVMax(graph), to));
 }
 
 const registry: Record<string, AlgoFn> = {};

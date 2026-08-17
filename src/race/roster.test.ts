@@ -3,10 +3,10 @@ import { ROSTER } from "./roster";
 
 // Structural sanity for the contract-first roster both wave tasks consume.
 describe("roster contract", () => {
-  it("ids are unique and count matches spec §18's five racers", () => {
+  it("ids are unique and count matches the roster (four racers since §20.2)", () => {
     const ids = ROSTER.map((r) => r.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids.length).toBe(5);
+    expect(ids.length).toBe(4);
   });
 
   it("exactly the two core racers, and they are Dijkstra and CH", () => {

@@ -1,12 +1,12 @@
 // Explicit mapping from astar id to HeuristicKind, fail-loud on unknown ids.
-export type HeuristicKindId = "astar-straight" | "astar-weighted" | "astar-greedy";
+// (spec §20.2: astar-weighted removed from the roster — only the two
+// remaining astar ids map here now.)
+export type HeuristicKindId = "astar-straight" | "astar-greedy";
 
-export function getHeuristicKind(id: string): "straight" | "weighted" | "greedy" {
+export function getHeuristicKind(id: string): "straight" | "greedy" {
   switch (id) {
     case "astar-straight":
       return "straight";
-    case "astar-weighted":
-      return "weighted";
     case "astar-greedy":
       return "greedy";
     default:

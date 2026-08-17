@@ -183,7 +183,7 @@ describe("astarVariant", () => {
         const n = 2 + Math.floor(rand() * 30);
         const { g } = coordGraph(rand, n, n * 3);
         for (let t = 0; t < n; t++) {
-          const h = makeHeuristic("straight", g, MAX_SPEED_MPS, t);
+          const h = makeHeuristic(g, MAX_SPEED_MPS, t);
           expect(astarVariant("straight", g, 0, t, h).dist, `trial ${trial} target ${t}`).toBe(
             dijkstra(g, 0, t).dist,
           );
@@ -193,7 +193,7 @@ describe("astarVariant", () => {
   );
 
   it(
-    "weighted and greedy both return a path whose recomputed edge-sum EXACTLY equals the " +
+    "greedy returns a path whose recomputed edge-sum EXACTLY equals the " +
       "reported dist, on the seeded sweep (validity — spec §18.4's honesty rule depends on " +
       "this number being right whether or not the route itself is optimal; independently " +
       "recomputed here from the raw edge list, not by calling astar.ts's own routeCost, so " +
@@ -205,15 +205,13 @@ describe("astarVariant", () => {
         const { g, edges } = coordGraph(rand, n, n * 3);
         const wOf = edgeWeightLookup(edges);
         for (let t = 1; t < n; t++) {
-          for (const kind of ["weighted", "greedy"] as const) {
-            const h = makeHeuristic(kind, g, MAX_SPEED_MPS, t);
-            const r = astarVariant(kind, g, 0, t, h);
-            if (r.path.length < 2) continue; // unreachable this trial/target — nothing to validate
-            expect(
-              r.dist,
-              `${kind} trial ${trial} 0->${t}: reported dist vs independently-recomputed path cost`,
-            ).toBeCloseTo(pathCost(r.path, wOf), 6);
-          }
+          const h = makeHeuristic(g, MAX_SPEED_MPS, t);
+          const r = astarVariant("greedy", g, 0, t, h);
+          if (r.path.length < 2) continue; // unreachable this trial/target — nothing to validate
+          expect(
+            r.dist,
+            `greedy trial ${trial} 0->${t}: reported dist vs independently-recomputed path cost`,
+          ).toBeCloseTo(pathCost(r.path, wOf), 6);
         }
       }
     },
@@ -323,9 +321,10 @@ describe("bidiAstar", () => {
   );
 
   it(
-    "weighted and greedy both return a path whose recomputed edge-sum EXACTLY equals the " +
-      "reported dist, on the seeded sweep (validity — exactness is NOT claimed for these bidi " +
-      "forms, per bidiAstar.ts's own proof note, but the reported number must still be honest)",
+    "greedy (first-frontier-meet, spec §20.4) returns a path whose recomputed edge-sum " +
+      "EXACTLY equals the reported dist, on the seeded sweep (validity — exactness is NOT " +
+      "claimed for this bidi form, per bidiGreedyFirstMeet's own doc in bidiAstar.ts, but the " +
+      "reported number must still be honest)",
     () => {
       const rand = rng(888);
       for (let trial = 0; trial < 15; trial++) {
@@ -334,16 +333,86 @@ describe("bidiAstar", () => {
         const gRev = transpose(n, g.fwd);
         const wOf = edgeWeightLookup(edges);
         for (let t = 1; t < n; t++) {
-          for (const kind of ["weighted", "greedy"] as const) {
-            const r = bidiAstar(kind, g, gRev, 0, t, MAX_SPEED_MPS);
-            if (r.path.length < 2) continue;
-            expect(
-              r.dist,
-              `bidi ${kind} trial ${trial} 0->${t}: reported dist vs independently-recomputed path cost`,
-            ).toBeCloseTo(pathCost(r.path, wOf), 6);
-          }
+          const r = bidiAstar("greedy", g, gRev, 0, t, MAX_SPEED_MPS);
+          if (r.path.length < 2) continue;
+          expect(
+            r.dist,
+            `bidi greedy trial ${trial} 0->${t}: reported dist vs independently-recomputed path cost`,
+          ).toBeCloseTo(pathCost(r.path, wOf), 6);
         }
       }
+    },
+  );
+
+  it("is deterministic: repeated calls on the same query return identical dist/path/settled count", () => {
+    const rand = rng(2021);
+    const { g } = coordGraph(rand, 20, 60);
+    const gRev = transpose(20, g.fwd);
+    const a = bidiAstar("greedy", g, gRev, 0, 19, MAX_SPEED_MPS);
+    const b = bidiAstar("greedy", g, gRev, 0, 19, MAX_SPEED_MPS);
+    expect(b.dist).toBe(a.dist);
+    expect(b.path).toEqual(a.path);
+    expect(b.settled.length).toBe(a.settled.length);
+    expect(Array.from(b.settled)).toEqual(Array.from(a.settled));
+  });
+
+  it("from === to: trivial single-node path, dist 0, no error", () => {
+    const rand = rng(303);
+    const { g } = coordGraph(rand, 12, 30);
+    const gRev = transpose(12, g.fwd);
+    const r = bidiAstar("greedy", g, gRev, 5, 5, MAX_SPEED_MPS);
+    expect(r.path).toEqual([5]);
+    expect(r.dist).toBe(0);
+  });
+
+  it("unreachable pair (disconnected components): empty path, dist Infinity, no crash", () => {
+    // Two 2-node components (0<->1, 2<->3), no edges crossing between them —
+    // both frontiers exhaust their own component and the loop ends with no
+    // meet ever found.
+    const g = toyGraph(4, [
+      [0, 1, 1],
+      [1, 0, 1],
+      [2, 3, 1],
+      [3, 2, 1],
+    ]);
+    const lon = [149.0, 149.001, 150.0, 150.001];
+    const lat = [-35.3, -35.299, -34.0, -33.999];
+    for (let i = 0; i < 4; i++) { g.lon[i] = lon[i]; g.lat[i] = lat[i]; }
+    const gRev = transpose(4, g.fwd);
+    const r = bidiAstar("greedy", g, gRev, 0, 2, MAX_SPEED_MPS);
+    expect(r.path).toEqual([]);
+    expect(r.dist).toBe(Infinity);
+  });
+
+  it(
+    "greedy can find a genuinely longer-than-optimal route, and the reported dist reflects it " +
+      "(disclosure math positive) — the SAME hand-built trap as astarVariant's own greedy trap " +
+      "above (S->A is cheap and A is close to T by straight-line distance, but A->T is a slow " +
+      "road; S->B->T is geometrically-further but cheap overall), run bidirectionally: forward " +
+      "greedy from S is pulled toward A (smaller straight-line estimate) exactly as before, and " +
+      "first-frontier-meet stops the instant the two searches share a settled node — verified by " +
+      "running the actual implementation (deterministic, no seeded randomness involved) rather " +
+      "than hand-derived, since which node meets first depends on the alternation order",
+    () => {
+      const g = toyGraph(4, [
+        [0, 1, 1], // S->A: cheap to reach A
+        [1, 2, 100], // A->T: expensive — A is the trap
+        [0, 3, 3], // S->B: a bit more to reach B
+        [3, 2, 3], // B->T: cheap — the true shortest route (total 6)
+      ]);
+      const lon = [149.0, 149.002, 149.002, 149.0];
+      const lat = [-35.3, -35.299, -35.298, -35.298];
+      for (let i = 0; i < 4; i++) { g.lon[i] = lon[i]; g.lat[i] = lat[i]; }
+      const gRev = transpose(4, g.fwd);
+      const dj = dijkstra(g, 0, 2);
+      expect(dj.dist).toBe(6);
+      const r = bidiAstar("greedy", g, gRev, 0, 2, MAX_SPEED_MPS);
+      expect(r.path.length).toBeGreaterThanOrEqual(2);
+      expect(r.path[0]).toBe(0);
+      expect(r.path[r.path.length - 1]).toBe(2);
+      expect(r.dist).toBeGreaterThan(dj.dist); // the disclosure gap itself
+      const pctLonger = (r.dist / dj.dist - 1) * 100;
+      expect(pctLonger).toBeGreaterThan(0); // disclosure math (controller.ts's "+X% longer") stays positive
     },
   );
 });
@@ -488,7 +557,7 @@ describe.skipIf(!haveArtifacts)("astarVariant / bidiAstar on the shipped Canberr
         const from = Math.floor(rand() * graph.n);
         const to = Math.floor(rand() * graph.n);
         const label = `pair ${i} (${from}->${to})`;
-        const h = makeHeuristic("straight", graph, vMax, to);
+        const h = makeHeuristic(graph, vMax, to);
         const dj = dijkstraCsr(graph.n, graph.fwd, from, to);
         const av = astarVariant("straight", graph, from, to, h);
         const ba = bidiAstar("straight", graph, gRev, from, to, vMax);
@@ -496,6 +565,34 @@ describe.skipIf(!haveArtifacts)("astarVariant / bidiAstar on the shipped Canberr
         expect(Math.round(av.dist * 10), `${label} astarVariant vs dijkstra`).toBe(Math.round(dj.dist * 10));
         expect(Math.round(ba.dist * 10), `${label} bidiAstar vs dijkstra`).toBe(Math.round(dj.dist * 10));
         expect(Math.round(c.dist * 10), `${label} chQuery vs dijkstra`).toBe(Math.round(dj.dist * 10));
+      }
+    },
+  );
+
+  it(
+    "bidiAstar('greedy') (first-frontier-meet, spec §20.4) settles a small fraction of " +
+      "dijkstra's node count, for 10 seeded pairs — this is the numeric replacement for a " +
+      "flood: the balanced-framework version this superseded settled 101-103% of the WHOLE " +
+      "graph's node count on hand-picked long preset pairs, 1.3x-4.4x more than dijkstra on the " +
+      "same query (K2's diagnosis, see the routes-round report's k2-report.md for the full " +
+      "measured table); first-frontier-meet stops at the two frontiers' first shared node " +
+      "instead, so it stays small even though it (like plain greedy) never claims optimality",
+    () => {
+      const rand = rng(5150);
+      for (let i = 0; i < 10; i++) {
+        const from = Math.floor(rand() * graph.n);
+        const to = Math.floor(rand() * graph.n);
+        const label = `pair ${i} (${from}->${to})`;
+        const dj = dijkstraCsr(graph.n, graph.fwd, from, to);
+        if (dj.dist === Infinity) continue; // unreachable this pair — settle-ratio isn't meaningful
+        const bg = bidiAstar("greedy", graph, gRev, from, to, vMax);
+        expect(bg.settled.length, `${label} bidi-greedy settled vs dijkstra settled (< 20%)`).toBeLessThan(
+          Math.max(1, dj.settled.length * 0.2),
+        );
+        expect(
+          bg.settled.length,
+          `${label} bidi-greedy settled vs graph size (pre-fix: ~101-103%)`,
+        ).toBeLessThan(graph.n * 0.1);
       }
     },
   );
