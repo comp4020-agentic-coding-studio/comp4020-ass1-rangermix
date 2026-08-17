@@ -773,6 +773,28 @@ export class RaceController {
       // source of truth, never two accumulators that could drift apart
       // (same reasoning run()'s own optimalDist comment already gives).
       const deltaPct = routeDeltaPct(result.dist, optimalDist);
+      // spec §19.4 — THIS racer's own measured wall time, sanitized ONCE
+      // here (final-review fix): a NaN/Infinity `ms` from the worker — no
+      // evidence this happens today, worker.ts's own AlgoResult.ms is
+      // always a real performance.now() delta, but this is the one
+      // boundary where an untrusted message could still hand this class a
+      // non-finite number. Both downstream uses below (`ms` itself, handed
+      // to ui.setTime at finalization, and `duration`, replayDurationMs's
+      // input) now read this SAME clean value — before this fix, only
+      // `duration`'s own inline guard was sanitized, so a NaN `ms` still
+      // reached ui.setTime unsanitized and rendered "NaN ms" in the
+      // defensive case the guard exists for. Un-guarded, a NaN here would
+      // also poison `duration` (replayDurationMs(NaN) is NaN), and
+      // Math.max(...layers.map(l => l.duration)) below would propagate
+      // that NaN into the race's OVERALL duration, not just this layer's:
+      // animate()'s `Math.min(elapsed, duration)` and reduced-motion's
+      // instant-final `renderAt(duration)` call both go NaN too, so EVERY
+      // layer's `elapsedMs >= layer.duration` check (renderAt's own
+      // finalization gate) permanently reads false — every row in the race
+      // stalls unfinalized, not only the bad one. Falls back to 0 (the
+      // same floor replayDurationMs(0) already resolves to, 200 ms), never
+      // silently swallowed elsewhere.
+      const ms = Number.isFinite(result.ms) ? result.ms : 0;
       return {
         algo,
         order,
@@ -781,23 +803,8 @@ export class RaceController {
         path: result.path,
         dashed: deltaPct > 0,
         deltaPct,
-        ms: result.ms,
-        // spec §19.4 — THIS racer's own replay length. Guarded (J4 gate fix,
-        // defensive): a NaN/Infinity `ms` from the worker — no evidence this
-        // happens today, worker.ts's own AlgoResult.ms is always a real
-        // performance.now() delta, but this is the one boundary where an
-        // untrusted message could still hand this class a non-finite number
-        // — would otherwise poison `duration` (replayDurationMs(NaN) is
-        // NaN), and Math.max(...layers.map(l => l.duration)) below propagates
-        // that NaN into the race's OVERALL duration, not just this layer's:
-        // animate()'s `Math.min(elapsed, duration)` and reduced-motion's
-        // instant-final `renderAt(duration)` call both go NaN too, so EVERY
-        // layer's `elapsedMs >= layer.duration` check (renderAt's own
-        // finalization gate) permanently reads false — every row in the race
-        // stalls unfinalized, not only the bad one. Falls back to 0 (the
-        // same floor replayDurationMs(0) already resolves to, 200 ms), never
-        // silently swallowed elsewhere.
-        duration: replayDurationMs(Number.isFinite(result.ms) ? result.ms : 0),
+        ms,
+        duration: replayDurationMs(ms),
         finalized: false,
       };
     });

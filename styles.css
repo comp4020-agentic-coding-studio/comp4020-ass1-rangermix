@@ -370,7 +370,7 @@ a {
 
    J4 gate fix (adopted reviewer recommendation — decouples the two axes,
    superseding J3's original single width>1440px gate for BOTH rules): this
-   rule now gates on its OWN height headroom, not the width threshold below.
+   rule gates on its OWN height headroom, not the width threshold below.
    J3's original reasoning (a hidden size-toggle button must never leave an
    invisible, un-undoable effect still active) still holds, but tying the
    VERTICAL effect to a WIDTH threshold over-applied it — a tall-but-narrow
@@ -378,19 +378,41 @@ a {
    width to gain, and used to get neither. The fix instead makes the
    size-toggle's own visibility (below) an OR of both axes' headroom, so the
    button is never hidden while EITHER effect would be real.
+
+   Final-review fix (Minor #2): the height half of that gate USED TO be a
+   second static media feature right here, `height > 900px` — a single
+   fixed number derived below from chromeH's own DESKTOP-width figure alone
+   (227px). That drifts the moment chromeH isn't 227px, and it isn't at
+   every width this rule's own `width > 940px` companion lets through:
+   between 941–1300px the Routes strip can wrap onto more lines (a
+   narrower map column being what forces the wrap), pushing the TRUE
+   crossover height past 900px — so the static query let this rule bite
+   (and the size-toggle button show, below) at heights just past 900px for
+   a near-zero real gain in that band. Gated on `[data-adaptive-v]`
+   instead: a boolean attribute home.ts's updateChromeHeight() stamps onto
+   `.race-layout` via shouldAdaptVertically() (pure, unit-tested — see its
+   own doc), fed the SAME live chromeH this rule's own calc() reads back
+   out via `--chrome-h` below — the gate and the effect now share one
+   measurement and can never disagree, at any width. The crossover math
+   below is unchanged and still explains where 900px came from.
    The number: this rule's own min-height only ever adds real height once
    `100dvh - chromeH` clears "current" mode's fixed 72vh floor, i.e. once
    `0.28 * viewportHeight > chromeH` (28% being 100%-72%) — at chromeH's own
    live-measured value at any width the desktop (>940px) grid uses without
    route-chip wrapping (227px, read live via home.ts's updateChromeHeight —
    see the J4 gate report for the measurement sweep across widths), that
-   crossover lands at ~811px (227/0.28). 900px is that crossover plus a
-   buffer comfortably clear of the graded 390×844 phone viewport (mobile's
-   own single-column layout, gated separately below 940px width — see that
-   block further down — is a different regime this rule was never meant to
-   reach, and must stay a true no-op there regardless of height) — same
-   "buffer past the exact crossover" reasoning the 1440px width threshold
-   below already uses over ITS own exact 1400px crossover.
+   crossover lands at ~811px (227/0.28). The retired 900px number was that
+   crossover plus a buffer comfortably clear of the graded 390×844 phone
+   viewport (mobile's own single-column layout, gated separately below
+   940px width — see that block further down — is a different regime this
+   rule was never meant to reach, and must stay a true no-op there
+   regardless of height) — same "buffer past the exact crossover" reasoning
+   the 1440px width threshold below already uses over ITS own exact 1400px
+   crossover. shouldAdaptVertically's own ADAPTIVE_V_BUFFER_PX (home.ts,
+   80px) plays the identical role now, added in live pixels rather than
+   folded into one fixed height number — which is what lets it stay
+   correct as chromeH varies by width, not only at the one width 900px was
+   derived from.
 
    .compare-grid gets the identical min-height treatment (§19.2: "compare
    grid rows adapt too") — aspect-ratio still governs each panel's own
@@ -407,13 +429,13 @@ a {
    more rows, or a narrower window). Ledger note (gate review, watch only):
    at extreme panel/row-count ratios this centring could theoretically read
    oddly — no live case has shown it, not acted on. */
-@media (height > 900px) and (width > 940px) {
-  .race-layout.is-adaptive .map-stack,
-  .race-layout.is-adaptive .compare-grid {
+@media (width > 940px) {
+  .race-layout.is-adaptive[data-adaptive-v] .map-stack,
+  .race-layout.is-adaptive[data-adaptive-v] .compare-grid {
     min-height: max(72vh, calc(100dvh - var(--chrome-h, 0px)));
   }
 
-  .race-layout.is-adaptive .compare-grid {
+  .race-layout.is-adaptive[data-adaptive-v] .compare-grid {
     align-content: center;
   }
 }
@@ -423,9 +445,9 @@ a {
    AND the height test say there's nothing to gain (De Morgan's dual of
    "visible whenever EITHER axis would gain something"; see the vertical
    rule's own comment above for why the two axes were decoupled, J4 gate
-   fix). `and` (not a comma, which would mean OR) between the two `@media`
-   features in the first rule below is what implements that
-   AND-of-no-headroom.
+   fix, and for the final-review fix, Minor #2, that replaced the height
+   test's own static number with the live `[data-adaptive-v]` attribute
+   both rules now share).
 
    Width half: .race-layout's own max-width (1400px, and —
    box-sizing:border-box, the global rule at the top of this file — already
@@ -435,23 +457,33 @@ a {
    the mathematically exact 1400: a 40px buffer so the control doesn't
    flicker back into view for a 1-to-40px gain nobody would perceive as "the
    map extended".
-   Height half: 900px, mirroring the vertical rule's own derivation above
-   (same crossover math, same number) — so this button's own visibility can
-   never disagree with whether toggling it would actually change anything.
+   Height half: final-review fix (Minor #2) — this used to be a second
+   static media feature here, `height <= 900px`, ANDed with the width one
+   below. Same drift the vertical rule's own comment above now describes:
+   chromeH's real value at 941–1300px width can exceed the 227px figure
+   900px was derived from, so the static query could hide this button at
+   the WRONG height in that band (or fail to, for a near-zero real gain).
+   `:not([data-adaptive-v])` replaces it — the exact same live attribute
+   the vertical rule now gates on, so this button's own visibility can
+   never disagree with whether toggling it would actually change anything,
+   at any width. Nested under the width media query (not ANDed via a
+   combinator on the attribute selector itself) purely so the width number
+   stays a real, greppable `@media` feature, matching "keep the width side
+   as-is."
 
    Third rule (J4 gate fix, live-caught while verifying the decoupled gate):
    width<=940px — this file's own existing mobile breakpoint (below) —
    unconditionally, regardless of height. Without it, a merely-narrow-but-
-   VERY-tall phone (e.g. ~430×932 — taller than the 900px height half above,
-   but still well inside the mobile single-column regime) would satisfy
-   "height has headroom" and show a desktop-shaped Size toggle inside the
-   mobile layout; toggling it on would then let the vertical rule above (no
-   width floor of its own beyond >940px) override the mobile block's own
-   tuned 55vh figure with the desktop 72vh one. A comma between this and the
-   first rule would read as one combined OR (valid CSS — commas separate
-   whole media queries — but two separate rules with the same one-line body
-   are the more obviously-correct-at-a-glance form for "hidden if EITHER
-   applies," so that's what's below).
+   VERY-tall phone (e.g. ~430×932 — taller than the vertical rule's own
+   height headroom, but still well inside the mobile single-column regime)
+   would satisfy "height has headroom" and show a desktop-shaped Size
+   toggle inside the mobile layout; toggling it on would then let the
+   vertical rule above (no width floor of its own beyond >940px) override
+   the mobile block's own tuned 55vh figure with the desktop 72vh one. A
+   comma between this and the first rule would read as one combined OR
+   (valid CSS — commas separate whole media queries — but two separate
+   rules with the same one-line body are the more obviously-correct-at-a-
+   glance form for "hidden if EITHER applies," so that's what's below).
 
    Static markup (index.html) keeps the button in the DOM at every width —
    spec/highway-to-hill.test.ts's own existence check is unaffected, this
@@ -463,8 +495,8 @@ a {
    regaining headroom outside the mobile regime snaps the button and that
    axis's extra space back on together, with nothing left half-applied in
    between. */
-@media (width <= 1440px) and (height <= 900px) {
-  .size-toggle {
+@media (width <= 1440px) {
+  .race-layout:not([data-adaptive-v]) .size-toggle {
     display: none;
   }
 }

@@ -648,6 +648,12 @@ describe("RaceController.run() — non-finite measured `ms` doesn't stall the wh
     // per-layer duration kept Math.max(...) finite instead of collapsing
     // the whole race's overall duration to NaN.
     expect(ui.setTime).toHaveBeenCalledTimes(2);
+    // Final-review fix: the malformed racer's OWN setTime call must receive
+    // the sanitized value (0), never the raw NaN — before this fix, only
+    // `duration`'s guard was sanitized, so this call still carried NaN
+    // through to the UI ("NaN ms" in the defensive case the guard exists
+    // for, the exact case this test constructs).
+    expect(ui.setTime).toHaveBeenCalledWith("dijkstra", 0);
     expect(ui.setHeadline).toHaveBeenCalled();
   });
 });

@@ -29,6 +29,13 @@ const SURPRISE_MIN_M = 8000;
 const SURPRISE_MAX_TRIES = 50;
 const WHEEL_ZOOM_BASE = 1.0015; // factor per wheel event = WHEEL_ZOOM_BASE ** -deltaY
 const BUTTON_ZOOM_FACTOR = 1.4; // one +/- button click's zoom step
+// shouldAdaptVertically's own two thresholds (final-review fix) — see that
+// function's own doc for the full derivation. Named here rather than
+// inlined at its one call site (updateChromeHeight) so both read as the
+// same self-explanatory constants styles.css's own retired comment used to
+// name in prose (72vh, "a buffer").
+const ADAPTIVE_V_MAP_FLOOR_VH = 0.72; // matches styles.css's max(72vh, …) floor
+const ADAPTIVE_V_BUFFER_PX = 80; // past-crossover margin, same role as the retired 900px query's own buffer over its ~811px crossover
 
 /** The AUTO_RUN_MS idle timer's fire condition: both pins must be placed,
  * returned as the pinned pair (or `null` if either still isn't) so the
@@ -270,6 +277,40 @@ export function applySplashInert(targets: SplashInertTargets, splashDismissed: b
   if (targets.routesContainer) targets.routesContainer.inert = gated;
 }
 
+/** Final-review fix: every board row's wall-time badge (`.ms`) and honesty
+ * disclosure (`.row-delta`) only ever get WRITTEN once per race, at THAT
+ * row's own finalization (RaceUi.setTime/setRowDelta below, called from
+ * controller.ts's renderAt the instant a layer's own replay duration
+ * elapses — spec §19.4, rows finalize individually). Nothing analogous was
+ * ever needed for `.val` (RaceUi.setRow) — it repaints on literally every
+ * replay frame, including the new race's own first one, so a stale count
+ * never survives past a single frame. `.ms`/`.row-delta` have no such
+ * per-frame repaint: until THIS race's own finalization fires, an
+ * unfinalized row kept showing the LAST race's numbers — for as long as
+ * its own replay takes (worst case: the slowest active racer's full
+ * duration, which spec §19.4's uncapped scaling can stretch to tens of
+ * seconds). Reusing setTime/setRowDelta to clear early would violate their
+ * own "called once, after completion" contracts (see each one's own doc
+ * comment on RaceUi), so this is a separate, explicit step instead — called
+ * once from the scheduler callback (home.ts's own single race-start funnel
+ * every trigger already shares — see that call site's own comment) right
+ * before controller.run() fires. Clears EVERY row, not just the ones active
+ * this race: cheap, and correct either way — an inactive row's stale badge
+ * is equally wrong to leave showing. `.ms` may not exist yet (setTime
+ * creates it lazily on first use); querySelector's null is the correct
+ * "nothing to clear" case, the same guard setTime/setRowDelta already use.
+ * Parameterized (no closure over boot()'s own state) so this has real
+ * jsdom coverage, same testability rationale as applyControlsEnabled/
+ * applySplashInert above. */
+export function clearFinalizedRowText(root: ParentNode): void {
+  for (const row of root.querySelectorAll(".board .row")) {
+    const ms = row.querySelector(".ms");
+    if (ms) ms.textContent = "";
+    const delta = row.querySelector<HTMLElement>(".row-delta");
+    if (delta) delta.textContent = "";
+  }
+}
+
 export interface PanelDiff {
   keep: RacerId[];
   add: RacerId[];
@@ -317,6 +358,34 @@ export function computeChromeHeight(
   heroGap: number,
 ): number {
   return headerH + controlsH + layoutPaddingTop + layoutPaddingBottom + heroGap;
+}
+
+/** Final-review fix: whether growing the map area under adaptive sizing
+ * would gain anything REAL — the live-measured replacement for
+ * styles.css's old static `height > 900px` media query. That query's own
+ * 900px number was derived (see its retired comment) from chromeH's
+ * DESKTOP-width figure alone (227px, measured at ≥1300px width where the
+ * Routes strip never wraps) — but chromeH is measured live at every width,
+ * and between 941–1300px the Routes strip CAN wrap onto more lines (a
+ * narrower map column is what forces the wrap), pushing the true crossover
+ * height past 900px. In that band the static query still said "grow it" /
+ * "show the button" at a height that no longer actually cleared the 72vh
+ * floor by any real margin — a size-toggle offering near-zero gain. This
+ * predicate reads the SAME live chromeH updateChromeHeight() already
+ * measures, so the two can never drift apart the way a second hardcoded
+ * constant could. `mapFloorVh` mirrors "current" mode's own fixed 72vh map
+ * height (styles.css's `max(72vh, …)` floor the vertical-adaptive rule
+ * never shrinks below); `bufferPx` is the same "comfortably past the exact
+ * crossover" margin the retired 900px number already carried over ITS own
+ * ~811px derivation (227 / 0.28), so a resize of a few pixels around the
+ * boundary can't flicker the toggle. Pure so it's unit-testable without a
+ * real layout; home.ts's updateChromeHeight() (boot()-only, untested here
+ * like the rest of boot()'s DOM glue) is the thin live-measurement wrapper
+ * that calls this and stamps the result onto `.race-layout`'s
+ * `data-adaptive-v` attribute — styles.css reads THAT, never this
+ * threshold directly. */
+export function shouldAdaptVertically(viewportHeight: number, chromeH: number, mapFloorVh: number, bufferPx: number): boolean {
+  return viewportHeight - chromeH > viewportHeight * mapFloorVh + bufferPx;
 }
 
 interface PanelEntry {
@@ -582,6 +651,11 @@ function boot(): void {
         updateFitButton();
       }
     }
+    // Final-review fix: clear stale .ms/.row-delta text from whatever race
+    // last finalized these rows BEFORE dispatching the new one — see
+    // clearFinalizedRowText's own doc for why `.val` (RaceUi.setRow) needs
+    // no equivalent call here.
+    clearFinalizedRowText(document);
     controller?.run(a, b).catch(handleRaceError);
   }, DEBOUNCE_MS);
 
@@ -1552,23 +1626,29 @@ function boot(): void {
    * measurement — writes `--chrome-h` (the total height of everything in
    * the `.hero` column except the map area: header, .race-layout's own
    * top/bottom padding, .hero's own row gap, and the Routes strip) onto
-   * `.race-layout` as an inline custom property, which styles.css's own
-   * `@media (height > 900px) .race-layout.is-adaptive .map-stack`/
-   * `.compare-grid` rule reads via `calc(100dvh - var(--chrome-h))` — see
-   * that rule's own comment for the height>900px threshold (J4 gate fix:
-   * decoupled from the size-toggle's own width>1440px threshold — this
-   * property is read purely by height now, not width) and the max(72vh,…)
-   * floor. Live-measured (getComputedStyle + offsetHeight), not a
-   * hardcoded pixel guess: the header's own height isn't fixed (this exact
-   * round added a second chip to its nav, §19.5's ⓘ button) and neither is
-   * the Routes strip's (route-chip wrapping depends on the map's own width,
-   * which THIS SAME adaptive mode changes; the load-note line disappears
-   * once data is ready) — a constant baked in here would drift from
-   * styles.css's real numbers the moment either changed. The arithmetic
-   * itself is computeChromeHeight() (pure, unit-tested); this is only the
-   * DOM-reading half, untested here like the rest of boot()'s glue. Harmless
-   * to run even in "current" mode or below the height threshold — the
-   * custom property just goes unread by any CSS rule at that point. */
+   * `.race-layout` as an inline custom property, which styles.css's
+   * `.race-layout.is-adaptive[data-adaptive-v] .map-stack`/`.compare-grid`
+   * rule reads via `calc(100dvh - var(--chrome-h))` — see that rule's own
+   * comment for the max(72vh,…) floor. Live-measured (getComputedStyle +
+   * offsetHeight), not a hardcoded pixel guess: the header's own height
+   * isn't fixed (this exact round added a second chip to its nav, §19.5's
+   * ⓘ button) and neither is the Routes strip's (route-chip wrapping
+   * depends on the map's own width, which THIS SAME adaptive mode changes;
+   * the load-note line disappears once data is ready) — a constant baked
+   * in here would drift from styles.css's real numbers the moment either
+   * changed. The arithmetic itself is computeChromeHeight() (pure,
+   * unit-tested); this is only the DOM-reading half, untested here like
+   * the rest of boot()'s glue.
+   *
+   * Final-review fix: this function ALSO now stamps `data-adaptive-v` (a
+   * boolean presence attribute) onto `.race-layout` from the SAME chromeH
+   * it just measured, via shouldAdaptVertically (pure, unit-tested — see
+   * its own doc for the full "why not a static height>900px media query
+   * any more" story). styles.css's vertical-adaptive rule AND the
+   * size-toggle's own visibility both key off this attribute now instead
+   * of a height media feature. Harmless to run even in "current" mode —
+   * the attribute just goes unread by any CSS rule while `.is-adaptive`
+   * isn't also present. */
   function updateChromeHeight(): void {
     if (!raceLayoutEl || !siteHeadEl || !controlsEl || !heroEl) return;
     const layoutStyle = getComputedStyle(raceLayoutEl);
@@ -1581,6 +1661,8 @@ function boot(): void {
       parseFloat(heroStyle.rowGap || heroStyle.gap) || 0,
     );
     raceLayoutEl.style.setProperty("--chrome-h", `${chromeH}px`);
+    const adaptiveV = shouldAdaptVertically(window.innerHeight, chromeH, ADAPTIVE_V_MAP_FLOOR_VH, ADAPTIVE_V_BUFFER_PX);
+    raceLayoutEl.toggleAttribute("data-adaptive-v", adaptiveV);
   }
   updateChromeHeight();
   // Watches the two pieces whose OWN height can change after boot (the
@@ -1594,6 +1676,12 @@ function boot(): void {
     if (siteHeadEl) chromeResizeObserver.observe(siteHeadEl);
     if (controlsEl) chromeResizeObserver.observe(controlsEl);
   }
+  // Final-review fix: window "resize" doesn't move chromeH itself (the
+  // comment above already explains why the ResizeObserver is what catches
+  // THAT), but it DOES move viewportHeight — shouldAdaptVertically's OTHER
+  // input — so data-adaptive-v needs its own listener the chrome
+  // measurement alone never needed before this fix.
+  window.addEventListener("resize", updateChromeHeight);
 
   // render.json and routing.json load independently — nothing orders one
   // before the other — so routingReady's rejection can land BEFORE

@@ -38,10 +38,12 @@ import {
   applyControlsEnabled,
   applySplashInert,
   autoRunPins,
+  clearFinalizedRowText,
   computeChromeHeight,
   diffPanels,
   effectiveViewMode,
   reopenSplashDom,
+  shouldAdaptVertically,
   shouldArmAutoRun,
   shouldShowSplashOnBoot,
   type GatedControls,
@@ -334,6 +336,81 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
   });
 });
 
+// Final-review Minor: the `.ms` wall-time badge (and `.row-delta`) used to
+// carry the LAST race's numbers into a replay of a NEW one, for as long as
+// that row's own finalization took — unlike `.val` (RaceUi.setRow), neither
+// element repaints on every frame, only once at finalization. home.ts's
+// scheduler callback (the single race-start funnel every trigger already
+// shares) now calls clearFinalizedRowText right before dispatching the new
+// race — this is that function's own direct jsdom coverage, real elements
+// built the same throwaway-JSDOM way the rest of this file's DOM-mutating
+// tests are (see the file-header comment for why).
+describe("clearFinalizedRowText (final-review Minor — the stale .ms/.row-delta-at-race-start fix)", () => {
+  it("clears a finalized core row's stale wall-time text, leaving .val/.fill untouched (not this function's concern)", () => {
+    const doc = new JSDOM(`<!doctype html><body>
+      <aside class="board">
+        <div class="row" data-algo="dijkstra">
+          <span class="val">21,480</span>
+          <span class="ms">1042.7 ms</span>
+          <div class="track"><div class="fill" style="width: 100%"></div></div>
+        </div>
+      </aside>
+    </body>`).window.document;
+
+    clearFinalizedRowText(doc);
+
+    expect(doc.querySelector(".ms")?.textContent).toBe("");
+    expect(doc.querySelector(".val")?.textContent).toBe("21,480"); // untouched — .val resets itself every frame, see this function's own doc
+    expect(doc.querySelector<HTMLElement>(".fill")?.style.width).toBe("100%"); // untouched
+  });
+
+  it("clears a finalized optional row's stale wall-time text AND its honesty disclosure together", () => {
+    const doc = new JSDOM(`<!doctype html><body>
+      <aside class="board">
+        <div class="row row-optional" data-algo="astar-weighted" data-active="true">
+          <span class="val">21,480</span>
+          <span class="ms">823.1 ms</span>
+          <p class="row-delta">+4.2% longer route</p>
+        </div>
+      </aside>
+    </body>`).window.document;
+
+    clearFinalizedRowText(doc);
+
+    expect(doc.querySelector(".ms")?.textContent).toBe("");
+    expect(doc.querySelector(".row-delta")?.textContent).toBe("");
+  });
+
+  it("a row that has never finalized (no .ms element yet, the pristine pre-first-race state) is left alone, not an error", () => {
+    const doc = new JSDOM(`<!doctype html><body>
+      <aside class="board">
+        <div class="row" data-algo="ch"><span class="val"></span></div>
+      </aside>
+    </body>`).window.document;
+
+    expect(() => clearFinalizedRowText(doc)).not.toThrow();
+    expect(doc.querySelector(".ms")).toBeNull();
+  });
+
+  it("clears every row on the board independently, including ones inactive this race (a stale badge left behind is equally wrong)", () => {
+    const doc = new JSDOM(`<!doctype html><body>
+      <aside class="board">
+        <div class="row" data-algo="dijkstra"><span class="ms">500.0 ms</span></div>
+        <div class="row row-optional" data-algo="astar-straight" data-active="false">
+          <span class="ms">600.0 ms</span>
+          <p class="row-delta">+1.0% longer route</p>
+        </div>
+        <div class="row" data-algo="ch"><span class="ms">10.0 ms</span></div>
+      </aside>
+    </body>`).window.document;
+
+    clearFinalizedRowText(doc);
+
+    for (const ms of doc.querySelectorAll(".ms")) expect(ms.textContent).toBe("");
+    expect(doc.querySelector(".row-delta")?.textContent).toBe("");
+  });
+});
+
 // Compare mode (build-review §14.3): diffPanels is the pure add/keep/remove
 // set logic behind syncPanels() (DOM-wiring, untested here by design, same
 // rationale as the rest of boot() — verified live instead), so a racer
@@ -421,5 +498,47 @@ describe("computeChromeHeight (J3 — the live-measured height of everything but
 
   it("an all-zero layout (nothing measured yet, e.g. a pre-layout call) sums to zero, not NaN or a floor value — updateChromeHeight's own `|| 0` guards feed this the same way", () => {
     expect(computeChromeHeight(0, 0, 0, 0, 0)).toBe(0);
+  });
+});
+
+// Final-review fix (Minor #2): the live-measured replacement for
+// styles.css's old static `height > 900px` media query, which assumed
+// chromeH's own desktop-width figure (227px) held at every width — it
+// doesn't once the Routes strip wraps (941-1300px). updateChromeHeight()
+// (boot()-only, untested here like the rest of boot()'s DOM glue) is the
+// thin live-measurement wrapper that calls this with the real
+// window.innerHeight/chromeH and stamps the result onto `.race-layout` as
+// `data-adaptive-v`; this is the plain arithmetic it hands off to, tested
+// with plain numbers exactly like computeChromeHeight above.
+describe("shouldAdaptVertically (final-review Minor #2 — real headroom over the 72vh floor, replacing the static height>900px query)", () => {
+  it("a tall viewport at the desktop-width (unwrapped) chromeH figure the retired 900px query assumed (227px): true", () => {
+    expect(shouldAdaptVertically(1500, 227, 0.72, 80)).toBe(true); // 1500-227=1273 > 0.72*1500+80=1160
+  });
+
+  it("a short viewport (well under the old 900px threshold): false", () => {
+    expect(shouldAdaptVertically(768, 227, 0.72, 80)).toBe(false); // 768-227=541 < 0.72*768+80=632.96
+  });
+
+  it("is a strict >, not >=  — sitting exactly on the boundary is not real headroom yet", () => {
+    expect(shouldAdaptVertically(1000, 200, 0.72, 80)).toBe(false); // 1000-200=800, 0.72*1000+80=800 exactly
+    expect(shouldAdaptVertically(1000, 199, 0.72, 80)).toBe(true); // one pixel less chrome tips it over
+  });
+
+  it("the exact bug this replaces: a taller chromeH from Routes-strip wrapping at 941-1300px width pushes the TRUE crossover past the retired static 900px number", () => {
+    // Height 920 alone would have satisfied the old `height > 900px` query
+    // regardless of width — but at a wrapped chromeH (a plausible 941-1300px
+    // width figure, larger than the 227px unwrapped one), there's no real
+    // headroom here: the old query would have shown the button / grown the
+    // map for a near-zero gain.
+    expect(shouldAdaptVertically(920, 300, 0.72, 80)).toBe(false); // 920-300=620 < 0.72*920+80=742.4
+    // The SAME wrapped chromeH at genuine desktop height: still true — this
+    // isn't "wrapped chromeH always reads false", only that 900px specifically
+    // stopped being a reliable line once chromeH varies by width.
+    expect(shouldAdaptVertically(1500, 300, 0.72, 80)).toBe(true); // 1500-300=1200 > 0.72*1500+80=1160
+  });
+
+  it("a zero/negative buffer or floor still computes (defensive — callers always pass the real ADAPTIVE_V_* constants, but the arithmetic itself doesn't assume positivity)", () => {
+    expect(shouldAdaptVertically(1000, 0, 0, 0)).toBe(true); // 1000-0=1000 > 0
+    expect(shouldAdaptVertically(0, 0, 0.72, 80)).toBe(false); // 0-0=0, not > 0*0.72+80=80
   });
 });
