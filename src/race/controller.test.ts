@@ -598,6 +598,60 @@ describe("RaceController.run() — bidi request/response key regression (I3)", (
   });
 });
 
+// J4 gate fix (defensive, reviewer ride-along — no evidence the worker can
+// actually emit this today, worker.ts's own AlgoResult.ms is always a real
+// performance.now() delta): a non-finite `ms` must not poison the WHOLE
+// race. Before the guard, replayDurationMs(NaN) produced a NaN layer
+// duration, and Math.max(...layers.map(l => l.duration)) propagated that
+// NaN into the race's overall duration — every layer's own finalization
+// check (elapsedMs >= layer.duration) then permanently read false, since
+// any comparison against NaN is false, stalling every row, not only the
+// malformed one.
+describe("RaceController.run() — non-finite measured `ms` doesn't stall the whole race (J4 gate fix, defensive)", () => {
+  function mockUi(): RaceUi {
+    return { setRow: vi.fn(), setTime: vi.fn(), setHeadline: vi.fn(), announce: vi.fn(), setRowDelta: vi.fn() };
+  }
+
+  function mockView() {
+    return { clearOverlay: vi.fn(), drawDots: vi.fn(), drawRoute: vi.fn(), drawPin: vi.fn() };
+  }
+
+  beforeEach(() => {
+    FakeWorker.instances = [];
+    vi.stubGlobal("Worker", FakeWorker);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("one racer reporting NaN ms still lets BOTH rows finalize (this file's forced reduced-motion path renders straight to the final frame, so a stall would show up as a missing setTime call)", async () => {
+    const ui = mockUi();
+    const controller = new RaceController(mockView() as unknown as MapView, ui);
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    const req = worker?.sent[0];
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          dijkstra: fakeAlgoResult([0, 1], [0, 1], NaN), // malformed: a non-finite measured wall time
+          ch: fakeAlgoResult([0, 1], [0, 1], 5),
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+
+    await runPromise; // must resolve, not hang behind a NaN overall duration
+
+    // Both rows finalize (setTime fires once per racer) — proof the guarded
+    // per-layer duration kept Math.max(...) finite instead of collapsing
+    // the whole race's overall duration to NaN.
+    expect(ui.setTime).toHaveBeenCalledTimes(2);
+    expect(ui.setHeadline).toHaveBeenCalled();
+  });
+});
+
 // spec §19.4 (fifth build review): replay pacing is now per-algorithm and
 // proportional to each racer's own measured wall time — this file's
 // FILE-WIDE matchMedia stub (top of file) forces `prefers-reduced-motion:

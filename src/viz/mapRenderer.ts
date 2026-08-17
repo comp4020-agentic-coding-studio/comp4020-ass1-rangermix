@@ -1397,35 +1397,42 @@ export class MapView {
 
   /** The "this panel needs a fresh crisp view" path — but not necessarily a
    * fresh STROKE. Computes this instant's overscanned capture rect
-   * (baseCaptureBounds, §19.3) and stamps `lastCrispAt` FIRST — both a real
-   * stroke and an adopted sibling capture below count as "this panel is
-   * crisp again right now" for refreshDue's cadence, so the timestamp write
-   * isn't conditional on which path runs. Then checks the shared
-   * cross-instance cache (§16.10 review round 2 — see the `sharedBaseCache`
-   * module comment) for a bitmap a SIBLING panel already stroked at the
-   * exact same fingerprint+view+bounds this instant, and adopts it
-   * (adoptSharedBaseCache) instead of repeating the work on a hit — Compare
-   * mode's panels share one ViewStore and (equal css size) an identical fit,
-   * so a hit's pixels are guaranteed identical to what THIS instance would
-   * otherwise independently stroke. Only on a genuine miss does it actually
-   * stroke every visible road line from scratch (identical painting logic
-   * to before §16.10 — ground fill, optional ghost pass, class-weighted
-   * lines) — into `baseBitmap` directly, sized to `bounds` and shifted so
-   * `bounds`'s own top-left lands at the bitmap's `(0,0)`, NOT into the
-   * viewport-sized visible canvas (see captureBaseCache for how the visible
-   * canvas gets updated from this) — and records the freshly-painted bitmap
-   * as this instance's own interaction-time cache (captureBaseCache, which
-   * also PUBLISHES it for the next sibling to adopt). See drawBase's own
-   * comment for when this runs vs. the cheap blitBase path. The only place
-   * (together with adoptSharedBaseCache) `baseBitmap`/`baseCacheView`/
-   * `baseCacheKey`/`baseCacheBounds` are written. */
+   * (baseCaptureBounds, §19.3), then checks the shared cross-instance cache
+   * (§16.10 review round 2 — see the `sharedBaseCache` module comment) for a
+   * bitmap a SIBLING panel already stroked at the exact same
+   * fingerprint+view+bounds this instant, and adopts it (adoptSharedBaseCache)
+   * instead of repeating the work on a hit — Compare mode's panels share one
+   * ViewStore and (equal css size) an identical fit, so a hit's pixels are
+   * guaranteed identical to what THIS instance would otherwise independently
+   * stroke. Only on a genuine miss does it actually stroke every visible road
+   * line from scratch (identical painting logic to before §16.10 — ground
+   * fill, optional ghost pass, class-weighted lines) — into `baseBitmap`
+   * directly, sized to `bounds` and shifted so `bounds`'s own top-left lands
+   * at the bitmap's `(0,0)`, NOT into the viewport-sized visible canvas (see
+   * captureBaseCache for how the visible canvas gets updated from this) —
+   * and records the freshly-painted bitmap as this instance's own
+   * interaction-time cache (captureBaseCache, which also PUBLISHES it for
+   * the next sibling to adopt). `lastCrispAt` is stamped once per path, right
+   * where that path's own capture actually LANDS — immediately before the
+   * `adoptSharedBaseCache` call on a shared-cache hit, and after the
+   * `getContext("2d")` guard below on a genuine miss (J4 gate fix: an
+   * earlier version stamped unconditionally up front, before that guard,
+   * so a null 2D context — the same defensive case this class already
+   * guards elsewhere — would have reset refreshDue's cadence clock without
+   * a real capture ever landing; both a real stroke and an adopted sibling
+   * capture still count as "this panel is crisp again right now" for
+   * refreshDue's cadence, just written at the point each actually succeeds
+   * rather than optimistically ahead of it). See drawBase's own comment for
+   * when this runs vs. the cheap blitBase path. The only place (together
+   * with adoptSharedBaseCache) `baseBitmap`/`baseCacheView`/`baseCacheKey`/
+   * `baseCacheBounds` are written. */
   private strokeBaseCrisp(): void {
     const view = this.store.get();
     const key = this.currentBaseKey();
     const bounds = baseCaptureBounds(view, this.render.bbox, this.fit, this.cssWidth, this.cssHeight);
-    this.lastCrispAt = performance.now();
     const shared = sharedBaseCache.get(baseFingerprintKey(key, view, bounds));
     if (shared) {
+      this.lastCrispAt = performance.now();
       this.adoptSharedBaseCache(shared);
       return;
     }
@@ -1434,7 +1441,8 @@ export class MapView {
     this.baseBitmap.width = size.width;
     this.baseBitmap.height = size.height;
     const ctx = this.baseBitmap.getContext("2d");
-    if (!ctx) return; // defensive; matches this class's other getContext() guards
+    if (!ctx) return; // defensive; matches this class's other getContext() guards — no capture landed, so lastCrispAt stays untouched (J4 gate fix)
+    this.lastCrispAt = performance.now();
     const colors = themeColors();
     const t = this.currentTransform(); // one derivation for this whole repaint — see currentTransform's own comment
     ctx.save();
