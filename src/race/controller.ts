@@ -125,6 +125,29 @@ export function routeDeltaPct(racerDist: number, optimalDist: number): number {
   return Math.round(Math.max(0, pct) * 10) / 10;
 }
 
+/** spec §20.1 (sixth build review): the colour THIS racer's own route
+ * draws in — always `colors[algo]`, the roster's plain hueVar-mapped
+ * custom property (roster.ts's own `RosterEntry.hueVar`, e.g.
+ * `--c-dijkstra`), NEVER the Glow-suffixed variant `colors[`${algo}Glow`]`
+ * the dot clouds read in dark theme (renderAt's own `dark ? …Glow : …`
+ * line, unchanged by this) — CLAUDE.md's palette contract reserves glow
+ * for dark map DOTS only. Needs no dark/light branch of its own: `colors`
+ * is themeColors()'s own read of the CURRENT theme's custom properties
+ * (styles.css redefines `--c-<id>` itself per theme, under the dark
+ * block/attribute), so the SAME plain key already resolves to a different
+ * literal hex once `colors` has been refreshed for the new theme —
+ * "theme-safe at draw time" just falls out of reading whatever `colors`
+ * currently holds, no ternary needed the way the dot-colour line still
+ * needs one. Pure and exported (rather than inlined at its renderAt call
+ * sites) so this exact resolution — and specifically the "never Glow"
+ * contract — is unit-testable against a plain fixture object, without a
+ * real stylesheet/getComputedStyle (jsdom has no CSSOM for custom
+ * properties nothing in the test document defines — same rationale every
+ * other pure helper in this file already has). */
+export function routeColorFor(colors: Record<string, string>, algo: RacerId): string {
+  return colors[algo];
+}
+
 /** spec §19.4: THIS racer's own replay duration, derived from its own
  * measured wall time (`AlgoResult.ms`) — never a race-wide constant.
  * `measuredMs * REPLAY_SCALE` is the literal rule from the build review
@@ -293,9 +316,12 @@ export interface RaceUi {
  * (only ACTIVE racers present), so draw order and bar-scale max both fall
  * out of "iterate the array", never a per-algo if/else. `path` is THIS
  * racer's OWN found route (may differ from the shared `Frame.path` for a
- * disclosed variant — spec §18.4) — carried through so Compare-mode panels
- * can draw it (see renderAt); the overlay's single shared view never reads
- * a layer's own `path`, only `Frame.path`. */
+ * disclosed variant — spec §18.4) — carried through so BOTH Compare-mode
+ * panels AND, since spec §20.1 (the shared ink route + first-exact reveal
+ * retired), Overlay mode too can draw it, in this racer's own hue, at its
+ * own completion (see renderAt). `Frame.path` (the shared true-optimal
+ * route) now only survives as Compare mode's defensive fallback for a
+ * panel whose own layer.path is degenerate. */
 interface AlgoLayer {
   algo: RacerId;
   order: Uint32Array;
@@ -309,13 +335,17 @@ interface AlgoLayer {
    * numeric "+X% longer route" disclosure shows). renderAt's Compare-mode
    * branch passes this straight to MapView.drawRoute's `dashed` option, so
    * a disclosed variant's own panel shows a dashed route — the visual echo
-   * of its numeric disclosure — without touching route colour/width (see
-   * mapRenderer.ts's drawRoute doc). Always false on the overlay's single
-   * shared route (it's always the true optimal path — see run()'s own
-   * comment on `path` — so renderAt's overlay branch never reads this
-   * field, only the Compare branch does). Also doubles, from spec §19.4 on,
-   * as renderAt's "is this racer exact THIS race" test for the shared
-   * route's own reveal gate — see the `showRoute` comment in renderAt. */
+   * of its numeric disclosure — without touching route colour (see
+   * mapRenderer.ts's drawRoute doc; colour is routeColorFor's job since
+   * spec §20.1, independent of this field in either mode). renderAt's
+   * Overlay branch never reads this field, even post-§20.1: an overlay
+   * route sits alongside every OTHER active racer's own route on the SAME
+   * canvas, so a suboptimal racer's geometric divergence from the exact
+   * ones already IS the "not the shortest" signal there (spec §20.1 item
+   * 1: "a suboptimal racer's divergent route in its own hue is the
+   * point") — dashing it too would be redundant. Compare mode's isolated,
+   * one-racer-per-panel view has no such neighbour to diverge FROM, which
+   * is exactly why dash still carries the signal there. */
   dashed: boolean;
   /** The exact number `dashed` collapses to a boolean — `routeDeltaPct`'s
    * own return, computed once here (same call as `dashed`, see run()'s
@@ -347,7 +377,11 @@ interface AlgoLayer {
    * finished row's setTime/setRowDelta would refire on all of those,
    * breaking RaceUi.setTime's own "called once per algo" contract. Always
    * starts false; only ever flips once, never resets — a new race builds
-   * a fresh AlgoLayer (run()), it never mutates an old one. */
+   * a fresh AlgoLayer (run()), it never mutates an old one. Also, since
+   * spec §20.1, the exact gate renderAt's route-drawing reads to decide
+   * whether THIS racer's own route belongs in "the currently-finished set"
+   * this frame — a second READER, not a second flag, so the two can never
+   * disagree about whether this racer is "done". */
   finalized: boolean;
 }
 
@@ -599,59 +633,80 @@ export class RaceController {
         this.ui.setRowDelta(layer.algo, layer.deltaPct);
       }
     }
-    // spec §19.4: the shared route draws the moment the FIRST EXACT
-    // racer's OWN replay completes — never "every racer done" (the
-    // pre-§19.4 `elapsedMs >= c.duration` this replaces) and never merely
-    // "first racer done" regardless of correctness. `!l.dashed` is exactly
-    // "this racer's own route equals the true optimal this race" (the same
-    // predicate the Compare-mode branch below already reads off each
-    // layer — see AlgoLayer.dashed's own doc); dijkstra and ch are always
-    // exact (run()'s own comment on why optimalDist is their shared
-    // distance), so this can never get permanently stuck false, only wait
-    // on whichever of the two has the longer measured time. In practice CH
-    // is almost always the FIRST exact racer to finish (few settled nodes
-    // -> small measured ms -> small replayDurationMs) — a deliberate
-    // pedagogical choice, not an accident: the answer appears on screen
-    // fast, while slower and/or inexact racers are still visibly churning
-    // behind it. A pure function of `elapsedMs` and each layer's own
-    // immutable `duration`, so "keep it drawn" falls out for free —
-    // elapsedMs only grows within one race's replay, and a new race
-    // replaces `this.current` outright, so nothing ever un-satisfies this
-    // once it's true.
-    const showRoute = c.path.length >= 2 && c.layers.some((l) => !l.dashed && elapsedMs >= l.duration);
+    // spec §20.1 (sixth build review): every racer's OWN route draws in
+    // its OWN chart hue, the instant THAT racer's own replay finishes —
+    // never gated on any OTHER racer. The pre-§20.1 `showRoute` gate (a
+    // single shared ink route, revealed once, at the FIRST EXACT racer's
+    // own completion — never "every racer done", and never merely "first
+    // racer done" regardless of correctness) is retired along with it:
+    // there is no longer one shared route to gate, only N per-racer ones.
+    // `layer.finalized` is exactly the right gate to reuse for each: the
+    // SAME one-shot flip the loop above just set (or already set, on an
+    // earlier frame, or on an earlier call at this same `c.elapsed` — see
+    // AlgoLayer.finalized's own doc) the instant elapsedMs first reached
+    // THIS layer's own duration, and it never resets — so reading it here,
+    // after that loop has already run this call, always answers "is THIS
+    // racer done, as of the elapsedMs this renderAt call is drawing"
+    // correctly, for every rAF frame AND for every later redraw alike
+    // (resize, theme flip, zoom/pan, Overlay/Compare switch — redrawFrame's
+    // callers). Route colour is always routeColorFor's plain hueVar-mapped
+    // read — see that function's own doc for why it needs no dark/light
+    // branch the way the dot loop above still does.
+    if (this.comparePanels) {
+      // Compare mode (spec §20.1 item 3): each panel draws ONLY its own
+      // racer's route, the instant THAT racer's own layer finalizes —
+      // never gated on any OTHER panel (the pre-§20.1 shared `showRoute`
+      // gate used to hold every panel's reveal hostage to whichever exact
+      // racer finished first, even a panel whose own racer was still mid-
+      // replay). May legitimately differ in geometry from every other
+      // panel's route (spec §18.4's honesty rule: a disclosed variant's
+      // compare panel shows the route it ACTUALLY found). `dashed`
+      // (AlgoLayer's own precomputed routeDeltaPct>0 flag — see its doc)
+      // is unchanged by §20.1 — only the colour SOURCE moved from the
+      // shared theme token to this racer's own hue. Falls back to the
+      // shared `c.path`, undashed, only when THIS racer's own path is
+      // degenerate (defensive — every completed race result otherwise has
+      // a valid own-path). A panel with no matching layer at all (its
+      // racer toggled on since this race's request went out, before the
+      // next syncPanels rebuild catches up) has no completion to wait for
+      // and draws nothing this frame.
+      for (const panel of this.comparePanels) {
+        const layer = c.layers.find((l) => l.algo === panel.algo);
+        if (!layer || !layer.finalized) continue;
+        const routePath = layer.path.length >= 2 ? layer.path : c.path;
+        const dashed = layer.path.length >= 2 ? layer.dashed : false;
+        panel.view.drawRoute(routePath, c.graph.lon, c.graph.lat, {
+          dashed, color: routeColorFor(colors, layer.algo),
+        });
+      }
+    } else {
+      // Overlay mode (spec §20.1 item 1): every FINISHED racer's own path,
+      // ROSTER order (c.layers's own order — CH last, same order the dot
+      // loop above already draws in), each in its own hue — exact racers
+      // share geometry and overdraw deterministically, while a suboptimal
+      // racer's route visibly diverges in its own hue, right alongside the
+      // exact ones on the SAME canvas: that divergence IS the "not the
+      // shortest" signal here, so (unlike Compare mode's isolated panels)
+      // an overlay route is never dashed — see AlgoLayer.dashed's own doc
+      // for why. Draws exactly the CURRENTLY-finished set on every call —
+      // the rAF loop's every frame, and every later redraw alike (see the
+      // gate comment above) — so a redraw never shows a stale set from a
+      // previous elapsedMs.
+      for (const layer of c.layers) {
+        if (!layer.finalized) continue;
+        for (const v of targets) {
+          v.drawRoute(layer.path, c.graph.lon, c.graph.lat, { color: routeColorFor(colors, layer.algo) });
+        }
+      }
+    }
+    // Pins draw LAST, above every route on the canvas — unconditional and
+    // un-gated, exactly as before (spec §20.1 item 4): with several
+    // overlaid routes now possible in Overlay mode, a pin sitting under
+    // one (a route's own endpoint necessarily touches its pin) would be a
+    // real regression, not merely a cosmetic one.
     for (const v of targets) {
       v.drawPin(c.graph.lon[c.pinA], c.graph.lat[c.pinA], "A");
       v.drawPin(c.graph.lon[c.pinB], c.graph.lat[c.pinB], "B");
-    }
-    if (showRoute) {
-      if (this.comparePanels) {
-        // Compare mode: each panel draws ITS OWN racer's route, which may
-        // legitimately differ from the shared optimal one (spec §18.4's
-        // honesty rule: a disclosed variant's compare panel shows the
-        // route it ACTUALLY found, never silently substituted for the
-        // optimal one — the overlay's single shared view below is where
-        // "the" optimal route always lives). Falls back to the shared
-        // `c.path` only if this racer's own path is degenerate (defensive
-        // — every completed race result has a valid own-path; also covers
-        // a panel whose racer toggled off mid-race, before the next panel
-        // rebuild catches up). Panel isolation (one racer's cloud+route
-        // per panel) already makes two different routes legible from WHICH
-        // panel they're on; `dashed` (AlgoLayer's own precomputed
-        // routeDeltaPct>0 flag — see its doc) adds the colour-free "not the
-        // shortest" signal spec §18.4 asks for directly on a disclosed
-        // panel's own route, without touching its identity colour. A
-        // fallback-to-`c.path` draw (degenerate own-path) is never dashed
-        // — `c.path` is always the true optimal route, see the comment
-        // above — hence `layer?.dashed` only, not applied unconditionally.
-        for (const panel of this.comparePanels) {
-          const layer = c.layers.find((l) => l.algo === panel.algo);
-          const routePath = layer && layer.path.length >= 2 ? layer.path : c.path;
-          const dashed = layer && layer.path.length >= 2 ? layer.dashed : false;
-          panel.view.drawRoute(routePath, c.graph.lon, c.graph.lat, { dashed });
-        }
-      } else {
-        for (const v of targets) v.drawRoute(c.path, c.graph.lon, c.graph.lat);
-      }
     }
   }
 

@@ -1149,14 +1149,19 @@ describe("assignStaggerSlots (the LIVE-roster-derived replacement for the page-l
   // The property the OLD page-lifetime counter did NOT have (the exact
   // review round 2 finding this function fixes): simulates arbitrary
   // add/remove sequences (200 seeded trials, a random walk of toggles over
-  // this app's own 5-algo ROSTER pool -- exactly as many ids as
-  // BLIT_RATIO_MULTIPLIERS has slots, so the property is achievable, not a
-  // pigeonhole artifact -- including ids re-added after having been removed
-  // earlier in the SAME trial) and checks, after EVERY step, that whatever
-  // is live RIGHT NOW gets pairwise-distinct slots.
+  // a 5-id pool -- exactly as many ids as BLIT_RATIO_MULTIPLIERS has slots,
+  // so the property is achievable, not a pigeonhole artifact -- including
+  // ids re-added after having been removed earlier in the SAME trial) and
+  // checks, after EVERY step, that whatever is live RIGHT NOW gets
+  // pairwise-distinct slots. assignStaggerSlots is generic over opaque ids
+  // (never actually keyed to RacerId), so this pool is illustrative labels,
+  // not roster.ts's own id strings -- kept at 5 to exercise the tight
+  // pigeonhole case regardless of the real ROSTER's own current size (spec
+  // §20.2 trims it to four; this function's contract doesn't change either
+  // way).
   it("property: for any sequence of add/remove operations, the ids alive at any point always get pairwise-distinct slots (200 seeded random toggle sequences)", () => {
     const rand = mulberry32(31337);
-    const pool = ["dijkstra", "astar", "bidi", "ch", "astar-weighted"];
+    const pool = ["dijkstra", "astar", "bidi", "ch", "astar-straight"];
     for (let trial = 0; trial < 200; trial++) {
       let live: string[] = [];
       const steps = 3 + Math.floor(rand() * 20);

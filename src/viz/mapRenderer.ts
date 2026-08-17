@@ -1662,32 +1662,49 @@ export class MapView {
     ctx.restore();
   }
 
-  /** Draws the shared shortest route (a sequence of node indices) as a
-   * single stroked path in the theme's route color. `opts.dashed` (default
-   * false; spec §18.4, Compare mode): true strokes the SAME route colour
-   * and width with a dash pattern instead of a solid line — the visual
-   * echo of a disclosed variant's own numeric "+X% longer route" row, so
-   * "not the shortest" reads from the route itself at a glance, without
-   * changing identity colour (that stays panel/theme-derived either way —
-   * only the stroke PATTERN carries the honesty signal, same principle as
-   * this app's other route-colour rule: identity never encodes correctness).
-   * Never passed for the overlay's own single shared route, which is
-   * always the true optimal path (see controller.ts's run()) — only a
-   * Compare-mode panel's OWN racer route can legitimately be the longer
-   * one. Dash unit [8, 6] scales this route's 2.4px stroke up from
-   * toytownView's own precedent for "dashed = not the direct/expected
-   * line" (styles.css's `.edge-line.edge-oneway { stroke-dasharray: 5 4 }`
-   * at a 1.6px stroke — same ~3:1 dash:stroke-width ratio, rounded to
-   * clean canvas units). `ctx.restore()` below reverts the dash list too
+  /** Draws one racer's route (a sequence of node indices) as a single
+   * stroked path. `opts.color` (spec §20.1, sixth build review — the
+   * shared ink route retired): the caller's own identity colour, e.g. a
+   * racer's own chart hue — controller.ts's renderAt resolves this via
+   * routeColorFor(colors, algo), the SAME `colors` object (a themeColors()
+   * snapshot) drawDots's own caller-resolved colour argument already reads,
+   * so it's already correct for whichever theme is active without this
+   * method needing any theme awareness of its own. Falls back to the
+   * shared theme route token (`themeColors().route`) when omitted, so a
+   * caller with no per-racer identity of its own (a /how/ toy, or any
+   * other caller this app doesn't currently have) still draws exactly the
+   * single ink route this method always used to — the fallback is only
+   * ever read lazily (no getComputedStyle call at all when a caller DOES
+   * pass a colour, which every controller.ts call site now does). `opts.
+   * dashed` (default false; spec §18.4, unchanged by §20.1): true strokes
+   * the SAME colour with a dash pattern instead of a solid line — the
+   * visual echo of a disclosed variant's own numeric "+X% longer route"
+   * row, so "not the shortest" reads from the stroke PATTERN, independent
+   * of colour. Since §20.1, colour itself carries racer IDENTITY (every
+   * racer's own hue, in both Overlay and Compare mode) rather than being a
+   * neutral constant — dash is the only remaining correctness signal, and
+   * renderAt's Overlay branch deliberately never passes it (a suboptimal
+   * racer's route sits alongside every other active racer's on the SAME
+   * canvas there, so its geometric divergence from the exact ones already
+   * reads as "not the shortest" without a dash pattern too — only Compare
+   * mode's isolated, one-racer-per-panel view still needs it). Dash unit
+   * [8, 6] scales this route's 2.4px stroke up from toytownView's own
+   * precedent for "dashed = not the direct/expected line" (styles.css's
+   * `.edge-line.edge-oneway { stroke-dasharray: 5 4 }` at a 1.6px stroke —
+   * same ~3:1 dash:stroke-width ratio, rounded to clean canvas units).
+   * `ctx.restore()` below reverts the dash list and stroke colour too
    * (canvas state), so no separate reset is needed between calls. */
-  drawRoute(path: number[], lon: Float64Array, lat: Float64Array, opts?: { dashed?: boolean }): void {
+  drawRoute(
+    path: number[], lon: Float64Array, lat: Float64Array,
+    opts?: { dashed?: boolean; color?: string },
+  ): void {
     if (path.length < 2) return;
     const ctx = this.overlayCtx;
-    const colors = themeColors();
+    const color = opts?.color ?? themeColors().route;
     const t = this.currentTransform(); // one derivation for this whole path — see currentTransform's own comment
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
-    ctx.strokeStyle = colors.route;
+    ctx.strokeStyle = color;
     ctx.lineWidth = 2.4;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";

@@ -49,6 +49,7 @@ import {
   RaceController,
   rejectAllPending,
   replayDurationMs,
+  routeColorFor,
   routeDeltaPct,
   sliceForFrame,
   type PendingRace,
@@ -284,19 +285,19 @@ describe("activeRacers (ROSTER filtered to active racers, each resolved to its C
   });
 
   it("an optional A* variant inserts at its ROSTER position (between dijkstra and ch), not appended at the end", () => {
-    expect(activeRacers(new Set<RacerId>(["astar-weighted"]), false)).toEqual([
+    expect(activeRacers(new Set<RacerId>(["astar-straight"]), false)).toEqual([
       { algo: "dijkstra", key: "dijkstra" },
-      { algo: "astar-weighted", key: "astar-weighted" },
+      { algo: "astar-straight", key: "astar-straight" },
       { algo: "ch", key: "ch" },
     ]);
   });
 
-  it("every optional racer active: the full five-racer roster, in ROSTER order regardless of the Set's own insertion order", () => {
+  it("every optional racer active: the full four-racer roster, in ROSTER order regardless of the Set's own insertion order", () => {
     const active = activeRacers(
-      new Set<RacerId>(["astar-greedy", "astar-straight", "astar-weighted"]), false,
+      new Set<RacerId>(["astar-greedy", "astar-straight"]), false,
     );
     expect(active.map((a) => a.algo)).toEqual([
-      "dijkstra", "astar-straight", "astar-weighted", "astar-greedy", "ch",
+      "dijkstra", "astar-straight", "astar-greedy", "ch",
     ]);
   });
 
@@ -338,6 +339,30 @@ describe("routeDeltaPct (spec §18.4's honesty rule, as a number — 1 decimal, 
 
   it("guards a zero/degenerate optimal distance (a from===to query) instead of dividing by zero", () => {
     expect(routeDeltaPct(0, 0)).toBe(0);
+  });
+});
+
+describe("routeColorFor (spec §20.1: a racer's OWN route colour — always the plain hueVar-mapped read, never the Glow variant dot clouds use in dark theme)", () => {
+  it("resolves each roster id to its own plain-keyed entry in the colors object", () => {
+    const colors: Record<string, string> = {
+      dijkstra: "#d1", "astar-straight": "#as", "astar-greedy": "#ag", ch: "#c1",
+    };
+    expect(routeColorFor(colors, "dijkstra")).toBe("#d1");
+    expect(routeColorFor(colors, "astar-straight")).toBe("#as");
+    expect(routeColorFor(colors, "astar-greedy")).toBe("#ag");
+    expect(routeColorFor(colors, "ch")).toBe("#c1");
+  });
+
+  it("never reads the Glow-suffixed key, even when present and different — glow is for dark map DOTS only (CLAUDE.md's palette contract), routes never branch on theme in JS", () => {
+    const colors: Record<string, string> = { dijkstra: "#plain", dijkstraGlow: "#glow" };
+    expect(routeColorFor(colors, "dijkstra")).toBe("#plain");
+  });
+
+  it("theme flip: the SAME call against a fresh colors snapshot returns THAT snapshot's own value — no caching, no branch, just whatever `colors` currently holds (exactly what makes a post-theme-flip redraw correct for free)", () => {
+    const lightColors: Record<string, string> = { ch: "#2a78d6" };
+    const darkColors: Record<string, string> = { ch: "#3987e5" };
+    expect(routeColorFor(lightColors, "ch")).toBe("#2a78d6");
+    expect(routeColorFor(darkColors, "ch")).toBe("#3987e5");
   });
 });
 
@@ -775,7 +800,15 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     setItemSpy.mockRestore();
   });
 
-  it("the shared route reveals at the FIRST EXACT racer's own completion — not the first racer to finish at all (an inexact one may finish earlier), and not every racer finishing", async () => {
+  // spec §20.1 (sixth build review) retires the pre-§20.1 rule this block
+  // used to guard ("the shared route reveals at the FIRST EXACT racer's
+  // own completion") — there is no longer one shared route, only N
+  // per-racer ones, each in its own hue. The property that rule was
+  // ultimately protecting — a route never appears before SOMETHING real
+  // backs it — survives, just narrowed from "before ANY racer finishes" to
+  // "before THAT racer finishes": see the first test below, which replaces
+  // the retired one, plus the timestamp/redraw/pin-order tests after it.
+  it("a racer's own route never appears before ITS OWN completion — including an inexact one that finishes FIRST (the pre-§20.1 test made it wait for an EXACT racer instead; since §20.1 every racer, exact or not, reveals at its own finish, in its own hue, never gated on anyone else)", async () => {
     const ui = mockUi();
     const view = mockView();
     const controller = new RaceController(view as unknown as MapView, ui);
@@ -791,28 +824,204 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
       data: {
         id: req!.id,
         results: {
-          ch: fakeAlgoResult([0, 1], [0, 1], 0.3, 100), // duration 600 ms, exact this race (matches optimal)
-          dijkstra: fakeAlgoResult([0, 1, 2, 3], [0, 1], 5, 100), // duration 10,000 ms, exact this race
-          "astar-greedy": fakeAlgoResult([0], [0, 2], 0.02, 130), // duration 200 ms (floor); 30% longer -> disclosed/inexact
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms, exact this race
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // duration 10,000 ms, exact this race
+          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.02, 130), // duration 200 ms (floor); 30% longer -> disclosed/inexact
         },
       },
     } as unknown as MessageEvent<WorkerResponse>);
     await new Promise((r) => setTimeout(r, 0));
 
-    // Past astar-greedy's 200 ms — the FIRST racer to finish overall, but
-    // INEXACT this race (its own route is 30% longer than optimal). The
-    // shared route must not appear yet.
-    clock.advance(250);
+    // Nothing has finished yet — no racer's route has appeared (the
+    // surviving half of the retired property: never before ANY finish).
     expect(view.drawRoute).not.toHaveBeenCalled();
 
-    // Past ch's 600 ms — the FIRST *exact* racer to finish. The route
-    // appears now even though dijkstra (also exact, but far slower to both
-    // compute and replay) is barely 6.5% through its own replay.
+    // Past astar-greedy's 200 ms — the FIRST racer to finish overall, and
+    // INEXACT this race. Pre-§20.1 this stayed hidden until an EXACT racer
+    // caught up; since §20.1 it draws immediately, in its own hue — and
+    // never dashed here (Overlay mode signals "not the shortest" via its
+    // geometric divergence from the exact racers, not a dash pattern —
+    // AlgoLayer.dashed's own doc; Compare mode's dashed test lives in its
+    // own describe block below).
+    view.drawRoute.mockClear();
+    clock.advance(250);
+    expect(view.drawRoute).toHaveBeenCalledTimes(1);
+    const call0 = view.drawRoute.mock.calls[0];
+    const opts0 = call0[3] as { dashed?: boolean; color?: string };
+    expect(call0[0]).toEqual([10, 14]);
+    expect(opts0.dashed).toBeFalsy();
+    expect(opts0.color).toEqual(expect.anything());
+
+    // Past ch's 600 ms too: ch's own route joins now (still no dash) —
+    // dijkstra (10,000 ms) is nowhere close, so its own route must NOT be
+    // among this frame's calls (the surviving half of the retired
+    // property, narrowed to "before ITS OWN finish").
+    view.drawRoute.mockClear();
     clock.advance(400); // total elapsed ~650 ms
-    expect(view.drawRoute).toHaveBeenCalled();
+    expect(view.drawRoute).toHaveBeenCalledTimes(2);
+    const paths = view.drawRoute.mock.calls.map((call) => call[0]);
+    expect(paths).toContainEqual([10, 14]); // astar-greedy, redrawn again
+    expect(paths).toContainEqual([10, 12]); // ch, newly finished
+    expect(paths).not.toContainEqual([10, 11, 12]); // dijkstra: not yet
 
     clock.advance(10_000);
     await runPromise;
+    clock.restore();
+  });
+
+  it("finished-set math per timestamp (spec §20.1 item 1): with four racers at four distinct durations, exactly the ones finished as of a given elapsed draw — in ROSTER order, each in its OWN path", async () => {
+    const ui = mockUi();
+    const view = mockView();
+    const controller = new RaceController(view as unknown as MapView, ui);
+    controller.setRacerActive("astar-straight", true);
+    controller.setRacerActive("astar-greedy", true);
+    const clock = fakeClock();
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms, exact
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 2, 100), // duration 4,000 ms, exact
+          "astar-straight": fakeAlgoResult([0, 1], [10, 13, 12], 0.5, 100), // duration 1,000 ms, exact
+          "astar-greedy": fakeAlgoResult([0], [10, 14, 15, 12], 0.05, 130), // duration 200 ms (floor); disclosed
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // t=250: only astar-greedy (200 ms) has finished — 1 of 4.
+    view.drawRoute.mockClear();
+    clock.advance(250);
+    expect(view.drawRoute).toHaveBeenCalledTimes(1);
+    expect(view.drawRoute.mock.calls[0][0]).toEqual([10, 14, 15, 12]);
+
+    // t=650: astar-greedy AND ch (600 ms) — exactly 2 of the 4 active
+    // racers, neither astar-straight (1,000 ms) nor dijkstra (4,000 ms)
+    // yet. ROSTER order (dijkstra, astar-straight, astar-greedy, ch) puts
+    // astar-greedy's call before ch's.
+    view.drawRoute.mockClear();
+    clock.advance(400);
+    expect(view.drawRoute).toHaveBeenCalledTimes(2);
+    expect(view.drawRoute.mock.calls[0][0]).toEqual([10, 14, 15, 12]); // astar-greedy
+    expect(view.drawRoute.mock.calls[1][0]).toEqual([10, 12]); // ch
+
+    // t=1050: astar-straight (1,000 ms) joins too — 3 of 4, still ROSTER
+    // order, dijkstra still absent.
+    view.drawRoute.mockClear();
+    clock.advance(400);
+    expect(view.drawRoute).toHaveBeenCalledTimes(3);
+    expect(view.drawRoute.mock.calls[0][0]).toEqual([10, 13, 12]); // astar-straight
+    expect(view.drawRoute.mock.calls[1][0]).toEqual([10, 14, 15, 12]); // astar-greedy
+    expect(view.drawRoute.mock.calls[2][0]).toEqual([10, 12]); // ch
+
+    // t=4100: dijkstra (4,000 ms) finishes last — all four now, still
+    // ROSTER order (dijkstra first).
+    view.drawRoute.mockClear();
+    clock.advance(3050);
+    expect(view.drawRoute.mock.calls.map((call) => call[0])).toEqual([
+      [10, 11, 12], // dijkstra
+      [10, 13, 12], // astar-straight
+      [10, 14, 15, 12], // astar-greedy
+      [10, 12], // ch
+    ]);
+
+    await runPromise;
+    clock.restore();
+  });
+
+  it("redrawFrame reproduces exactly the CURRENTLY-finished set at the frame's current elapsed — no clock advance, no re-run, the same racers every time it's called", async () => {
+    const ui = mockUi();
+    const view = mockView();
+    const controller = new RaceController(view as unknown as MapView, ui);
+    controller.setRacerActive("astar-greedy", true);
+    const clock = fakeClock();
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms, exact
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // duration 10,000 ms, exact
+          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.05, 130), // duration 200 ms (floor); disclosed
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Past astar-greedy's and ch's own durations, nowhere near dijkstra's.
+    clock.advance(650);
+    expect(view.drawRoute).toHaveBeenCalledTimes(2); // astar-greedy, ch — roster order
+
+    // A redraw (theme flip / resize / mode switch — any of redrawFrame's
+    // real callers) at this SAME elapsed must reproduce exactly that same
+    // finished-only pair: not more (dijkstra still isn't done), not fewer,
+    // without advancing the clock or re-running the replay.
+    view.drawRoute.mockClear();
+    controller.redrawFrame();
+    expect(view.drawRoute).toHaveBeenCalledTimes(2);
+    expect(view.drawRoute.mock.calls[0][0]).toEqual([10, 14]); // astar-greedy
+    expect(view.drawRoute.mock.calls[1][0]).toEqual([10, 12]); // ch
+
+    // Idempotent: calling it again reproduces the identical set and order.
+    view.drawRoute.mockClear();
+    controller.redrawFrame();
+    expect(view.drawRoute.mock.calls.map((call) => call[0])).toEqual([[10, 14], [10, 12]]);
+
+    clock.advance(10_000);
+    await runPromise;
+    clock.restore();
+  });
+
+  it("pins draw AFTER every route this frame, so they always sit visually on top (spec §20.1 item 4 — matters more now that Overlay mode can stack several routes at once)", async () => {
+    const ui = mockUi();
+    const order: string[] = [];
+    const view = {
+      clearOverlay: vi.fn(),
+      drawDots: vi.fn(),
+      drawRoute: vi.fn(() => {
+        order.push("route");
+      }),
+      drawPin: vi.fn(() => {
+        order.push("pin");
+      }),
+    };
+    const controller = new RaceController(view as unknown as MapView, ui);
+    const clock = fakeClock();
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 0.3, 100), // duration 600 ms too — both finish together
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+    await new Promise((r) => setTimeout(r, 0));
+
+    clock.advance(650); // both racers finished — two routes AND two pins draw this frame
+    await runPromise;
+
+    expect(order.filter((e) => e === "route")).toHaveLength(2);
+    expect(order.filter((e) => e === "pin")).toHaveLength(2);
+    // Every route entry precedes every pin entry: the pins are the LAST
+    // two entries in this frame's draw order, never interleaved or first.
+    expect(order.slice(-2)).toEqual(["pin", "pin"]);
+    expect(order.lastIndexOf("route")).toBeLessThan(order.indexOf("pin"));
+
     clock.restore();
   });
 
@@ -865,5 +1074,119 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
 
     clock.restore();
     setItemSpy.mockRestore();
+  });
+});
+
+// spec §20.1 item 3 (sixth build review): Compare mode's per-panel route
+// reveal had no dedicated test before this — it rode along on the same
+// pre-§20.1 shared `showRoute` gate the Overlay-mode tests above exercised
+// directly, which (see this file's own audit above) did NOT actually give
+// each panel its own reveal timing: every panel waited for the race-wide
+// "first EXACT racer done" instant, even a panel whose own racer was still
+// mid-replay. This block is new, not a retrofit of a weakened old one.
+describe("RaceController.run() (renderAt) — Compare-mode per-panel route reveal (spec §20.1 item 3: reveal timing per panel = that racer's OWN completion; dashed-when-suboptimal unchanged)", () => {
+  function mockUi(): RaceUi {
+    return { setRow: vi.fn(), setTime: vi.fn(), setHeadline: vi.fn(), announce: vi.fn(), setRowDelta: vi.fn() };
+  }
+
+  function mockView() {
+    return { clearOverlay: vi.fn(), drawDots: vi.fn(), drawRoute: vi.fn(), drawPin: vi.fn() };
+  }
+
+  /** See the "per-layer replay pacing" describe block above for the full
+   * rationale — this is the identical hand-rolled rAF/clock stand-in,
+   * duplicated locally rather than shared across describe blocks (this
+   * file has no shared-helpers-across-describes convention to hook into,
+   * and each block already owns its own mockUi/mockView pair the same
+   * way). */
+  function fakeClock() {
+    let now = 0;
+    let queue: FrameRequestCallback[] = [];
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb: FrameRequestCallback) => {
+      queue.push(cb);
+      return queue.length;
+    });
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+    return {
+      advance(ms: number) {
+        now += ms;
+        const due = queue;
+        queue = [];
+        for (const cb of due) cb(now);
+      },
+      restore() {
+        rafSpy.mockRestore();
+        nowSpy.mockRestore();
+      },
+    };
+  }
+
+  beforeEach(() => {
+    FakeWorker.instances = [];
+    vi.stubGlobal("Worker", FakeWorker);
+    vi.stubGlobal(
+      "matchMedia",
+      ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof matchMedia,
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("each panel's own route waits for THAT panel's racer, not any other panel's — and stays dashed exactly when its own racer is disclosed-suboptimal", async () => {
+    const ui = mockUi();
+    const controller = new RaceController(mockView() as unknown as MapView, ui);
+    controller.setRacerActive("astar-greedy", true);
+
+    const dijPanel = mockView();
+    const agPanel = mockView();
+    const chPanel = mockView();
+    controller.setComparePanels([
+      { algo: "dijkstra", view: dijPanel as unknown as MapView },
+      { algo: "astar-greedy", view: agPanel as unknown as MapView },
+      { algo: "ch", view: chPanel as unknown as MapView },
+    ]);
+
+    const clock = fakeClock();
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms, exact
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // duration 10,000 ms, exact
+          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.02, 130), // duration 200 ms (floor); 30% longer -> disclosed
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Past astar-greedy's 200 ms only: ITS panel reveals (dashed — its own
+    // result is disclosed-suboptimal), neither other panel does yet.
+    clock.advance(250);
+    expect(agPanel.drawRoute).toHaveBeenCalledTimes(1);
+    expect(agPanel.drawRoute).toHaveBeenCalledWith(
+      [10, 14], expect.anything(), expect.anything(), expect.objectContaining({ dashed: true }),
+    );
+    expect(chPanel.drawRoute).not.toHaveBeenCalled();
+    expect(dijPanel.drawRoute).not.toHaveBeenCalled();
+
+    // Past ch's 600 ms too: ITS panel reveals now, undashed (exact) —
+    // dijkstra's panel still hasn't, nowhere near its own 10,000 ms.
+    clock.advance(400); // ~650 ms total
+    expect(chPanel.drawRoute).toHaveBeenCalledTimes(1);
+    expect(chPanel.drawRoute).toHaveBeenCalledWith(
+      [10, 12], expect.anything(), expect.anything(), expect.objectContaining({ dashed: false }),
+    );
+    expect(dijPanel.drawRoute).not.toHaveBeenCalled();
+
+    clock.advance(10_000);
+    await runPromise;
+    clock.restore();
   });
 });
