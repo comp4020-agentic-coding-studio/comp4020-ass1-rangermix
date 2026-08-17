@@ -43,15 +43,24 @@ describe("pairVerdict: one ordered pair's witness-vs-shortcut decision (spec §2
     const v = pairVerdict(0, 1, 2, 39.6, { dist: 30.4, path: [0, 3, 1] });
     expect(v.throughS).toBe(40);
     expect(v.detourS).toBe(30);
+    expect(v.throughDisp).toBe("40"); // ints whenever the comparison isn't a rounded tie
+    expect(v.detourDisp).toBe("30");
     expect(v.narration).toBe("through: 40s · detour found: 30s ≤ 40s → free pass (witness)");
   });
 
   it("decides witness on RAW weights, not the rounded display values — the verdict must match what the contractor really did", () => {
     // Raw: 40.4 > 39.6 -> the algorithm added a shortcut. Rounded both show
     // 40s; a rounded comparison would claim a witness while the curve draws.
+    // DISPLAY (gate amendment, L1 review I1): a rounded tie prints the two
+    // COMPARED values with one decimal so the page never asserts
+    // "40s > 40s" — deci-second weights guarantee one decimal separates a
+    // real shortcut margin. The trailing shortcut weight stays the rounded
+    // int (it must match the curve's own label).
     const v = pairVerdict(0, 1, 2, 39.6, { dist: 40.4, path: [0, 3, 1] });
     expect(v.witness).toBe(false);
-    expect(v.narration).toBe("through: 40s · best detour: 40s > 40s → shortcut added (40s)");
+    expect(v.throughDisp).toBe("39.6");
+    expect(v.detourDisp).toBe("40.4");
+    expect(v.narration).toBe("through: 39.6s · best detour: 40.4s > 39.6s → shortcut added (40s)");
   });
 
   it("copies u/w/via through untouched", () => {
@@ -68,6 +77,15 @@ describe("phaseNarration: the one pinned 3-beat scheme (legs -> detour -> verdic
   it("phase 0 (legs) shows the through cost only", () => {
     expect(phaseNarration(witness, 0)).toBe("through: 40s");
     expect(phaseNarration(shortcut, 0)).toBe("through: 40s");
+  });
+
+  it("a rounded-tie pair carries its one-decimal through cost in EVERY phase, so the beats never disagree", () => {
+    const tie = pairVerdict(0, 1, 2, 39.6, { dist: 40.4, path: [0, 3, 1] });
+    expect(phaseNarration(tie, 0)).toBe("through: 39.6s");
+    expect(phaseNarration(tie, 1)).toBe("through: 39.6s · detour: …");
+    expect(phaseNarration(tie, 2)).toBe(
+      "through: 39.6s · best detour: 40.4s > 39.6s → shortcut added (40s)",
+    );
   });
 
   it("phase 1 (detour search) shows the through cost plus a searching ellipsis", () => {

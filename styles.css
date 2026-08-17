@@ -1659,6 +1659,19 @@ html[data-splash-dismissed] .splash {
   font-variant-numeric: tabular-nums;
 }
 
+/* ch4's verdict line (spec §21.1) — sits directly under the stage and
+   announces each pair's decision with the real measured seconds
+   (aria-live="polite" in the markup). min-height reserves two text lines
+   so the layout doesn't jump when narration arrives or wraps at 390px. */
+.toy-narration {
+  margin: 8px 0 0;
+  min-height: 2.4em;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .toy-subhead {
   margin: 0 0 12px;
   color: var(--muted);
@@ -1765,6 +1778,22 @@ html[data-splash-dismissed] .splash {
 
 .edge-line.flash {
   stroke: var(--witness);
+}
+
+/* ch4 narration (spec §21.1): the pair-under-examination's two through
+   streets — the trip that might need replacing. Neutral strong emphasis
+   (ink, not a hue): the witness hue belongs to the DETOUR flash and CH
+   blue to the eventual shortcut, so the three roles never share a colour.
+   Declared after .edge-arterial/.edge-oneway for the same specificity
+   reason as .touched/.on-route below. The .shortcut-path variant exists
+   because a through LEG can itself be an earlier contraction's shortcut
+   (L1's gate gap): it keeps its dash (identity) but takes the same ink
+   emphasis while under examination. */
+.edge-line.through-leg,
+.shortcut-path.through-leg {
+  stroke: var(--ink);
+  stroke-width: 3;
+  opacity: 1;
 }
 
 /* ch3 (climb) map view: a street a "fwd"/"bwd" step's climb actually
@@ -2059,6 +2088,25 @@ html[data-splash-dismissed] .splash {
 
 .order-tiles .tile[data-tile="smart"] .bar {
   background: var(--c-ch);
+}
+
+/* ch5's shared replay stage (spec §21.2): one map all three order buttons
+   replay onto, sitting between the run buttons and "your turn". Display
+   only — its nodes are .node-mark divs, never buttons. */
+.order-replay-stage {
+  margin-top: 14px;
+}
+
+/* A replayed contraction's removed intersection: dimmed in place, dot
+   shrunk — the same "barely there" register as .climb-node-btn.ghost, but
+   its own class because the meaning differs (demolished, not untouched). */
+.node-mark.contracted {
+  opacity: 0.25;
+}
+
+.node-mark.contracted::before {
+  width: 5px;
+  height: 5px;
 }
 
 .order-yourturn {

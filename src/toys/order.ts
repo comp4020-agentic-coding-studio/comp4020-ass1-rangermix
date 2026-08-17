@@ -26,7 +26,7 @@ import {
 
 const RANDOM_SEED = 7;
 
-/** ~80ms per contraction: a full 55-node replay lands in ≈4.5s — long
+/** ~80ms per contraction: a full 62-node replay lands in ≈5s — long
  * enough to SEE the worst order bury the map early, short enough to invite
  * pressing all three buttons (spec §21.2's ~80ms cadence). */
 const REPLAY_STEP_MS = 80;
@@ -243,10 +243,17 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
     `<p class="toy-result" data-role="yourturn-result" hidden></p>` +
     `</div>`;
 
-  // ---- three-tile comparison: each button click is a fresh, independent,
-  // PURE orderedShortcutCount() run — no shared/mutable state, so clicking
-  // in any combination or order (or twice) always recomputes honestly.
+  // ---- three-tile comparison: each button click replays a fresh, PURE
+  // replayScript() run (whose totals order.test.ts pins equal to
+  // orderedShortcutCount) — no shared/mutable state across runs, so
+  // clicking in any combination or order (or twice) always recomputes
+  // honestly. `counts` holds what each tile currently DISPLAYS (a live
+  // running count mid-replay, the full total after); `completed` holds
+  // only FINISHED runs' totals — the .win badge derives from `completed`
+  // alone, so it never flickers off mid-replay while a rival's live count
+  // is briefly below smart's total (L2 review m3).
   const counts: Partial<Record<Kind, number>> = {};
+  const completed: Partial<Record<Kind, number>> = {};
 
   function renderTiles(): void {
     const known = KINDS.map((k) => counts[k]).filter((v): v is number => v !== undefined);
@@ -268,9 +275,9 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
     }
     const smartTile = root.querySelector<HTMLElement>('.tile[data-tile="smart"]');
     const rivals = (["random", "worst"] as const)
-      .map((k) => counts[k])
+      .map((k) => completed[k])
       .filter((v): v is number => v !== undefined);
-    const smartCount = counts.smart;
+    const smartCount = completed.smart;
     const wins =
       smartCount !== undefined && rivals.length > 0 && rivals.every((c) => smartCount <= c);
     smartTile?.classList.toggle("win", wins);
@@ -305,7 +312,11 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
       replayTimer = null;
     }
     if (running) {
+      // The interrupted run completes to its full honest total (the run's
+      // own pinned sum, §21.1's convention) — which also makes it a
+      // FINISHED run for the .win badge.
       counts[running.kind] = running.total;
+      completed[running.kind] = running.total;
       running = null;
     }
   }
@@ -335,6 +346,7 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
       // curve drawn, the final count — lands instantly.
       for (const step of script) applyStep(step);
       counts[kind] = total;
+      completed[kind] = total;
       renderTiles();
       return;
     }
@@ -343,19 +355,32 @@ export function mountOrder(root: HTMLElement, t: Toytown): void {
     let k = 0;
     let runningTotal = 0;
     counts[kind] = 0;
+    // Re-running a kind: its old total no longer stands while the replay
+    // is in flight, so it leaves the .win comparison until it finishes.
+    delete completed[kind];
     renderTiles();
+    // Unreachable via the three production orders (always full n=62
+    // permutations), but an empty order must complete immediately rather
+    // than leave a timer calling script[0] forever (L2 review m1).
+    if (script.length === 0) {
+      completed[kind] = total;
+      running = null;
+      renderTiles();
+      return;
+    }
     replayTimer = window.setInterval(() => {
       const step = script[k];
       applyStep(step);
       runningTotal += step.shortcuts.length;
       counts[kind] = runningTotal;
-      renderTiles();
       k++;
       if (k === script.length) {
         clearInterval(replayTimer as number);
         replayTimer = null;
         running = null;
+        completed[kind] = runningTotal;
       }
+      renderTiles();
     }, REPLAY_STEP_MS);
   }
 

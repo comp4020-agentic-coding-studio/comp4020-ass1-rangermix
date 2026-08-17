@@ -60,6 +60,17 @@ export interface PairVerdict {
    * weights (display rounding must never flip a verdict: the curve the toy
    * draws has to match the shortcut the contractor really inserted). */
   witness: boolean;
+  /** Display strings for the two COMPARED values in the narration.
+   * Normally the rounded ints; in the rounded-tie shortcut case (raw
+   * detour > raw through but both round to the same int) they carry one
+   * decimal so the printed inequality stays mathematically true — the
+   * graph's deci-second weights make a real shortcut margin ≥ 0.1 s, so
+   * one decimal always separates them (gate amendment, L1 review I1:
+   * "67s > 67s" measured reachable in ~0.6% of deep-sequence verdicts).
+   * The witness side needs no such case: rounding is monotone, so a
+   * displayed ≤ can never read false. */
+  throughDisp: string;
+  detourDisp: string | null;
   /** The detour's node path ([] when none) — shown even for a too-slow
    * detour: the failed alternative is the evidence the shortcut is needed. */
   detourPath: number[];
@@ -77,11 +88,18 @@ export function pairVerdict(
   const throughS = Math.round(through);
   const detourS = detour === null ? null : Math.round(detour.dist);
   const witness = detour !== null && detour.dist <= through;
+  const displayTie = !witness && detour !== null && detourS === throughS;
+  const fmt = (x: number): string => (displayTie ? x.toFixed(1) : String(Math.round(x)));
+  const throughDisp = fmt(through);
+  const detourDisp = detour === null ? null : fmt(detour.dist);
+  // The trailing "(…s)" is the inserted shortcut's weight and stays the
+  // rounded int — it must match the label drawShortcutCurve prints on the
+  // curve itself.
   const narration = witness
-    ? `through: ${throughS}s · detour found: ${detourS}s ≤ ${throughS}s → free pass (witness)`
+    ? `through: ${throughDisp}s · detour found: ${detourDisp}s ≤ ${throughDisp}s → free pass (witness)`
     : detour === null
-      ? `through: ${throughS}s · no detour without this intersection → shortcut added (${throughS}s)`
-      : `through: ${throughS}s · best detour: ${detourS}s > ${throughS}s → shortcut added (${throughS}s)`;
+      ? `through: ${throughDisp}s · no detour without this intersection → shortcut added (${throughS}s)`
+      : `through: ${throughDisp}s · best detour: ${detourDisp}s > ${throughDisp}s → shortcut added (${throughS}s)`;
   return {
     u,
     w,
@@ -89,6 +107,8 @@ export function pairVerdict(
     throughS,
     detourS,
     witness,
+    throughDisp,
+    detourDisp,
     detourPath: detour === null ? [] : detour.path.slice(),
     narration,
   };
@@ -104,8 +124,8 @@ export type PairPhase = 0 | 1 | 2;
  * cost, phase 1 (detour search) adds a searching ellipsis, phase 2 lands
  * the full verdict. One scheme for every pair, witness or shortcut. */
 export function phaseNarration(p: PairVerdict, phase: PairPhase): string {
-  if (phase === 0) return `through: ${p.throughS}s`;
-  if (phase === 1) return `through: ${p.throughS}s · detour: …`;
+  if (phase === 0) return `through: ${p.throughDisp}s`;
+  if (phase === 1) return `through: ${p.throughDisp}s · detour: …`;
   return p.narration;
 }
 

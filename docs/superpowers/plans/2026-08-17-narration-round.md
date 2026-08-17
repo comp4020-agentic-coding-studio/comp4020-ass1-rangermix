@@ -225,3 +225,15 @@ final whole-branch review; ff-merge; evidence shots.
   against the same files; only `git add` is partitioned).
 - styles.css contention — resolved by controller pre-write + read-only
   rule; gaps flow to the gate, never cross-partition edits.
+
+## Gate amendment (L4, from L1 review finding I1)
+
+The pinned shortcut template gains one display case: when the two COMPARED
+values round to the same int (raw detour > raw through — reachable in
+~0.6% of deep-sequence verdicts on the real graph), both print with one
+decimal (`through: 39.6s · best detour: 40.4s > 39.6s → shortcut added
+(40s)`) so the page never asserts `40s > 40s`. Deci-second weights make a
+real shortcut margin ≥ 0.1 s, so one decimal always separates them. The
+trailing shortcut weight stays the rounded int (matches the curve label);
+the witness template is unchanged (rounding is monotone — a displayed ≤
+cannot read false). Pinned in contraction.test.ts.
