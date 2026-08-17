@@ -37,7 +37,7 @@ rebuilt intuition-first on a real ANU street subgraph.
    task closed.
    [`d82d677...60fae72`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/d82d677...60fae72)
 
-3. **User feedback became spec before it became code — six rounds of
+3. **User feedback became spec before it became code — seven rounds of
    it.** Every build review ("mini-town is boring — use real ANU streets";
    "the overlay is always one step behind the map"; "show what heuristic
    A\* is using") went into the design spec as binding amendments
@@ -57,7 +57,15 @@ rebuilt intuition-first on a real ANU street subgraph.
    measurement confirmed it — the search was settling ~101% of the
    entire graph — and the honest redefinition (stop at first frontier
    meet) settles 192 nodes while still disclosing its longer route.
-   [`b078bfd...8d7d592`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...8d7d592)
+   The seventh round turned "the shortcut and ordering chapters are
+   still confusing" into watchable algorithms instead of more prose:
+   chapter 4 now narrates each witness-vs-shortcut decision beat by
+   beat with the contractor's real seconds, and chapter 5 replays
+   whole contraction orders on the map so a bad order visibly buries
+   it in shortcuts — and the review loop caught the display printing
+   "67s > 67s" on rounded ties (real in ~0.6% of deep-sequence
+   verdicts) before it ever shipped.
+   [`b078bfd...907a18b`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...907a18b)
 
 4. **Exactness over drama.** The final review measured a 153 km/h
    quantization artifact in the graph, which made A\*'s 100 km/h heuristic
