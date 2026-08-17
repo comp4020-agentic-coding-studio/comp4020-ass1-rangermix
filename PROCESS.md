@@ -37,11 +37,11 @@ rebuilt intuition-first on a real ANU street subgraph.
    task closed.
    [`d82d677...60fae72`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/d82d677...60fae72)
 
-3. **User feedback became spec before it became code — five rounds of
+3. **User feedback became spec before it became code — six rounds of
    it.** Every build review ("mini-town is boring — use real ANU streets";
    "the overlay is always one step behind the map"; "show what heuristic
    A\* is using") went into the design spec as binding amendments
-   (§14–§18) with contract tests, then through the same task/review loop.
+   (§14–§20) with contract tests, then through the same task/review loop.
    That loop kept earning its keep: a "footer out of style" complaint
    root-caused to a curly-quote `class=”site-foot”` typo a fix wave had
    shipped; pan-clamp property tests caught the fixer's own first formula
@@ -50,8 +50,14 @@ rebuilt intuition-first on a real ANU street subgraph.
    longer-than-optimal route must disclose itself ("+67.4% longer" on the
    default preset), enforced by tests, and an integration-only bug that
    silently no-op'd every bidirectional race was caught by racing the
-   integrated build, not by either half's own suites.
-   [`b078bfd...454b6d7`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...454b6d7)
+   integrated build, not by either half's own suites. The sixth round
+   ran the loop at its best: the user's "greedy A\* looks bugged in
+   bidirectional mode" became a written hypothesis in the spec (h-only
+   keys void the balanced termination bound) *before* any fix, the
+   measurement confirmed it — the search was settling ~101% of the
+   entire graph — and the honest redefinition (stop at first frontier
+   meet) settles 192 nodes while still disclosing its longer route.
+   [`b078bfd...8d7d592`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...8d7d592)
 
 4. **Exactness over drama.** The final review measured a 153 km/h
    quantization artifact in the graph, which made A\*'s 100 km/h heuristic
