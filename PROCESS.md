@@ -37,7 +37,7 @@ rebuilt intuition-first on a real ANU street subgraph.
    task closed.
    [`d82d677...60fae72`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/d82d677...60fae72)
 
-3. **User feedback became spec before it became code — four rounds of
+3. **User feedback became spec before it became code — five rounds of
    it.** Every build review ("mini-town is boring — use real ANU streets";
    "the overlay is always one step behind the map"; "show what heuristic
    A\* is using") went into the design spec as binding amendments
