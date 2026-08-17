@@ -29,20 +29,15 @@
   --g-bidi: #e87ba4;
   --g-ch: #2a78d6;
 
-  /* Fourth build review (spec §18, roster round): A* gains two more
-     heuristic variants, each its own racer row with its own validated hue
-     — display order Dijkstra / A*-straight / A*-weighted / A*-greedy / CH.
-     --c-astar-w is deliberately the OLD --c-bidi value: bidirectional
-     retired as a racer (it's now a family-wide modifier, §18.6, no colour
-     of its own) and A*-weighted inherits that hue slot verbatim, so the
-     validator's already-checked adjacency distances for this palette stay
-     valid without re-running the tool. Light mode has no separate glow: it
-     draws the chart step straight onto the map (no additive blending — see
-     the dark block's own comment on --g-astar-w/--g-astar-g for why dark
-     needs its own lightened values instead). */
-  --c-astar-w: #e87ba4;
+  /* Fourth build review (spec §18, roster round) gave A* a second heuristic
+     variant, its own racer row with its own validated hue. Sixth build
+     review (§20.2) removed weighted A* (and its --c-astar-w/--g-astar-w
+     tokens) from the roster entirely — four racers remain, display order
+     Dijkstra / A*-straight / A*-greedy / CH. Light mode has no separate
+     glow for greedy: it draws the chart step straight onto the map (no
+     additive blending — see the dark block's own comment on --g-astar-g for
+     why dark needs its own lightened value instead). */
   --c-astar-g: #eda100;
-  --g-astar-w: #e87ba4;
   --g-astar-g: #eda100;
   --witness: #008300;
   --line: #ddd8cc;
@@ -76,15 +71,12 @@
     --g-bidi: #e87ba0;
     --g-ch: #4fd8eb;
 
-    /* Dark glows (fourth build review, spec §18): A*-weighted inherits the
-       old bidirectional-racer glow family verbatim (#e87ba0 — same
-       retired-hue-slot reasoning as --c-astar-w above); A*-greedy gets a
-       genuinely new lightened step of its own chart hue (#c98500 ->
-       #e8c063), additive map-dots only, never the row's sole identity
-       carrier (the row's own text/swatch always direct-labels it too). */
-    --c-astar-w: #d55181;
+    /* Dark glow (fourth build review, spec §18; weighted A*'s own glow
+       retired with the racer at §20.2): A*-greedy gets a lightened step of
+       its own chart hue (#c98500 -> #e8c063), additive map-dots only, never
+       the row's sole identity carrier (the row's own text/swatch always
+       direct-labels it too). */
     --c-astar-g: #c98500;
-    --g-astar-w: #e87ba0;
     --g-astar-g: #e8c063;
     --witness: #7dd8a0;
     --line: #1c2334;
@@ -114,9 +106,7 @@
   --g-astar: #b48ce8;
   --g-bidi: #e87ba0;
   --g-ch: #4fd8eb;
-  --c-astar-w: #d55181;
   --c-astar-g: #c98500;
-  --g-astar-w: #e87ba0;
   --g-astar-g: #e8c063;
   --witness: #7dd8a0;
   --line: #1c2334;
@@ -628,6 +618,27 @@ a {
   display: none;
 }
 
+/* §20.3 (sixth build review): three or four active panels lay out 2+1 / 2x2
+   at desktop -- not the auto-fit rule's one-row-then-wrap, which the WIDE
+   adaptive compare area (well over 3-4 panels' worth of 340px minimums) was
+   cramming into a single row (user's own report: "at 1080p, adaptive size
+   and compare view, the maps are all in one line"). Reuses
+   `.compare-grid-quad` verbatim -- home.ts's syncPanels() already toggles it
+   for panelCount>=3, the roster's own max (dijkstra/astar-straight/
+   astar-greedy/ch, four total) -- so no JS change was needed, only teaching
+   desktop widths what mobile's own <=940px block below already knows.
+   Exactly 2 explicit columns (not a minmax floor) means grid auto-placement
+   alone produces 2+1 for three panels and 2x2 for four, at ANY width above
+   the mobile breakpoint -- "current" and "adaptive" both, with no separate
+   tuning per mode. Two panels are untouched (spec: "side-by-side, unchanged")
+   -- diffPanels/syncPanels never add the quad class below 3, so the base
+   auto-fit rule above still governs that case alone. */
+@media (width > 940px) {
+  .compare-grid.compare-grid-quad {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .compare-panel {
   position: relative;
   aspect-ratio: 4 / 3;
@@ -688,10 +699,6 @@ a {
 
 .panel-chip[data-algo="astar-straight"]::before {
   background: var(--c-astar);
-}
-
-.panel-chip[data-algo="astar-weighted"]::before {
-  background: var(--c-astar-w);
 }
 
 .panel-chip[data-algo="astar-greedy"]::before {
@@ -1010,10 +1017,6 @@ html[data-splash-dismissed] .splash {
   background: var(--c-astar);
 }
 
-.board .row[data-algo="astar-weighted"] .swatch {
-  background: var(--c-astar-w);
-}
-
 .board .row[data-algo="astar-greedy"] .swatch {
   background: var(--c-astar-g);
 }
@@ -1104,11 +1107,6 @@ html[data-splash-dismissed] .splash {
 
 .board .row[data-algo="astar-straight"] .fill {
   background: var(--c-astar);
-  min-width: 2px;
-}
-
-.board .row[data-algo="astar-weighted"] .fill {
-  background: var(--c-astar-w);
   min-width: 2px;
 }
 
@@ -1295,10 +1293,6 @@ html[data-splash-dismissed] .splash {
   border-color: var(--c-astar);
 }
 
-.board .row[data-algo="astar-weighted"][data-active="false"] .swatch {
-  border-color: var(--c-astar-w);
-}
-
 .board .row[data-algo="astar-greedy"][data-active="false"] .swatch {
   border-color: var(--c-astar-g);
 }
@@ -1306,11 +1300,6 @@ html[data-splash-dismissed] .splash {
 .board .row.row-optional[data-algo="astar-straight"][data-active="true"] {
   border-color: var(--c-astar);
   background: color-mix(in srgb, var(--c-astar) 12%, var(--panel-2));
-}
-
-.board .row.row-optional[data-algo="astar-weighted"][data-active="true"] {
-  border-color: var(--c-astar-w);
-  background: color-mix(in srgb, var(--c-astar-w) 12%, var(--panel-2));
 }
 
 .board .row.row-optional[data-algo="astar-greedy"][data-active="true"] {
@@ -2096,21 +2085,48 @@ html[data-splash-dismissed] .splash {
 
 /* ---------- ch2 toy: the real-map hierarchy reveal ---------- */
 
+/* .hier-frame wraps .hier-stack (role="img") and its zoom +/- buttons as
+   SIBLINGS, not the buttons nested inside the role="img" box — the same
+   reason home.ts's .map-frame keeps its own .zoom-controls outside
+   .map-stack (see that rule's own comment): a screen reader treats a
+   role="img" subtree as one opaque image, which can hide focusable
+   descendants nested inside it. Contributes no box of its own beyond
+   .hier-stack's (no padding/margin, .hier-stack is its only in-flow child —
+   .zoom-controls' own position:absolute lifts it out of flow), so it
+   exactly matches .hier-stack's own footprint. */
+.hier-frame {
+  position: relative;
+}
+
 .hier-stack {
   position: relative;
-  height: 320px;
+
+  /* Design spec §20.5 (sixth build review): the vertical room §17.6/H3
+     originally gave the WRONG view (climbLinked's query rank view — see
+     that file's own revert note) belongs to THIS chapter instead — ~1.5x
+     the old 320px, tuned by eye at both graded viewports (see the matching
+     ~1.5x bump on the <=940px figure below for 390px). */
+  height: 480px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--ground);
 }
 
+/* cursor/touch-action support the zoom/pan wiring below (hierarchy.ts):
+   wheel-about-cursor, +/- buttons, and single-pointer drag-pan against this
+   MapView's own PRIVATE view store (never home.ts's shared page-level one —
+   see hierarchy.ts's own note on why a bare `new MapView(...)` call already
+   guarantees that). Same cursor treatment as the real map's own
+   .map-stack canvas. */
 .hier-stack canvas {
   position: absolute;
   inset: 0;
   display: block;
   width: 100%;
   height: 100%;
+  cursor: grab;
+  touch-action: none;
 }
 
 .hier-loading {
@@ -2183,7 +2199,7 @@ html[data-splash-dismissed] .splash {
 
 @media (width <= 940px) {
   .hier-stack {
-    height: 240px;
+    height: 360px;
   }
 
   .order-tiles .tile {
@@ -2199,10 +2215,12 @@ html[data-splash-dismissed] .splash {
    below (climb-map-stage — the visitor's click target). A plain column
    stack, not a shared coordinate system, so declutter/hit-area math tuned
    per-stage stays correct and phone (390px) just stacks the two full-width
-   instead of overflowing. climb-map-stage keeps the base .toy-stage's
-   460x300 aspect-ratio untouched (it draws REAL street geometry, which must
-   never scale non-uniformly); climb-hierarchy-stage overrides its own ratio
-   below (design spec §17.6, task H3: more vertical room for the rank-lift). */
+   instead of overflowing. Both stages share the base .toy-stage rule's
+   460x300 aspect-ratio, untouched — climb-map-stage because it draws REAL
+   street geometry, which must never scale non-uniformly; climb-hierarchy-
+   stage because §17.6/H3's own taller override was reverted at §20.5 (see
+   climbLinked.ts's own revert note — that extra room belongs to chapter 2's
+   map instead, src/toys/hierarchy.ts). */
 .climb-views {
   display: flex;
   flex-direction: column;
@@ -2235,64 +2253,27 @@ html[data-splash-dismissed] .splash {
   margin-top: 80px;
 }
 
-/* Design spec §17.6, task H3: more vertical room for the rank-lift —
-   ~440px tall at this stage's own 460px max-width (comfortably inside the
-   spec's 420-460px desktop target), scaling down proportionally on
-   narrower viewports (incl. 390px phone) via the SAME aspect-ratio
-   mechanism rather than a separate media-query height. The underlying
-   rank-lift coordinate space stays climb.ts's own untouched 0-300
-   (BASE_Y/TOP_Y) — climbLinked.ts's own preserveAspectRatio="none" on this
-   stage's <svg> is what actually stretches that space down over the extra
-   height, matching how the percentage-positioned .node-mark/.climb-meet
-   layers already behave (see that file's own comment). cursor/touch-action
-   support the new drag-pan below. Deliberately NOT overflow:hidden here —
-   see .climb-nodes below for why the clip lives one level deeper. */
-.climb-hierarchy-stage {
-  aspect-ratio: 460 / 440;
-  cursor: grab;
-  touch-action: none;
-}
+/* Design spec §17.6/task H3 gave this stage extra vertical room, wheel/
+   button zoom, and drag-pan. Sixth build review §20.5 found that treatment
+   had landed on the WRONG view — the user meant chapter 2 ("The hierarchy,
+   revealed", src/toys/hierarchy.ts's real Canberra map), not this toy-town
+   query view — so it's reverted here to the plain pre-§17.6 form: no
+   aspect-ratio override (falls back to the base .toy-stage rule's 460/300,
+   matching climb-map-stage below it), no cursor/touch-action (drag-pan is
+   gone). The zoom feature itself, and its own extra height, moved to
+   hierarchy.ts/its .hier-stack rule further down this file. */
 
-.climb-hierarchy-stage:active {
-  cursor: grabbing;
-}
-
-/* The hierarchy's own zoom +/- (design spec §17.6): reuses .zoom-controls/
-   .zoom-btn's 44x44px footprint, border, and hover treatment verbatim
-   (src/pages/home.ts's real-map controls), so it reads as the same control
-   everywhere on the site — but NOT its position:absolute overlay-in-a-
-   corner placement: a touched node's real x/rank position can legitimately
-   land anywhere in this panel (unlike the real map, whose zoom corner never
-   has to share space with a specific data point), including the exact
-   corner an overlaid control would occupy — found live on the graph's own
-   DEFAULT pair, no re-pick needed (see the H3 report). Instead this is its
-   own normal-flow row, between the view label and the stage (climbLinked.ts
-   markup), right-aligned via justify-content so it still reads as
-   "belonging" to the panel below with the same visual weight as a corner,
-   but with zero collision risk against ANY node position. */
-.hier-zoom-controls {
-  position: static;
-  flex-direction: row;
-  justify-content: flex-end;
-  margin: 0 0 10px;
-}
-
-/* overflow:hidden matters once the HIERARCHY stage is ZOOMABLE (design spec
-   §17.6, task H3 — climb-map-stage's own .climb-nodes never needs this,
-   since map node percentages are always relative to the fixed, never-zoomed
-   VIEWBOX_W/VIEWBOX_H, so nothing here changes for it): a ghost node well
-   outside the current zoomed-in viewBox computes a left/top percentage
-   outside [0,100]% (climbLinked.ts's own hierPercentXY, relative to the
-   CURRENT hierVb) — a plain positioned <div> doesn't clip itself the way an
-   <svg> root does by default, so without this the stray node-marks escaped
-   THIS layer's own box and scattered across the rest of the page (found
-   live: zooming in threw stray node dots as far as the page's own right
-   edge — see the H3 report). Scoped to .climb-nodes itself, one level
-   INSIDE .climb-hierarchy-stage, rather than the stage: .climb-meet (a
-   SIBLING, not a descendant of this) still needs to render past the box's
-   own top edge into the stage's 80px margin-top headroom when the meet
-   node sits near the top of the range (see .climb-view .toy-stage's own
-   comment) — clipping at the STAGE level would cut the star off too. */
+/* overflow:hidden here is defensive rather than load-bearing now that
+   neither stage this class serves (hierarchy above, climb-map-stage below)
+   is zoomable — every node-mark's left/top percentage is always within
+   [0,100]% by construction (declutterXY already clamps to the fixed
+   VIEWBOX_W/VIEWBOX_H box). Left in place rather than removed outright:
+   harmless belt-and-braces, and .climb-meet (a SIBLING, not a descendant of
+   this) still needs to render past this box's own top edge into the
+   stage's 80px margin-top headroom when the meet node sits near the top of
+   the range (see .climb-view .toy-stage's own comment) — clipping at the
+   STAGE level instead would cut the star off, which is why the clip stays
+   scoped one level down, here, rather than moving up. */
 .climb-nodes {
   position: absolute;
   inset: 0;

@@ -198,11 +198,12 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
   beforeEach(() => {
     // A fresh throwaway Document per test (see the file-header comment for
     // why this is a local JSDOM instance rather than the file's own global
-    // `document`). Roster round (spec §18.3/.6): the two hand-named
-    // algo-astar/algo-bidi toggles are gone — three `role="button"` roster
-    // rows (no native `disabled`, gated via aria-disabled/tabindex instead
-    // — see setDisabled's own comment) plus one real `<button>` family
-    // bidi modifier replace them. how-cta is included specifically because
+    // `document`). Roster round (spec §18.3/.6, weighted A* since removed by
+    // §20.2): the two hand-named algo-astar/algo-bidi toggles are gone —
+    // two `role="button"` roster rows (no native `disabled`, gated via
+    // aria-disabled/tabindex instead — see setDisabled's own comment) plus
+    // one real `<button>` family bidi modifier replace them. how-cta is
+    // included specifically because
     // it must NOT be touched by either function (build-review ruling:
     // leaving to /how/ while the splash is up is legitimate) — these tests
     // assert that directly rather than just trusting the source comment.
@@ -220,7 +221,6 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
         <div class="family-bezel" data-family="searchers">
           <button data-testid="bidi-toggle">⇄</button>
           <div class="row row-optional" data-algo="astar-straight" role="button" aria-pressed="false">A* — straight line</div>
-          <div class="row row-optional" data-algo="astar-weighted" role="button" aria-pressed="false">A* — weighted (1.5×)</div>
           <div class="row row-optional" data-algo="astar-greedy" role="button" aria-pressed="false">A* — greedy (direction only)</div>
         </div>
         <div class="board-actions">
@@ -265,7 +265,7 @@ describe("applyControlsEnabled / applySplashInert (H2 gate fix — the board pan
   // element, asserted here rather than assumed.
   function expectAllGated(disabled: boolean, inert: boolean): void {
     expect(controls.raceRun?.disabled).toBe(disabled);
-    expect(controls.rosterToggles.length).toBe(3); // sanity: the fixture's rows were actually found
+    expect(controls.rosterToggles.length).toBe(2); // sanity: the fixture's rows were actually found
     for (const row of controls.rosterToggles) {
       expect(row.getAttribute("aria-disabled")).toBe(String(disabled));
       expect(row.tabIndex).toBe(disabled ? -1 : 0);
@@ -367,7 +367,7 @@ describe("clearFinalizedRowText (final-review Minor — the stale .ms/.row-delta
   it("clears a finalized optional row's stale wall-time text AND its honesty disclosure together", () => {
     const doc = new JSDOM(`<!doctype html><body>
       <aside class="board">
-        <div class="row row-optional" data-algo="astar-weighted" data-active="true">
+        <div class="row row-optional" data-algo="astar-greedy" data-active="true">
           <span class="val">21,480</span>
           <span class="ms">823.1 ms</span>
           <p class="row-delta">+4.2% longer route</p>
@@ -418,11 +418,13 @@ describe("clearFinalizedRowText (final-review Minor — the stale .ms/.row-delta
 // actually changed instead of tearing down and rebuilding the whole grid.
 // I3 reconciliation: the roster round's `RacerId` migration (diffPanels was
 // generic `Algo[]`/plain strings pre-roster-round) narrowed these fixtures
-// to a real 5-value union — the old placeholder ids "astar"/"bidi" (never
-// real roster ids even before this round) no longer typecheck, so this
-// block uses two real non-core ids ("astar-straight"/"astar-weighted") as
-// the stand-ins instead; the set-membership logic under test doesn't care
-// which two, only that they're distinct.
+// to a real union — the old placeholder ids "astar"/"bidi" (never real
+// roster ids even before this round) no longer typecheck, so this block
+// uses two real non-core ids ("astar-straight"/"astar-greedy") as the
+// stand-ins instead; the set-membership logic under test doesn't care which
+// two, only that they're distinct. (Weighted A* — the round's original
+// third non-core id — was itself removed from the roster by §20.2; these
+// fixtures were repointed at greedy rather than left naming a retired id.)
 describe("diffPanels (panel-set diffing: current panel algos vs. the next desired active-racer set)", () => {
   it("both empty: nothing to add, keep, or remove", () => {
     expect(diffPanels([], [])).toEqual({ keep: [], add: [], remove: [] });
@@ -449,17 +451,17 @@ describe("diffPanels (panel-set diffing: current panel algos vs. the next desire
   });
 
   it("racers toggled OFF: they move to remove, survivors stay in keep", () => {
-    expect(diffPanels(["dijkstra", "astar-straight", "astar-weighted", "ch"], ["dijkstra", "ch"])).toEqual({
+    expect(diffPanels(["dijkstra", "astar-straight", "astar-greedy", "ch"], ["dijkstra", "ch"])).toEqual({
       keep: ["dijkstra", "ch"],
       add: [],
-      remove: ["astar-straight", "astar-weighted"],
+      remove: ["astar-straight", "astar-greedy"],
     });
   });
 
   it("simultaneous add and remove (one racer swapped for another) in a single diff", () => {
-    expect(diffPanels(["dijkstra", "astar-straight", "ch"], ["dijkstra", "astar-weighted", "ch"])).toEqual({
+    expect(diffPanels(["dijkstra", "astar-straight", "ch"], ["dijkstra", "astar-greedy", "ch"])).toEqual({
       keep: ["dijkstra", "ch"],
-      add: ["astar-weighted"],
+      add: ["astar-greedy"],
       remove: ["astar-straight"],
     });
   });
@@ -473,10 +475,10 @@ describe("diffPanels (panel-set diffing: current panel algos vs. the next desire
   });
 
   it("keep and remove preserve CURRENT's own order; add preserves NEXT's own order — a plain set-membership diff, not a re-sort by ROSTER order", () => {
-    const result = diffPanels(["ch", "astar-straight", "dijkstra"], ["dijkstra", "astar-weighted", "ch"]);
+    const result = diffPanels(["ch", "astar-straight", "dijkstra"], ["dijkstra", "astar-greedy", "ch"]);
     expect(result.keep).toEqual(["ch", "dijkstra"]);
     expect(result.remove).toEqual(["astar-straight"]);
-    expect(result.add).toEqual(["astar-weighted"]);
+    expect(result.add).toEqual(["astar-greedy"]);
   });
 });
 

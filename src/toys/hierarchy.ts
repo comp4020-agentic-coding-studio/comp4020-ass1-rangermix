@@ -61,17 +61,37 @@ export function computePctSteps(lines: number[][]): (number | null)[] {
 
 const LOOP_MS = 2500;
 
+// Hierarchy zoom (design spec §20.5, sixth build review — moved here from
+// climbLinked.ts's query view; see that file's own revert note): the same
+// wheel/button zoom feel as the real map's own (src/pages/home.ts's
+// WHEEL_ZOOM_BASE/BUTTON_ZOOM_FACTOR), reused here at the same values so
+// zooming feels like the same control everywhere on the site.
+const WHEEL_ZOOM_BASE = 1.0015;
+const BUTTON_ZOOM_FACTOR = 1.4;
+
 function reducedMotion(): boolean {
   return matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 function skeletonMarkup(): string {
   return (
+    // .hier-frame wraps the role="img" stack AND the zoom buttons as
+    // SIBLINGS (design spec §20.5) -- same reason home.ts's .map-frame
+    // keeps its own zoom-controls outside .map-stack's role="img" box:
+    // nesting interactive controls inside a role="img" subtree is an
+    // accessibility anti-pattern (a screen reader treats the whole subtree
+    // as one opaque image, which can hide focusable descendants).
+    `<div class="hier-frame">` +
     `<div class="hier-stack" data-role="stack" role="img" ` +
     `aria-label="Map of Canberra's road network, ${STEP_LABELS[0]} shown.">` +
     `<canvas data-role="base"></canvas>` +
     `<canvas data-role="overlay"></canvas>` +
     `<p class="hier-loading" data-role="loading">loading the road network…</p>` +
+    `</div>` +
+    `<div class="zoom-controls">` +
+    `<button class="zoom-btn" type="button" data-action="hier-zoom-in" aria-label="Zoom in on the road network" disabled>+</button>` +
+    `<button class="zoom-btn" type="button" data-action="hier-zoom-out" aria-label="Zoom out on the road network" disabled>&minus;</button>` +
+    `</div>` +
     `</div>` +
     `<p class="caption" data-role="caption">${STEP_CAPTIONS[0]}</p>` +
     `<div class="hier-controls">` +
@@ -93,6 +113,8 @@ export function mountHierarchy(root: HTMLElement): void {
   const caption = root.querySelector<HTMLElement>('[data-role="caption"]');
   const range = root.querySelector<HTMLInputElement>('[data-role="range"]');
   const resumeBtn = root.querySelector<HTMLButtonElement>('[data-role="resume"]');
+  const zoomInBtn = root.querySelector<HTMLButtonElement>('[data-action="hier-zoom-in"]');
+  const zoomOutBtn = root.querySelector<HTMLButtonElement>('[data-action="hier-zoom-out"]');
 
   if (!(baseCanvas instanceof HTMLCanvasElement) || !(overlayCanvas instanceof HTMLCanvasElement)) {
     return;
@@ -169,6 +191,78 @@ export function mountHierarchy(root: HTMLElement): void {
     ro.observe(stack);
   }
 
+  // Zoom/pan (design spec §20.5): wheel-about-cursor, +/- buttons, and
+  // single-pointer drag-pan, all going through MapView's own zoomAt/panBy
+  // against `view`'s PRIVATE store -- the `new MapView(...)` call below
+  // passes no explicit `store` argument, so it creates its own via
+  // createViewStore (mapRenderer.ts), never home.ts's page-level shared one.
+  // Wired once, unconditionally, same convention as the real map's own
+  // wireMapInteraction (src/pages/home.ts): every handler reads `view`
+  // fresh and no-ops until the first loadRender() resolve constructs it, so
+  // there's no separate "wire once data is ready" step. Unlike the real
+  // map, there are no pins here, so every pointerdown is a pan (no
+  // pin-vs-pan disambiguation needed) and there's no pinch (the +/- buttons
+  // are the touch-friendly path, same as climbLinked's own retired zoom
+  // used). The level slider + auto-tour keep working at whatever zoom/pan
+  // the visitor left the map at: setPctThreshold (applyStep, above) never
+  // touches the store, only this.pctThreshold/this.emphasize + drawBase(),
+  // which derives its transform fresh from the CURRENT store state every
+  // time (mapRenderer.ts) -- confirmed by reading that method's own body,
+  // not assumed.
+  // An arrow function bound to `const`, not a `function` declaration: a
+  // hoisted function declaration's body doesn't retain the `instanceof`
+  // narrowing the early-return guard above gave `overlayCanvas` (TS can't
+  // assume the guard has run by the time a hoisted declaration might be
+  // called), so `overlayCanvas` would type as possibly-null again inside
+  // it — found via `pnpm typecheck`, not assumed. Every other listener
+  // below is already an inline arrow function for the same reason.
+  const zoomAtCentre = (factor: number): void => {
+    if (!view) return;
+    const rect = overlayCanvas.getBoundingClientRect();
+    view.zoomAt(rect.width / 2, rect.height / 2, factor);
+  };
+  zoomInBtn?.addEventListener("click", () => zoomAtCentre(BUTTON_ZOOM_FACTOR));
+  zoomOutBtn?.addEventListener("click", () => zoomAtCentre(1 / BUTTON_ZOOM_FACTOR));
+
+  // Wheel zooms about the cursor -- `{ passive: false }` + preventDefault so
+  // the page doesn't ALSO scroll while the map zooms under the cursor (same
+  // convention as home.ts's own map wheel handler).
+  overlayCanvas.addEventListener(
+    "wheel",
+    (e) => {
+      if (!view) return;
+      e.preventDefault();
+      const rect = overlayCanvas.getBoundingClientRect();
+      view.zoomAt(e.clientX - rect.left, e.clientY - rect.top, Math.pow(WHEEL_ZOOM_BASE, -e.deltaY));
+    },
+    { passive: false },
+  );
+
+  // Drag-pan: content follows the pointer, same convention as the real
+  // map's own panBy (src/pages/home.ts).
+  let panActive = false;
+  let panX = 0;
+  let panY = 0;
+  overlayCanvas.addEventListener("pointerdown", (e) => {
+    if (!view) return;
+    panActive = true;
+    panX = e.clientX;
+    panY = e.clientY;
+    overlayCanvas.setPointerCapture(e.pointerId);
+  });
+  overlayCanvas.addEventListener("pointermove", (e) => {
+    if (!panActive || !view) return;
+    view.panBy(e.clientX - panX, e.clientY - panY);
+    panX = e.clientX;
+    panY = e.clientY;
+  });
+  const endPan = (e: PointerEvent): void => {
+    panActive = false;
+    if (overlayCanvas.hasPointerCapture(e.pointerId)) overlayCanvas.releasePointerCapture(e.pointerId);
+  };
+  overlayCanvas.addEventListener("pointerup", endPan);
+  overlayCanvas.addEventListener("pointercancel", endPan);
+
   // /how/ is one path segment deeper than the site root, so render.json
   // (committed under public/data/, served at the site ROOT's /data/) needs
   // one more ".." than loadRender's own default ("./data/", right for a
@@ -185,6 +279,8 @@ export function mountHierarchy(root: HTMLElement): void {
       applyStep(Number(range?.value ?? 0));
       if (loading) loading.hidden = true;
       if (range) range.disabled = false;
+      if (zoomInBtn) zoomInBtn.disabled = false;
+      if (zoomOutBtn) zoomOutBtn.disabled = false;
       // Reduced-motion: no loop at all, slider manual only (design spec
       // §14.10) — this toy is already only mounted once its root has
       // scrolled into view (see how.ts's IntersectionObserver gate), so

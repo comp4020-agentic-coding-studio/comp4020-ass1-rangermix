@@ -39,16 +39,9 @@ import {
   MIN_NODE_DIST,
   physicalEdges,
   roadPolylineMarkup,
-  svgPan,
-  svgUserPoint,
-  svgZoomAbout,
-  SVG_ZOOM_MAX,
-  SVG_ZOOM_MIN,
   unorderedKey,
-  vbPercentXY,
   wireRovingNodeButtons,
   type PickState,
-  type ViewBoxRect,
 } from "./toytownView";
 import {
   buildSteps,
@@ -67,24 +60,18 @@ import {
 // §16.13: "same step cadence (~500ms)").
 const STEP_MS = 500;
 
-// Hierarchy zoom (design spec §17.6, task H3): the BASE viewBox rect — the
-// fully-zoomed-out view, matching toytown.ts's own 460x300 VIEWBOX exactly
-// (climb.ts's rank-lift layout is authored against that space) — plus the
-// same wheel/button zoom feel as the real map's own (src/pages/home.ts's
-// WHEEL_ZOOM_BASE/BUTTON_ZOOM_FACTOR), reused here at the same values so
-// zooming feels like the same control everywhere on the site.
-const HIER_BASE_VB: ViewBoxRect = { x: 0, y: 0, w: VIEWBOX_W, h: VIEWBOX_H };
-const WHEEL_ZOOM_BASE = 1.0015;
-const BUTTON_ZOOM_FACTOR = 1.4;
-// H5 gate fix -- see vbPercentXY's own doc comment (toytownView.ts) for the
-// first-load right-edge clipping this margin closes. 4% comfortably covers
-// a .node-mark's 12px half-width at both reference stage widths this
-// codebase already measures against (MIN_NODE_DIST's own doc comment):
-// 12/324 ~= 3.7% at the 390px phone's ~324px rendered stage, 12/460 ~= 2.6%
-// at desktop's full 460px -- a small surplus at the wider size rather than
-// tuned to the exact pixel, same margin-of-safety convention MIN_NODE_DIST
-// itself uses.
-const HIER_EDGE_INSET_PCT = 4;
+// Hierarchy zoom/height (design spec §17.6, task H3) lived here briefly —
+// wheel/button zoom, drag-pan, and a taller stage. Sixth build review §20.5
+// found that treatment landed on the WRONG view: the user meant chapter 2
+// ("The hierarchy, revealed", src/toys/hierarchy.ts's real Canberra map),
+// not this toy-town rank-lift diagram. Reverted here to the pre-§17.6
+// compact form (plain base-space percentage positioning throughout — see
+// renderHier/positionMeets below — and styles.css's .toy-stage default
+// height); the zoom feature itself moved to hierarchy.ts, driving MapView's
+// own zoomAt/panBy against a private view store rather than the
+// svgZoomAbout/svgPan/vbPercentXY helpers this file used to call (those
+// helpers stay in toytownView.ts, unchanged, for any other SVG-based toy
+// that wants them later).
 
 function reducedMotion(): boolean {
   return matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -131,34 +118,19 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
     `<div class="climb-views">` +
     `<div class="climb-view">` +
     `<p class="climb-view-label">Hierarchy — rank climbs upward</p>` +
-    // The zoom +/- row sits BETWEEN the label and the stage, its own
-    // full-width block (not overlaid on the diagram): a touched node's real
-    // x/rank position can legitimately land anywhere in the panel,
-    // including the bottom-right corner an overlaid control would otherwise
-    // occupy — found live on the graph's own DEFAULT pair, no re-pick
-    // needed: node B's mark rendered partly behind an overlaid "+" button
-    // there (see the H3 report). Right-aligned via justify-content so it
-    // still reads as "belonging" to the panel below it, same visual weight
-    // as the old corner position, with zero collision risk regardless of
-    // which pair is loaded.
-    `<div class="zoom-controls hier-zoom-controls">` +
-    `<button class="zoom-btn" type="button" data-action="hier-zoom-in" aria-label="Zoom in on the hierarchy view">+</button>` +
-    `<button class="zoom-btn" type="button" data-action="hier-zoom-out" aria-label="Zoom out on the hierarchy view">&minus;</button>` +
-    `</div>` +
     `<div class="toy-stage climb-hierarchy-stage">` +
-    // aria-hidden moved onto the SVG and the node-marks layer individually
-    // (not the outer .toy-stage) so the zoom +/- buttons above — real
-    // interactive controls, the a11y path for this panel's zoom (design
-    // spec §17.6) — aren't nested inside an aria-hidden subtree, which
-    // would hide them from assistive tech regardless of their own
-    // attributes. preserveAspectRatio="none": this stage's CSS box is
-    // taller than its 460x300 viewBox (styles.css's aspect-ratio on
-    // .climb-hierarchy-stage — §17.6's "more vertical room"), and "none"
-    // stretches the viewBox to fill it on BOTH axes independently, matching
-    // how the percentage-positioned .node-mark/.climb-meet layers below
-    // already stretch with the box — without this they'd default to
-    // uniform (letterboxed) scaling and drift out of sync with those layers.
-    `<svg class="toy-svg" viewBox="${VIEWBOX}" preserveAspectRatio="none" aria-hidden="true" data-role="hier-svg">` +
+    // aria-hidden lives on the SVG and the node-marks layer individually
+    // rather than the outer .toy-stage — this view is display-only (this
+    // file's own header comment: the visitor picks A/B on the MAP, the
+    // hierarchy just mirrors state), so nothing under here is ever a
+    // focusable control, but scoping it per-element rather than on the
+    // shared .toy-stage class keeps it honest if that class is ever reused
+    // somewhere a focusable descendant DOES belong. No preserveAspectRatio
+    // override: this stage's CSS box matches its 460x300 viewBox exactly
+    // (the shared base .toy-stage rule, styles.css — see this file's own
+    // revert note above), so the default uniform scaling already lines up
+    // with the percentage-positioned .node-mark/.climb-meet layers below.
+    `<svg class="toy-svg" viewBox="${VIEWBOX}" aria-hidden="true">` +
     `<g class="climb-edges" data-role="hier-edges"></g>` +
     `<path class="route-path" data-role="hier-route" d="" />` +
     `</svg>` +
@@ -199,10 +171,6 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
   const hierRoutePath = root.querySelector<SVGPathElement>('[data-role="hier-route"]');
   const hierNodesLayer = root.querySelector<HTMLElement>('[data-role="hier-nodes"]');
   const hierMeetEl = root.querySelector<HTMLElement>('[data-role="hier-meet"]');
-  const hierSvg = root.querySelector<SVGSVGElement>('[data-role="hier-svg"]');
-  const hierStage = root.querySelector<HTMLElement>(".climb-hierarchy-stage");
-  const hierZoomInBtn = root.querySelector<HTMLButtonElement>('[data-action="hier-zoom-in"]');
-  const hierZoomOutBtn = root.querySelector<HTMLButtonElement>('[data-action="hier-zoom-out"]');
 
   const mapSvg = root.querySelector<SVGSVGElement>(".climb-map-stage svg");
   const mapNodesLayer = root.querySelector<HTMLElement>('[data-role="map-nodes"]');
@@ -278,14 +246,6 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
   let shown = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let pick: PickState = IDLE_PICK;
-  // The hierarchy panel's current SVG viewBox rect (design spec §17.6) —
-  // reset to HIER_BASE_VB on every re-pick (setPair) so a new query always
-  // opens at the full view rather than leaving the visitor zoomed into
-  // whatever the PREVIOUS pair's touched region happened to be.
-  let hierVb: ViewBoxRect = { ...HIER_BASE_VB };
-  let hierDragging = false;
-  let hierDragX = 0;
-  let hierDragY = 0;
 
   function computeNodeStepIndex(s: ClimbStep[]): Map<number, { fwdIdx?: number; bwdIdx?: number }> {
     const m = new Map<number, { fwdIdx?: number; bwdIdx?: number }>();
@@ -406,75 +366,6 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
     }
   }
 
-  // Converts a point in climb.ts's base 0-460 x 0-300 rank-lift space into a
-  // left/top percentage RELATIVE TO THE CURRENT hierVb (not the fixed base
-  // extent) — the HTML-percentage equivalent of what preserveAspectRatio=
-  // "none" already does automatically for the SVG's own drawn content (see
-  // climbLinked.ts's markup comment on the hierarchy <svg>). Needed because
-  // .node-mark/.climb-meet are plain positioned <div>s, not SVG elements —
-  // they don't get a free ride on the viewBox transform the way climb-edges/
-  // route-path do, so THIS function is what keeps them lined up with the
-  // zoomed/panned SVG content instead of sitting frozen at their un-zoomed
-  // position while the roads zoom out from under them (found live: without
-  // this, zooming in visibly detached every node dot and the meet star from
-  // the lines they're supposed to mark — see the H3 report).
-  function hierPercentXY(x: number, y: number): [string, string] {
-    const [left, top] = vbPercentXY(hierVb, x, y, HIER_EDGE_INSET_PCT);
-    return [left.toFixed(3), top.toFixed(3)];
-  }
-
-  // Re-positions the hierarchy's node marks and meet star at the CURRENT
-  // hierVb — cheap style-only writes (no innerHTML churn), safe to call on
-  // every wheel tick. Does NOT touch the map view (that overlay is real
-  // geography with its own fixed VIEWBOX_W/VIEWBOX_H, never zoomed) or the
-  // SVG-drawn hierarchy content (climb-edges/route-path already redraw
-  // themselves from the browser's own preserveAspectRatio="none" transform
-  // the moment applyHierViewBox sets a new viewBox attribute — no JS needed
-  // for those).
-  function repositionHierOverlay(): void {
-    if (hierNodesLayer) {
-      for (const mark of hierNodesLayer.querySelectorAll<HTMLElement>(".node-mark")) {
-        const i = Number(mark.dataset.node);
-        const [x, y] = hierNodeXY(i);
-        const [left, top] = hierPercentXY(x, y);
-        mark.style.left = `${left}%`;
-        mark.style.top = `${top}%`;
-      }
-    }
-    if (hierMeetEl) {
-      const [x, y] = hierNodeXY(result.meet);
-      const [left, top] = hierPercentXY(x, y);
-      hierMeetEl.style.left = `${left}%`;
-      hierMeetEl.style.top = `${top}%`;
-    }
-  }
-
-  // Pushes `hierVb` onto the live SVG, re-syncs the node marks/meet star to
-  // match (repositionHierOverlay), and keeps the +/- buttons' disabled state
-  // honest at the [SVG_ZOOM_MIN, SVG_ZOOM_MAX] clamp (same UX as every other
-  // disable-at-the-limit control in this file — see e.g. render()'s own
-  // stepBtn.disabled). Called after every hierVb mutation (wheel, buttons,
-  // drag) and once at mount/setPair — including right after renderHier()/
-  // positionMeets() there, whose OWN (non-zoom-aware) node-mark/meet-star
-  // placements this immediately supersedes once hierVb is anything other
-  // than the base extent; at the base extent both formulas agree, so the
-  // ordering is only ever a correction, never a visible flicker.
-  function applyHierViewBox(): void {
-    hierSvg?.setAttribute("viewBox", `${hierVb.x} ${hierVb.y} ${hierVb.w} ${hierVb.h}`);
-    repositionHierOverlay();
-    const zoomLevel = HIER_BASE_VB.w / hierVb.w;
-    if (hierZoomInBtn) hierZoomInBtn.disabled = zoomLevel >= SVG_ZOOM_MAX - 1e-6;
-    if (hierZoomOutBtn) hierZoomOutBtn.disabled = zoomLevel <= SVG_ZOOM_MIN + 1e-6;
-  }
-
-  // A new pair (setPair) opens the hierarchy at the full view rather than
-  // wherever the PREVIOUS pair's zoom/pan happened to leave it — the newly
-  // touched region is very unlikely to be the same screen area.
-  function resetHierView(): void {
-    hierVb = { ...HIER_BASE_VB };
-    applyHierViewBox();
-  }
-
   // Rebuilds the hierarchy's node marks + climb-edges fully (their
   // POSITIONS depend on the rank-lift layout, which changes per pair —
   // unlike the map, whose node buttons are static and only get state
@@ -587,7 +478,6 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
     rebuildStreetLookups();
     renderHier();
     positionMeets();
-    resetHierView();
     shown = 0;
     render();
     playFromCurrent();
@@ -622,7 +512,6 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
   rebuildStreetLookups();
   renderHier();
   positionMeets();
-  applyHierViewBox();
   render();
 
   playBtn?.addEventListener("click", () => playFromCurrent());
@@ -635,77 +524,6 @@ export function mountClimb(root: HTMLElement, t: Toytown): { playDefault: () => 
     shown = 0;
     render();
   });
-
-  // Hierarchy zoom (design spec §17.6): +/- buttons zoom about the CURRENT
-  // view's own centre — the a11y path (real buttons, native Enter/Space
-  // activation), mirroring the real map's own "no cursor to anchor on from
-  // a keyboard" reasoning (src/pages/home.ts's zoomAtCentre).
-  function hierZoomAtCentre(factor: number): void {
-    const cx = hierVb.x + hierVb.w / 2;
-    const cy = hierVb.y + hierVb.h / 2;
-    hierVb = svgZoomAbout(hierVb, factor, cx, cy, HIER_BASE_VB.w, HIER_BASE_VB.h);
-    applyHierViewBox();
-  }
-  hierZoomInBtn?.addEventListener("click", () => hierZoomAtCentre(BUTTON_ZOOM_FACTOR));
-  hierZoomOutBtn?.addEventListener("click", () => hierZoomAtCentre(1 / BUTTON_ZOOM_FACTOR));
-
-  if (hierStage && hierSvg) {
-    // Wheel zooms about the cursor. `{ passive: false }` + preventDefault so
-    // the page doesn't ALSO scroll while the panel zooms under the cursor.
-    hierStage.addEventListener(
-      "wheel",
-      (e) => {
-        e.preventDefault();
-        const rect = hierSvg.getBoundingClientRect();
-        const [px, py] = svgUserPoint(hierVb, rect.width, rect.height, e.clientX - rect.left, e.clientY - rect.top);
-        hierVb = svgZoomAbout(hierVb, Math.pow(WHEEL_ZOOM_BASE, -e.deltaY), px, py, HIER_BASE_VB.w, HIER_BASE_VB.h);
-        applyHierViewBox();
-      },
-      { passive: false },
-    );
-
-    // Drag-pan: content follows the pointer (dragging right moves the
-    // VIEWBOX left), same convention as the real map's own panBy — the
-    // screen-px delta is converted into hierVb's own user-space units via
-    // the CURRENT per-axis scale (preserveAspectRatio="none" means x/y
-    // scale independently, so this isn't a single uniform factor the way
-    // it is on the geo-projected real map).
-    //
-    // Skips the zoom +/- buttons: a pointerdown that starts ON one of them
-    // still BUBBLES to hierStage (they're its descendants), and calling
-    // setPointerCapture on hierStage during that bubbled event would
-    // retarget the subsequent "click" to hierStage instead of the button —
-    // per the Pointer Events spec, capturing a pointer redirects its
-    // later pointer AND mouse events (including the synthesized click) to
-    // the CAPTURING element, not the original hit-test target — so the
-    // button's own click listener would silently never fire (found live:
-    // the zoom buttons had zero effect, no error, until this guard).
-    hierStage.addEventListener("pointerdown", (e) => {
-      if ((e.target as HTMLElement).closest(".zoom-btn")) return;
-      hierDragging = true;
-      hierDragX = e.clientX;
-      hierDragY = e.clientY;
-      hierStage.setPointerCapture(e.pointerId);
-    });
-    hierStage.addEventListener("pointermove", (e) => {
-      if (!hierDragging) return;
-      const rect = hierSvg.getBoundingClientRect();
-      const dxScreen = e.clientX - hierDragX;
-      const dyScreen = e.clientY - hierDragY;
-      hierDragX = e.clientX;
-      hierDragY = e.clientY;
-      const dxUser = (dxScreen / rect.width) * hierVb.w;
-      const dyUser = (dyScreen / rect.height) * hierVb.h;
-      hierVb = svgPan(hierVb, -dxUser, -dyUser, HIER_BASE_VB.w, HIER_BASE_VB.h);
-      applyHierViewBox();
-    });
-    const endHierDrag = (e: PointerEvent): void => {
-      hierDragging = false;
-      if (hierStage.hasPointerCapture(e.pointerId)) hierStage.releasePointerCapture(e.pointerId);
-    };
-    hierStage.addEventListener("pointerup", endHierDrag);
-    hierStage.addEventListener("pointercancel", endHierDrag);
-  }
 
   return { playDefault: () => playFromCurrent() };
 }

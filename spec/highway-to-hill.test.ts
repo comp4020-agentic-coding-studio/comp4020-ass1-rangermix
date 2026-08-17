@@ -440,9 +440,10 @@ describe("spec: honest numbers", () => {
     const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
     expect(board).toBeTruthy();
     // Whole-board sweep EXCLUDING .name/.row-note — spec §18.5's contract
-    // strings legitimately carry digits ("A* — weighted (1.5×)" and its
-    // own note's "exaggerated 1.5×"), and those are static roster copy, not
-    // a measurement. Every OTHER element that could carry a measured number
+    // strings are static roster copy, not a measurement, so a future name
+    // or note that happens to carry a digit (weighted A*'s old "1.5×", since
+    // removed by §20.2, used to be exactly this case) still shouldn't trip
+    // this check. Every OTHER element that could carry a measured number
     // (.val, .ms, the headline, the .row-delta disclosure) must still be
     // completely digit-free until a real race runs — race results only
     // ever reach the DOM via JS after that happens.
