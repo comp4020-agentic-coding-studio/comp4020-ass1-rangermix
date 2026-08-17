@@ -780,11 +780,23 @@ function boot(): void {
     updateControlsEnabled(); // re-gates every dataReady-gated control, exactly like a fresh splash
     updateSplashInert(); // re-traps focus/the accessibility tree the same way
     applyViewMode(); // H5 gate fix's own effectiveViewMode forces Overlay again while the (re-)shown splash covers .map-frame
-    exploreBtn?.focus(); // same autofocus-the-primary-action treatment a fresh splash gets
+    // preventScroll: on a phone-height map frame the splash copy overflows
+    // and Explore sits below the fold — a plain focus() scroll-chases it,
+    // booting the dialog scrolled to the BOTTOM with the title off-screen
+    // (splash-round review, Important). Keyboard users still hold focus;
+    // the browser scrolls to the button the moment they interact with it.
+    exploreBtn?.focus({ preventScroll: true }); // same autofocus-the-primary-action treatment a fresh splash gets
   }
 
   // §22 retired the persistent off-preference: boot-time visibility is the
-  // per-tab sessionStorage dismissal alone again.
+  // per-tab sessionStorage dismissal alone again. Scrub the retired key
+  // from returning visitors' storage too — nothing reads it anymore, this
+  // is hygiene, not behavior (splash-round review, Minor).
+  try {
+    localStorage.removeItem("hth-splash-off");
+  } catch {
+    /* storage unavailable — nothing to scrub */
+  }
   if (!shouldShowSplashOnBoot(safeSessionGet(SPLASH_KEY) === "1")) {
     // Pre-dismissed earlier this session: start hidden with no animation
     // or flash — index.html's own inline head script already stamped
@@ -797,7 +809,10 @@ function boot(): void {
     // First splash this session: autofocus the primary
     // action — a real, enabled, on-screen button, safe to autofocus — so
     // keyboard use starts right where a mouse visitor's eye lands.
-    exploreBtn?.focus();
+    // preventScroll for the same reason as the ⓘ-reopen path above: on a
+    // phone-height frame a plain focus() boots the overflowing splash
+    // scrolled to the bottom, title off-screen (splash-round review).
+    exploreBtn?.focus({ preventScroll: true });
   }
   // H2 gate fix: recompute both gates right away too (boot-with-
   // predismissed-session), not only at data-ready or inside dismiss() — a

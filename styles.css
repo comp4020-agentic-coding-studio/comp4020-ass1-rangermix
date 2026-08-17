@@ -744,6 +744,7 @@ a {
    documents. Border + radius matches .map-stack's own panel treatment so
    it reads as "the map box, showing different content right now" rather
    than a jarring shape change once it's dismissed. */
+
 /* Centering via the CHILD's `margin: auto` (below), never
    `align-items/justify-content: center` here: on a flex SCROLL container
    those center the overflowing child so its TOP half sticks out above the
