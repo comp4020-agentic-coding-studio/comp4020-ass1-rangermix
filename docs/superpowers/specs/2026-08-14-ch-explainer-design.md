@@ -660,6 +660,35 @@ colour of its own.
    the Explore/Escape dismissal semantics and control gating are
    unchanged.
 
+## 20. Sixth build review (user, 2026-08-17 — binding)
+
+1. Every algorithm's ROUTE draws in its own chart hue, and appears only
+   when THAT algorithm's replay finishes (the single shared white/ink
+   route retires). Exact racers share geometry and overdraw; a
+   suboptimal racer's divergent route in its own hue is the point.
+   Compare panels recolor their per-panel routes likewise (dashed-when-
+   suboptimal stays).
+2. Weighted A\* is REMOVED from the roster (four racers remain:
+   Dijkstra, A\* — straight line, A\* — greedy, CH). Re-validated
+   4-slot palettes in display order (both modes pass; light yellow
+   keeps the relief-rule obligation via always-visible row labels).
+3. At 1080p in adaptive + compare, four panels lay out 2×2 (not one
+   row); three panels 2+1; two panels side-by-side as today.
+4. Bidirectional greedy: investigate the flood-like behavior (27k
+   settles). Finding-in-advance from the controller: the balanced
+   framework's termination bound presumes keys are g+p lower bounds;
+   greedy's h-only key voids it, degenerating to near-exhaustion. If
+   confirmed, REDEFINE bidirectional greedy as first-frontier-meet
+   semantics (two greedy searches, stop at first meet, concatenate at
+   the meeting node, disclosed-suboptimal as usual) — small settle
+   counts, honest routes, tested.
+5. §17.6's vertical/zoom treatment was applied to the WRONG view: the
+   user meant chapter 2 ("The hierarchy, revealed"), not the query
+   chapter's rank view. Revert the query view to its compact pre-§17.6
+   form (height and zoom controls); give the hierarchy-revealed
+   Canberra canvas the extra vertical room AND wheel/button zoom + pan
+   (its own local view state — never the home page's shared store).
+
 ## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
