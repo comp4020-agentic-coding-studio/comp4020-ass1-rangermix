@@ -201,13 +201,16 @@ describe("spec: home page (/) contracts", () => {
     },
   );
 
-  // Roster round (spec §18.5/.6): the scoreboard now direct-labels all FIVE
-  // roster racers, not just Dijkstra/CH — sourced from ROSTER itself
-  // (src/race/roster.ts, this round's contract-first single source of
-  // truth) rather than a hand-copied list, so this test can't silently
-  // drift from the roster the panel is meant to be built from. The old
-  // per-racer "Bidirectional" row expectation is retired outright: bidi is
-  // now the family-wide modifier, never a row of its own, so it has no
+  // Roster round (spec §18.5/.6): the scoreboard now direct-labels every
+  // roster racer (FIVE at the time this comment was first written; FOUR
+  // since spec §20.2 removed weighted A* — the count itself is deliberately
+  // not restated as a number below, since ROSTER.length already IS the
+  // count these tests check against), not just Dijkstra/CH — sourced from
+  // ROSTER itself (src/race/roster.ts, this round's contract-first single
+  // source of truth) rather than a hand-copied list, so this test can't
+  // silently drift from the roster the panel is meant to be built from. The
+  // old per-racer "Bidirectional" row expectation is retired outright: bidi
+  // is now the family-wide modifier, never a row of its own, so it has no
   // entry in ROSTER and nothing here checks for one.
   it(
     `scoreboard [data-testid=${CONTRACTS.testids.scoreboard}] direct-labels every roster racer with its exact contract name, in roster order`,
@@ -218,6 +221,37 @@ describe("spec: home page (/) contracts", () => {
         (r) => board?.querySelector(`[data-algo="${r.id}"] .name`)?.textContent?.trim(),
       );
       expect(names).toEqual(ROSTER.map((r) => r.name));
+    },
+  );
+
+  // K4 gate guardrail (spec §20.2's own gate found the failure mode this
+  // closes): the test above only ever walks ROSTER -> DOM (does every
+  // roster id have a row?), so it can never notice a row that SHOULDN'T be
+  // there. index.html's two `.row-optional` rows are hand-authored static
+  // markup, not generated from ROSTER — home.ts's roster-driven code only
+  // ever LOOKS UP a row per active roster id, it never enumerates or prunes
+  // existing rows (confirmed by reading boot()'s rosterToggleEls). That is
+  // exactly how the old astar-weighted row kept rendering, fully visible
+  // and un-wired, for the entire time between ROSTER dropping the id and a
+  // human noticing — this test's ROSTER -> DOM sibling would have stayed
+  // green throughout that whole window. Walking the DOM -> ROSTER direction
+  // too (every [data-algo] row's id is a real roster id, AND the counts
+  // match) closes the gap: a future roster change that forgets to update
+  // index.html's hand-authored rows now fails loudly here instead.
+  it(
+    `every [data-algo] row inside the scoreboard [data-testid=${CONTRACTS.testids.scoreboard}] corresponds to a real ROSTER id, with no stray leftover rows (reverse of the roster-order test above)`,
+    () => {
+      const doc = pageDoc("index.html");
+      const board = doc?.querySelector(`[data-testid="${CONTRACTS.testids.scoreboard}"]`);
+      const rowIds = [...(board?.querySelectorAll("[data-algo]") ?? [])].map((el) =>
+        el.getAttribute("data-algo"),
+      );
+      const rosterIds = ROSTER.map((r) => r.id);
+      expect(rowIds, "row count must equal roster count — no stray or missing rows").toHaveLength(
+        rosterIds.length,
+      );
+      for (const id of rowIds)
+        expect(rosterIds, `row data-algo="${id}" has no matching ROSTER entry`).toContain(id);
     },
   );
 
@@ -448,7 +482,7 @@ describe("spec: honest numbers", () => {
     // completely digit-free until a real race runs — race results only
     // ever reach the DOM via JS after that happens.
     const clone = board?.cloneNode(true) as Element | undefined;
-    for (const el of [...(clone?.querySelectorAll(".name, .row-note") ?? [])]) el.remove();
+    for (const el of clone?.querySelectorAll(".name, .row-note") ?? []) el.remove();
     expect(clone?.textContent).not.toMatch(/\d/);
   });
 });

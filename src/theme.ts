@@ -97,7 +97,7 @@ export function themeColors(): Record<string, string> {
     // roster id verbatim (src/race/roster.ts's own RosterEntry.id strings),
     // because controller.ts's replay loop reads a racer's colour
     // dynamically as `colors[layer.algo]` / `colors[`${layer.algo}Glow`]`,
-    // and `layer.algo` is always one of exactly these five strings. The
+    // and `layer.algo` is always one of exactly these four strings. The
     // pre-roster-round shorthand keys this object used to ALSO carry
     // (`astar`, `bidi`, `astarGlow`, `bidiGlow` — a fixed single-A*-row/
     // single-bidi-modifier vocabulary that predates the five-racer roster
@@ -114,8 +114,6 @@ export function themeColors(): Record<string, string> {
     chGlow: read("--g-ch"),
     "astar-straight": read("--c-astar"),
     "astar-straightGlow": read("--g-astar"),
-    "astar-weighted": read("--c-astar-w"),
-    "astar-weightedGlow": read("--g-astar-w"),
     "astar-greedy": read("--c-astar-g"),
     "astar-greedyGlow": read("--g-astar-g"),
   };

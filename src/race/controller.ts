@@ -492,7 +492,7 @@ export class RaceController {
   }
 
   /** Flips one optional searcher row's toggle state (astar-straight/
-   * weighted/greedy — spec §18's bezel rows) for every FUTURE run() call.
+   * astar-greedy — spec §18's bezel rows) for every FUTURE run() call.
    * Dijkstra/CH have no equivalent: they're core (roster.ts's own `core`
    * flag), always active regardless of this. Replaces the pre-roster-round
    * `setAlgoActive("astar"|"bidi", active)` — "bidi" is now

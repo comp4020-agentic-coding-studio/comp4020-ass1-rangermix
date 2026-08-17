@@ -109,6 +109,18 @@
             <div class="track"><div class="fill"></div></div>
           </div>
 
+          <!-- These two `.row-optional` rows are hand-authored static markup, not
+               generated from src/race/roster.ts's ROSTER array -- home.ts's
+               roster-driven code only LOOKS UP a row per active ROSTER id, it
+               never enumerates/prunes rows itself (spec §20.2's gate found the
+               old astar-weighted row still rendering, un-wired, after that id
+               was dropped from ROSTER). If the roster ever changes again, these
+               two rows (data-algo id, count, and label) must be updated to
+               match by hand. spec/highway-to-hill.test.ts's scoreboard-contract
+               tests check this both ways -- ROSTER->DOM (every roster id has a
+               row) and DOM->ROSTER (every row's data-algo id is a real roster
+               id, count included) -- so a stray or missing row fails loudly
+               instead of silently drifting. -->
           <div class="row row-optional" data-algo="astar-straight" data-active="false" role="button" tabindex="-1" aria-pressed="false" aria-disabled="true" aria-label="Toggle A* — straight line">
             <span class="swatch" aria-hidden="true"></span>
             <span class="name">A* — straight line</span><span class="val"></span>

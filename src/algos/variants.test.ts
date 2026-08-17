@@ -415,6 +415,55 @@ describe("bidiAstar", () => {
       expect(pctLonger).toBeGreaterThan(0); // disclosure math (controller.ts's "+X% longer") stays positive
     },
   );
+
+  it(
+    "first-frontier-meet: the meeting node can BE `to` itself, with the backward half of the " +
+      "reconstruction empty (K4 gate reviewer finding — isolation coverage for that boundary " +
+      "shape in the up/dn split). Hand-traced: a single directed edge from->to means forward's " +
+      "very first pop settles `from`, its second pop settles `to` (relaxing straight into it), " +
+      "and ONLY THEN does backward get a turn at all (ties always favour forward, and forward's " +
+      "heap stays size<=1 throughout so it never yields) — backward's first action is popping " +
+      "its OWN seed (`to`), which forward already marked done, so meet=`to` on backward's very " +
+      "first step, before it ever relaxes an edge. dn's while loop (`v !== to`) is therefore " +
+      "false immediately and the ENTIRE path comes from fwdS's parent chain alone.",
+    () => {
+      const g = toyGraph(2, [[0, 1, 4]]); // from(0) -> to(1), weight 4, no other edges
+      const lon = [149.0, 149.001];
+      const lat = [-35.3, -35.3];
+      for (let i = 0; i < 2; i++) { g.lon[i] = lon[i]; g.lat[i] = lat[i]; }
+      const gRev = transpose(2, g.fwd);
+      const r = bidiAstar("greedy", g, gRev, 0, 1, MAX_SPEED_MPS);
+      expect(r.path).toEqual([0, 1]);
+      expect(r.dist).toBe(4);
+    },
+  );
+
+  it(
+    "first-frontier-meet: the meeting node can BE `from` itself, with the forward half of the " +
+      "reconstruction trivial (single node) and the ENTIRE returned path built from bwdS's " +
+      "parent chain (K4 gate reviewer finding — the other half of the up/dn boundary pair above). " +
+      "Hand-traced: from(0) branches to two nodes (0->1, 0->2) so forward's first pop (of `from`) " +
+      "relaxes TWO edges, growing fwdS's heap to size 2 — from then on sizeF(2) > sizeB(1) on " +
+      "every comparison, so backward wins EVERY subsequent turn and forward never gets to act " +
+      "again. Backward walks seed(to=3) -> 1 -> 0 across three straight backward turns (via the " +
+      "1->3 edge's transpose, then the 0->1 edge's transpose), and the instant it pops `0`, " +
+      "isDone(fwdS, 0) is already true (forward's very first action), so meet=`from`. The dead " +
+      "branch to node 2 is never part of the discovered path.",
+    () => {
+      const g = toyGraph(4, [
+        [0, 1, 5], // from -> branch node (also the eventual meet path)
+        [0, 2, 7], // from -> dead branch (inflates fwdS heap so backward wins every turn)
+        [1, 3, 3], // branch node -> to
+      ]);
+      const lon = [149.0, 149.001, 149.001, 149.002];
+      const lat = [-35.3, -35.3, -35.301, -35.3];
+      for (let i = 0; i < 4; i++) { g.lon[i] = lon[i]; g.lat[i] = lat[i]; }
+      const gRev = transpose(4, g.fwd);
+      const r = bidiAstar("greedy", g, gRev, 0, 3, MAX_SPEED_MPS);
+      expect(r.path).toEqual([0, 1, 3]); // node 2 (the dead branch) never appears
+      expect(r.dist).toBe(8); // 5 + 3, independently recomputed via routeCost
+    },
+  );
 });
 
 describe("path cost equivalence (both variants match dijkstra's path cost; the path itself may differ under ties)", () => {

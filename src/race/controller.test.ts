@@ -1189,4 +1189,61 @@ describe("RaceController.run() (renderAt) — Compare-mode per-panel route revea
     await runPromise;
     clock.restore();
   });
+
+  it(
+    "a compare panel with NO matching layer in the current race draws nothing at all — no dots, " +
+      "no route, for the whole race (K1's carried watch, K4 gate coverage: home.ts's syncPanels " +
+      "can add a panel for a racer toggled on AFTER a race's request already went out, before the " +
+      "next panel rebuild catches up — reproduced directly here via a comparePanels entry for " +
+      "astar-straight, which is never made active and so has no entry in c.layers at all, rather " +
+      "than via real UI timing)",
+    async () => {
+      const ui = mockUi();
+      const controller = new RaceController(mockView() as unknown as MapView, ui);
+      controller.setRacerActive("astar-greedy", true);
+      // astar-straight is deliberately left inactive — its panel below has
+      // no corresponding layer in this race, on purpose.
+
+      const dijPanel = mockView();
+      const agPanel = mockView();
+      const chPanel = mockView();
+      const orphanPanel = mockView(); // astar-straight's panel: no matching layer, ever, this race
+      controller.setComparePanels([
+        { algo: "dijkstra", view: dijPanel as unknown as MapView },
+        { algo: "astar-greedy", view: agPanel as unknown as MapView },
+        { algo: "ch", view: chPanel as unknown as MapView },
+        { algo: "astar-straight", view: orphanPanel as unknown as MapView },
+      ]);
+
+      const clock = fakeClock();
+      const runPromise = controller.run(0, 1);
+      const worker = FakeWorker.instances.at(-1);
+      const req = worker?.sent[0];
+      expect(req).toBeDefined();
+      worker?.onmessage?.({
+        data: {
+          id: req!.id,
+          results: {
+            ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100),
+            dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100),
+            "astar-greedy": fakeAlgoResult([0], [10, 14], 0.02, 130),
+            // deliberately no "astar-straight" entry — it was never active for this race
+          },
+        },
+      } as unknown as MessageEvent<WorkerResponse>);
+      await new Promise((r) => setTimeout(r, 0));
+
+      clock.advance(10_000); // well past every real layer's own duration
+      await runPromise;
+      clock.restore();
+
+      expect(orphanPanel.drawDots).not.toHaveBeenCalled();
+      expect(orphanPanel.drawRoute).not.toHaveBeenCalled();
+      // Sanity check that the assertions above are specific to the orphan
+      // panel, not a symptom of a race that silently failed to run at all.
+      expect(dijPanel.drawRoute).toHaveBeenCalledTimes(1);
+      expect(agPanel.drawRoute).toHaveBeenCalledTimes(1);
+      expect(chPanel.drawRoute).toHaveBeenCalledTimes(1);
+    },
+  );
 });

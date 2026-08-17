@@ -544,9 +544,10 @@ function boot(): void {
   const raceRunBtn = document.querySelector<HTMLButtonElement>('[data-testid="race-run"]');
   // Roster round (spec §18): the panel is built from src/race/roster.ts's
   // own ROSTER array, not two hand-named toggles any more -- every
-  // NON-CORE entry (the three A* variants) gets its row looked up by its
-  // OWN `data-algo` id, so this list grows/shrinks with the roster itself
-  // rather than needing a matching edit here if the roster ever changes.
+  // NON-CORE entry (the two A* variants, since spec §20.2 removed weighted)
+  // gets its row looked up by its OWN `data-algo` id, so this list
+  // grows/shrinks with the roster itself rather than needing a matching
+  // edit here if the roster ever changes.
   const rosterToggleEls = ROSTER.filter((r) => !r.core).map(
     (r) => document.querySelector<HTMLElement>(`.board .row[data-algo="${r.id}"]`),
   ).filter((el): el is HTMLElement => el !== null);

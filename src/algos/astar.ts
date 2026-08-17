@@ -165,7 +165,7 @@ export function astar(
  * set alongside a real edge-weight addition, never a heap's key (g+h, or
  * for astarVariant's greedy form, h alone) — so routing an EXACT variant's
  * `dist` through this function changes nothing about its value. It exists
- * for the INEXACT variants (weighted/greedy, single- and bidirectional):
+ * for the INEXACT variant (greedy, single- and bidirectional):
  * spec §18.4's honesty rule ("+X% longer route") depends on those numbers
  * being right, so astarVariants.ts and bidiAstar.ts both route their
  * returned `dist` through this rather than trust an upstream accumulator
