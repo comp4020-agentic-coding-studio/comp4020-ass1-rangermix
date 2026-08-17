@@ -22,11 +22,9 @@
   --route: #1c2330;
   --c-dijkstra: #eb6834;
   --c-astar: #4a3aa7;
-  --c-bidi: #e87ba4;
   --c-ch: #2a78d6;
   --g-dijkstra: #eb6834;
   --g-astar: #4a3aa7;
-  --g-bidi: #e87ba4;
   --g-ch: #2a78d6;
 
   /* Fourth build review (spec §18, roster round) gave A* a second heuristic
@@ -64,11 +62,9 @@
     --route: #fff;
     --c-dijkstra: #d95926;
     --c-astar: #9085e9;
-    --c-bidi: #d55181;
     --c-ch: #3987e5;
     --g-dijkstra: #f5a962;
     --g-astar: #b48ce8;
-    --g-bidi: #e87ba0;
     --g-ch: #4fd8eb;
 
     /* Dark glow (fourth build review, spec §18; weighted A*'s own glow
@@ -100,11 +96,9 @@
   --route: #fff;
   --c-dijkstra: #d95926;
   --c-astar: #9085e9;
-  --c-bidi: #d55181;
   --c-ch: #3987e5;
   --g-dijkstra: #f5a962;
   --g-astar: #b48ce8;
-  --g-bidi: #e87ba0;
   --g-ch: #4fd8eb;
   --c-astar-g: #c98500;
   --g-astar-g: #e8c063;

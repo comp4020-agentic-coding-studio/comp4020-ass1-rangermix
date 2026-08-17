@@ -109,12 +109,9 @@
             <div class="track"><div class="fill"></div></div>
           </div>
 
-          <!-- These two `.row-optional` rows are hand-authored static markup, not
-               generated from src/race/roster.ts's ROSTER array -- home.ts's
-               roster-driven code only LOOKS UP a row per active ROSTER id, it
-               never enumerates/prunes rows itself (spec §20.2's gate found the
-               old astar-weighted row still rendering, un-wired, after that id
-               was dropped from ROSTER). If the roster ever changes again, these
+          <!-- These two `.row-optional` rows are hand-authored static markup —
+               must mirror src/race/roster.ts exactly. The spec test walks both
+               directions and fails on strays. If the roster ever changes again, these
                two rows (data-algo id, count, and label) must be updated to
                match by hand. spec/highway-to-hill.test.ts's scoreboard-contract
                tests check this both ways -- ROSTER->DOM (every roster id has a
