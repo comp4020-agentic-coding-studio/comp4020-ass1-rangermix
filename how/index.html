@@ -96,31 +96,37 @@
           <figcaption>delete B, keep the distance — that dashed edge is a
             shortcut.</figcaption>
         </figure>
-        <p>Contraction Hierarchies gets its speed by deleting intersections,
-          one at a time — but only if nothing breaks. Before removing one,
-          it checks every pair of roads that met there: an existing detour
-          just as short earns a free pass (a witness); otherwise, it adds a
-          shortcut that stands in for the trip through the node about to
-          disappear. Click any intersection below to contract it, and watch
-          which neighbour pairs pay the shortcut price.</p>
+        <p>Chapter 2's ranking is really a demolition schedule: CH removes
+          intersections one at a time, quietest first — under one rule,
+          nothing is allowed to get slower. Before an intersection goes,
+          every way through it gets the same question: is there already a
+          detour just as fast without it? If yes, it goes for free — that
+          detour is called a witness. If no, CH paves a bypass first: a
+          shortcut that carries exactly the travel time the trip through
+          used to take. Click any intersection below and watch it ask,
+          pair by pair.</p>
         <div class="toy" data-testid="toy-contraction"></div>
-        <p class="caption">What to notice: a witness means there's already a
-          detour just as short; a dashed shortcut means one had to be added
-          to keep the distance correct.</p>
+        <p class="caption">What to notice: the same question, asked once
+          per pair of roads — a detour just as fast means a free pass; no
+          detour means a dashed shortcut, priced at exactly the old
+          travel time.</p>
       </section>
 
       <section class="chapter" aria-labelledby="ch5-h">
         <h2 id="ch5-h">Order is everything</h2>
-        <p>Contracting one intersection at a time raises an obvious
-          question: which one first? Contract a busy hub too early and every
-          path through it needs a new shortcut, so the graph gets messier
-          before it gets simpler — a good heuristic contracts quiet dead
-          ends first and busy junctions last. Run the buttons below to
-          compare orders, then try "your turn" to see if you can beat the
-          heuristic yourself.</p>
+        <p>Every shortcut is clutter the map has to carry, so the
+          demolition order decides everything. Press the buttons below
+          and watch each order play out on the map: knock out a busy hub
+          early and shortcuts bury the streets within seconds; save the
+          hubs for last and the map stays almost clean. That's the whole
+          trick — contract quiet streets first, and the survivors are
+          exactly the big roads. It's the hierarchy you saw revealed in
+          chapter 2, and it's why the climb in chapter 3 works. Then take
+          "your turn" and see if you can beat the heuristic.</p>
         <div class="toy" data-testid="toy-order"></div>
-        <p class="caption">What to notice: the smart order isn't luck — it
-          never loses to random and worst-case orders, run after run.</p>
+        <p class="caption">What to notice: the smart order isn't luck —
+          run after run it adds the fewest shortcuts, and the last
+          streets standing are the ones you'd call main roads.</p>
         <p class="closer-echo" data-testid="closer-echo">Loading your race numbers…</p>
         <p class="closer-cta" data-testid="closer-cta">Now go see it at full scale.
           <a class="cta-link" href="../">Back to the race →</a></p>
