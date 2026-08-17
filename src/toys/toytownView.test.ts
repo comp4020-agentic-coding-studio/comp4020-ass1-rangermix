@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { existsSync, readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildCh } from "../algos/chBuild";
 import { chQuery } from "../algos/chQuery";
 import {
@@ -17,7 +17,10 @@ import {
   advancePick,
   asArrowKey,
   contextPolylineMarkup,
+  controlPoint,
+  curveNormal,
   declutterXY,
+  drawShortcutCurve,
   driftConnectorMarkup,
   driftConnectors,
   edgeClsOf,
@@ -796,5 +799,90 @@ describe("wireRovingNodeButtons: DOM wiring around nextRovingIndex (I3 gate)", (
   it("no-ops safely on an empty grid", () => {
     const container = document.createElement("div");
     expect(() => wireRovingNodeButtons(container, [], [])).not.toThrow();
+  });
+});
+
+describe("shortcut-curve helpers moved in from contraction.ts (spec §21.4 — ch4 and ch5 must draw identical curves)", () => {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  // A horizontal chord 0->1 with the bypassed node on each side of it:
+  // via=2 sits BELOW the chord (+y in SVG space), via=3 ABOVE it — so the
+  // away-from-via flip in curveNormal has a real case in each direction.
+  const XY: [number, number][] = [
+    [0, 0], // 0: chord start
+    [100, 0], // 1: chord end
+    [50, 40], // 2: via below the chord
+    [50, -40], // 3: via above the chord
+  ];
+  const mid = (a: number, b: number): [number, number] => [
+    (XY[a][0] + XY[b][0]) / 2,
+    (XY[a][1] + XY[b][1]) / 2,
+  ];
+
+  // jsdom does no SVG layout: getBBox (a layout API) is not implemented on
+  // its SVG elements, but drawShortcutCurve's label branch needs it to size
+  // the background chip. Stub a fixed box for this describe only.
+  type WithBBox = { getBBox?: () => { x: number; y: number; width: number; height: number } };
+  beforeAll(() => {
+    (SVGElement.prototype as unknown as WithBBox).getBBox = () => ({ x: 0, y: 0, width: 12, height: 8 });
+  });
+  afterAll(() => {
+    delete (SVGElement.prototype as unknown as WithBBox).getBBox;
+  });
+
+  it("curveNormal returns a unit vector", () => {
+    const [nx, ny] = curveNormal(XY, 0, 1, 2, false);
+    expect(Math.hypot(nx, ny)).toBeCloseTo(1, 10);
+  });
+
+  it("curveNormal points AWAY from via: dot with (midpoint - via) is >= 0, whichever side via sits on", () => {
+    for (const via of [2, 3]) {
+      const [nx, ny] = curveNormal(XY, 0, 1, via, false);
+      const [mx, my] = mid(0, 1);
+      const dot = nx * (mx - XY[via][0]) + ny * (my - XY[via][1]);
+      expect(dot).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("flip mirrors the normal exactly (the two directions of a directed pair bow to opposite sides)", () => {
+    const [nx, ny] = curveNormal(XY, 0, 1, 2, false);
+    const [fx, fy] = curveNormal(XY, 0, 1, 2, true);
+    expect(fx).toBeCloseTo(-nx, 10);
+    expect(fy).toBeCloseTo(-ny, 10);
+  });
+
+  it("controlPoint bows away from via: (control - midpoint) points along (midpoint - via)", () => {
+    for (const via of [2, 3]) {
+      const [cx, cy] = controlPoint(XY, 0, 1, via, false);
+      const [mx, my] = mid(0, 1);
+      const dot = (cx - mx) * (mx - XY[via][0]) + (cy - my) * (my - XY[via][1]);
+      expect(dot).toBeGreaterThanOrEqual(0);
+      // and it really left the midpoint (a zero offset would satisfy the dot test vacuously)
+      expect(Math.hypot(cx - mx, cy - my)).toBeGreaterThan(0);
+    }
+  });
+
+  it("drawShortcutCurve without weightLabel appends exactly one path.shortcut-path anchored at the TRUE endpoints, and returns it", () => {
+    const group = document.createElementNS(SVG_NS, "g") as SVGGElement;
+    const path = drawShortcutCurve(group, XY, 0, 1, 2, { flip: false });
+    expect(group.children).toHaveLength(1);
+    expect(group.children[0]).toBe(path);
+    expect(path.getAttribute("class")).toBe("shortcut-path");
+    // Curves anchor to the true xy (buttons may declutter-drift; curves must not)
+    expect(path.getAttribute("d")).toMatch(/^M 0,0 Q .* 100,0$/);
+    expect(group.querySelector(".shortcut-label")).toBeNull();
+    expect(group.querySelector(".shortcut-label-bg")).toBeNull();
+  });
+
+  it("drawShortcutCurve with weightLabel also appends the label text (rounded int) and its background chip, chip BEFORE label", () => {
+    const group = document.createElementNS(SVG_NS, "g") as SVGGElement;
+    const path = drawShortcutCurve(group, XY, 0, 1, 2, { flip: false, weightLabel: 41.6 });
+    expect(group.children).toHaveLength(3);
+    const label = group.querySelector(".shortcut-label");
+    const bg = group.querySelector(".shortcut-label-bg");
+    expect(label?.textContent).toBe("42");
+    expect(bg).not.toBeNull();
+    // paint order: bg must sit under the text it backs
+    expect(bg?.nextSibling).toBe(label);
+    expect(group.children[0]).toBe(path);
   });
 });

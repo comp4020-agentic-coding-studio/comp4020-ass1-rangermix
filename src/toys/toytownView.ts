@@ -615,3 +615,139 @@ export function wireRovingNodeButtons(
     buttons[next].focus();
   });
 }
+
+// ---------------------------------------------------------------------
+// Shortcut-curve drawing (spec §21.4): moved here from contraction.ts so
+// chapter 4's narrated contraction and chapter 5's order replays draw
+// IDENTICAL dashed curves from one tested implementation. Chapter 4 passes
+// `weightLabel` (the label is its narration device); chapter 5 omits it
+// (volume, not arithmetic, is that chapter's point).
+// ---------------------------------------------------------------------
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const CURVE_OFFSET = 16;
+// How far the k-th label of a busy contraction gets pushed past the plain
+// midpoint, along its OWN curve's normal (see drawShortcutCurve) — a
+// deliberately simple per-shortcut-rank stagger, not real collision
+// detection.
+const LABEL_STAGGER = 10;
+const LABEL_PAD_X = 3;
+const LABEL_PAD_Y = 1.5;
+const LABEL_RADIUS = 3;
+
+/** Unit normal of the (a, b) chord, pointed away from `via` so a curve (or
+ * a label walking the same line) bows around the gap the contracted node
+ * left rather than through it. `flip` points to the OPPOSITE side instead —
+ * used so a directed pair's two independent shortcuts (u->w AND w->u, which
+ * toytown's one-ways make genuinely different events, each with its own
+ * weight) don't draw as two identical overlapping curves. Shared by
+ * controlPoint (the curve's midpoint bow) and drawShortcutCurve (the
+ * label's collision stagger) so both walk out from the chord along the
+ * same line. */
+export function curveNormal(
+  xy: [number, number][],
+  a: number,
+  b: number,
+  via: number,
+  flip: boolean,
+): [number, number] {
+  const [x1, y1] = xy[a];
+  const [x2, y2] = xy[b];
+  const [vx, vy] = xy[via];
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  let nx = -(y2 - y1);
+  let ny = x2 - x1;
+  const len = Math.hypot(nx, ny) || 1;
+  nx /= len;
+  ny /= len;
+  if ((mx - vx) * nx + (my - vy) * ny < 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+  if (flip) {
+    nx = -nx;
+    ny = -ny;
+  }
+  return [nx, ny];
+}
+
+/** Bows the shortcut's curve away from the node it bypasses, so it
+ * visually arcs around the gap that node left behind instead of cutting
+ * straight through where it used to sit. */
+export function controlPoint(
+  xy: [number, number][],
+  a: number,
+  b: number,
+  via: number,
+  flip: boolean,
+): [number, number] {
+  const [x1, y1] = xy[a];
+  const [x2, y2] = xy[b];
+  const [nx, ny] = curveNormal(xy, a, b, via, flip);
+  return [(x1 + x2) / 2 + nx * CURVE_OFFSET, (y1 + y2) / 2 + ny * CURVE_OFFSET];
+}
+
+export interface ShortcutCurveOpts {
+  /** Caller convention: `a > b`, so a directed pair's two shortcuts bow to
+   * opposite sides of the chord. */
+  flip: boolean;
+  /** This shortcut's index within the batch a single contraction produced
+   * (0 for the first/only one) — staggers labels of a busy contraction
+   * into a fan instead of a stack. Only matters when weightLabel is set. */
+  collisionRank?: number;
+  /** Travel seconds to print on the curve (with an opaque background chip
+   * sized to the real rendered text). Omit entirely for an unlabelled
+   * curve. */
+  weightLabel?: number;
+}
+
+/** Appends one dashed shortcut curve (class "shortcut-path") bowing away
+ * from `via` to `group`, plus — when `weightLabel` is set — the label text
+ * and its background chip (classes "shortcut-label"/"shortcut-label-bg").
+ * Returns the path element so callers can key it for later lookup
+ * (contraction.ts's ordered shortcutEls map). */
+export function drawShortcutCurve(
+  group: SVGGElement,
+  xy: [number, number][],
+  a: number,
+  b: number,
+  via: number,
+  opts: ShortcutCurveOpts,
+): SVGPathElement {
+  const [x1, y1] = xy[a];
+  const [x2, y2] = xy[b];
+  const [cx, cy] = controlPoint(xy, a, b, via, opts.flip);
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("class", "shortcut-path");
+  path.setAttribute("d", `M ${x1},${y1} Q ${cx},${cy} ${x2},${y2}`);
+  group.appendChild(path);
+
+  if (opts.weightLabel !== undefined) {
+    const [nx, ny] = curveNormal(xy, a, b, via, opts.flip);
+    const rank = opts.collisionRank ?? 0;
+    const lx = cx + nx * rank * LABEL_STAGGER;
+    const ly = cy + ny * rank * LABEL_STAGGER;
+
+    const label = document.createElementNS(SVG_NS, "text");
+    label.setAttribute("class", "shortcut-label");
+    label.setAttribute("x", String(lx));
+    label.setAttribute("y", String(ly));
+    label.textContent = String(Math.round(opts.weightLabel));
+    // Appended before measuring: getBBox() only reflects real rendered
+    // geometry once the element is actually in the (live) document.
+    group.appendChild(label);
+
+    const box = label.getBBox();
+    const bg = document.createElementNS(SVG_NS, "rect");
+    bg.setAttribute("class", "shortcut-label-bg");
+    bg.setAttribute("x", String(box.x - LABEL_PAD_X));
+    bg.setAttribute("y", String(box.y - LABEL_PAD_Y));
+    bg.setAttribute("width", String(box.width + LABEL_PAD_X * 2));
+    bg.setAttribute("height", String(box.height + LABEL_PAD_Y * 2));
+    bg.setAttribute("rx", String(LABEL_RADIUS));
+    group.insertBefore(bg, label);
+  }
+
+  return path;
+}
