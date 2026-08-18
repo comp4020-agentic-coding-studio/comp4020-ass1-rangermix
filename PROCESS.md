@@ -87,7 +87,7 @@ comes from with five toys that run the same algorithm code as the race.
 ## Where to look
 
 - `docs/superpowers/specs/2026-08-14-ch-explainer-design.md` — the living
-  spec: base design plus §14–§21, one section per review round; its
+  spec: base design plus §14–§23, one section per review round; its
   checkable lines live as tests in `spec/highway-to-hill.test.ts`.
 - `docs/superpowers/plans/` — the base 13-task plan and one compact plan
   per feedback round; the round plans carry the parallel-wave structure
