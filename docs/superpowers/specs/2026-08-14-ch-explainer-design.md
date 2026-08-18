@@ -767,6 +767,26 @@ ch3's climb.
    icon pair wraps to a second row. Compaction (padding/gap/type size
    at narrow widths) rather than dropping any control.
 
+## 23. Ninth build review (user, 2026-08-18 — binding)
+
+1. **Race replay normalized to 3 seconds.** The slowest active racer's
+   replay always takes exactly 3.0 s; every other racer's duration
+   scales proportionally to its own measured wall time
+   (duration_i = 3000 ms × ms_i / ms_max). This supersedes §19.4's
+   fixed ×2000 factor ONLY — everything else §19.4 bound stays: pacing
+   is per-algorithm and proportional to real measurements (the honesty),
+   the 200 ms floor, rows finalize individually, race-end effects at the
+   last completion (now always ≈3 s), cancellation paths instant,
+   reduced-motion instant finals. Displayed ms numbers remain the raw
+   measurements — only the replay clock is normalized.
+2. **Dragged pins follow the pointer during a replay.** Today the
+   replay's per-frame overlay redraw draws pins from the race-start
+   snapshot, so a pin dragged mid-replay appears frozen until release.
+   Fix: the per-frame draw uses the CURRENT pin positions (live-snapped
+   during drag exactly as when idle) in every view, overlay and compare
+   panels alike. The old race's dots/route may keep animating until
+   release re-races — only the PIN display is live.
+
 ## 15. References
 
 - Geisberger, Sanders, Schultes, Delling — *Contraction Hierarchies: Faster
