@@ -362,9 +362,10 @@ interface AlgoLayer {
    * a second parallel lookup back into the original AlgoResult array from
    * inside renderAt's per-frame hot path. */
   ms: number;
-  /** spec §19.4: THIS racer's own replay duration (`replayDurationMs(ms)`
-   * — see that function's own doc), computed once at race start and never
-   * re-derived per frame. Different layers in the SAME race very likely
+  /** spec §19.4/§23.1: THIS racer's own replay duration
+   * (`replayDurationMs(ms, raceMaxMs)` — see that function's own doc),
+   * computed once at race start and never re-derived per frame. Different
+   * layers in the SAME race very likely
    * carry different durations — that is the entire point of §19.4 (CH's
    * tiny settled count means a tiny measured `ms` means a tiny replay;
    * Dijkstra's flood takes visibly longer to both compute AND replay) —
@@ -413,8 +414,9 @@ function isReducedMotion(): boolean {
 
 /** Owns the race Worker, replays its results onto `view`, and reports
  * progress/results through `ui`. Since spec §19.4 each racer replays over
- * ITS OWN duration (its measured wall time × 2000, see replayDurationMs)
- * rather than one shared ~2.5 s for the whole race — see renderAt/animate
+ * ITS OWN duration (since §23.1 its proportional share of a race-wide 3 s
+ * clock the slowest racer defines, see replayDurationMs)
+ * rather than one shared constant for the whole race — see renderAt/animate
  * for how. One instance per page — home.ts constructs it once routing is
  * ready and calls `run()` per race (pin change, preset click, "R", or the
  * one-time auto-run). */

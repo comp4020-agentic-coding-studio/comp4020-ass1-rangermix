@@ -281,8 +281,7 @@ export function applySplashInert(targets: SplashInertTargets, splashDismissed: b
  * per-frame repaint: until THIS race's own finalization fires, an
  * unfinalized row kept showing the LAST race's numbers — for as long as
  * its own replay takes (worst case: the slowest active racer's full
- * duration, which spec §19.4's uncapped scaling can stretch to tens of
- * seconds). Reusing setTime/setRowDelta to clear early would violate their
+ * duration — exactly 3 s since spec §23.1's normalization). Reusing setTime/setRowDelta to clear early would violate their
  * own "called once, after completion" contracts (see each one's own doc
  * comment on RaceUi), so this is a separate, explicit step instead — called
  * once from the scheduler callback (home.ts's own single race-start funnel
