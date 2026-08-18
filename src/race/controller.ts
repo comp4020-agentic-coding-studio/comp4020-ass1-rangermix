@@ -57,18 +57,18 @@ export interface ComparePanel {
   view: MapView;
 }
 
-// spec §19.4 (fifth build review): replay pacing is PER-ALGORITHM and
-// proportional to what was actually measured — there is no longer one
-// shared duration for the whole race (the pre-§19.4 `REPLAY_MS` constant
-// this replaces). REPLAY_SCALE is the "2000x slow motion" factor stated in
-// the review verbatim (0.5 ms measured -> 1 s replay, 2.5 ms -> 5 s);
-// REPLAY_FLOOR_MS keeps a near-zero measurement (an adjacent-node query,
-// or a machine fast enough that performance.now() barely ticks between
-// start and end) from collapsing into a replay shorter than a single rAF
-// frame, which would read as a jump-cut, not a replay. Both constants are
-// private to replayDurationMs below — nothing else in this file reads
-// them directly.
-const REPLAY_SCALE = 2000;
+// spec §23.1 (ninth build review): replay pacing stays PER-ALGORITHM and
+// proportional to what was actually measured (§19.4's honesty), but the
+// absolute clock is normalized — the slowest active racer's replay is
+// always exactly RACE_REPLAY_MS, everyone else a proportional share of
+// it (superseding §19.4's fixed "2000x slow motion" factor, whose
+// duration varied race to race). REPLAY_FLOOR_MS keeps a near-zero
+// share (an adjacent-node query, or CH's sliver next to a slow flood)
+// from collapsing into a replay shorter than a single rAF frame, which
+// would read as a jump-cut, not a replay. Both constants are private to
+// replayDurationMs below — nothing else in this file reads them
+// directly.
+const RACE_REPLAY_MS = 3000;
 const REPLAY_FLOOR_MS = 200;
 const DOT_RADIUS = 1.8;
 const DRAW_CAP = 4000; // see mapRenderer.strideFor: visual sampling cap per frame
@@ -148,19 +148,23 @@ export function routeColorFor(colors: Record<string, string>, algo: RacerId): st
   return colors[algo];
 }
 
-/** spec §19.4: THIS racer's own replay duration, derived from its own
- * measured wall time (`AlgoResult.ms`) — never a race-wide constant.
- * `measuredMs * REPLAY_SCALE` is the literal rule from the build review
- * (0.5 ms -> 1000 ms, 2.5 ms -> 5000 ms — see controller.test.ts's pinned
- * cases); `REPLAY_FLOOR_MS` only ever RAISES a near-zero result, never
- * lowers one, and there is deliberately no upper clamp — a slow measured
- * racer (bidirectional greedy losing badly on an adversarial pair) earns
- * an honestly long replay, because the length of the replay IS part of
- * the honesty (spec §19.4: "long honest replays are the point"). Pure and
+/** spec §23.1 (ninth build review, superseding §19.4's fixed ×2000 scale
+ * ONLY): THIS racer's own replay duration, normalized so the SLOWEST
+ * racer in the race always replays for exactly `RACE_REPLAY_MS` (3 s) and
+ * everyone else scales proportionally to its own measured share of that
+ * slowest time — the per-algorithm proportionality (the honesty §19.4
+ * bound) is untouched; only the absolute clock is normalized, and the
+ * displayed ms numbers remain the raw measurements. `raceMaxMs` is the
+ * max sanitized measurement across THIS race's active racers (run()
+ * computes it once per race); a non-positive max (an all-zero race)
+ * resolves to the floor rather than dividing by zero. `REPLAY_FLOOR_MS`
+ * only ever RAISES a near-zero share, never lowers one — CH's sliver
+ * stays watchable next to Dijkstra's full three seconds. Pure and
  * exported so the scaling law is unit-testable without a real race; run()
  * calls this once per active racer to build that racer's AlgoLayer.duration. */
-export function replayDurationMs(measuredMs: number): number {
-  return Math.max(REPLAY_FLOOR_MS, measuredMs * REPLAY_SCALE);
+export function replayDurationMs(measuredMs: number, raceMaxMs: number): number {
+  if (raceMaxMs <= 0) return REPLAY_FLOOR_MS;
+  return Math.max(REPLAY_FLOOR_MS, (measuredMs / raceMaxMs) * RACE_REPLAY_MS);
 }
 
 /** How many of `total` items should be visible at `elapsedMs` into a
@@ -557,6 +561,24 @@ export class RaceController {
     if (this.current) this.renderAt(this.current.elapsed);
   }
 
+  /** spec §23.2 (ninth build review): keeps the replay's per-frame pin
+   * draw in step with a drag that's happening WHILE a race animates.
+   * renderAt draws pins from the current Frame every frame, so before
+   * this seam a pin dragged mid-replay was overpainted at its race-start
+   * node on the very next rAF tick — it looked frozen until release
+   * re-raced. home.ts calls this from its drag handler with the same
+   * live-snapped node indices it already tracks; the race's OWN data
+   * (dots, routes, scoreboard) deliberately keeps animating the old
+   * race — only the PIN display is live, and release still re-races
+   * exactly as before. A no-op between races (no Frame to update —
+   * drawAllPinsOnly owns that state, and the next run() captures the
+   * new pins anyway). */
+  setPins(pinA: number, pinB: number): void {
+    if (!this.current) return;
+    this.current.pinA = pinA;
+    this.current.pinB = pinB;
+  }
+
   // §16.10 (compare-view perf): renderAt below only ever calls
   // clearOverlay/drawDots/drawRoute/drawPin on its targets — the OVERLAY
   // half of MapView's API — never drawBase, in EITHER overlay mode (one
@@ -821,6 +843,15 @@ export class RaceController {
     // the UI via ui.setRowDelta(algo, pct), which a real implementation
     // mirrors into both the scoreboard row AND that racer's compare-panel
     // chip (see RaceUi.setRowDelta's own doc).
+    // spec §23.1: the race's normalization anchor — the slowest active
+    // racer's SANITIZED measurement (same Number.isFinite guard as each
+    // layer's own `ms` below, applied here too so one poisoned result
+    // can't NaN the whole race's clock). Computed once, before the layer
+    // map, because every layer's duration is a share OF this max.
+    const raceMaxMs = Math.max(
+      0,
+      ...active.map(({ result }) => (Number.isFinite(result.ms) ? result.ms : 0)),
+    );
     const layers: AlgoLayer[] = active.map(({ algo, result }) => {
       const order = new Uint32Array(result.settled);
       // Computed once, reused for both this layer's Compare-mode dashing
@@ -859,7 +890,7 @@ export class RaceController {
         dashed: deltaPct > 0,
         deltaPct,
         ms,
-        duration: replayDurationMs(ms),
+        duration: replayDurationMs(ms, raceMaxMs),
         finalized: false,
       };
     });

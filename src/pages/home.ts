@@ -988,6 +988,9 @@ function boot(): void {
         if (dragPin) {
           if (dragPin === "A") pinA = dragPinOrigin;
           else pinB = dragPinOrigin;
+          // §23.2: the mid-replay frame must snap back too, same reason
+          // as the drag branch's own setPins call.
+          if (pinA !== null && pinB !== null) controller?.setPins(pinA, pinB);
           drawAllPinsOnly();
         }
         dragPin = null;
@@ -1034,6 +1037,12 @@ function boot(): void {
         const node = nearestNode(lon, lat, graph.lon, graph.lat);
         if (dragPin === "A") pinA = node;
         else pinB = node;
+        // §23.2: while a replay is animating, its per-frame redraw draws
+        // pins from the controller's Frame — without this the dragged pin
+        // was overpainted at its race-start node every rAF tick and looked
+        // frozen until release. Both pins are non-null here (a drag can
+        // only start on an existing pin).
+        if (pinA !== null && pinB !== null) controller?.setPins(pinA, pinB);
         drawAllPinsOnly();
       } else if (panActive && activeView) {
         activeView.panBy(x - panX, y - panY);

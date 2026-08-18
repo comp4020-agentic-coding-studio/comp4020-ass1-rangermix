@@ -160,46 +160,48 @@ describe("sliceForFrame", () => {
   });
 });
 
-describe("replayDurationMs (spec §19.4: THIS racer's own measured wall time × 2000, floored, never capped)", () => {
-  it("scales measured ms by 2000 — the pinned examples from the build review", () => {
-    expect(replayDurationMs(0.5)).toBe(1000);
-    expect(replayDurationMs(2.5)).toBe(5000);
+describe("replayDurationMs (spec §23.1: race normalized to 3 s — the slowest racer defines the clock, everyone scales to it)", () => {
+  it("the slowest racer in the race always replays for exactly 3000 ms, whatever it measured", () => {
+    expect(replayDurationMs(2.5, 2.5)).toBe(3000);
+    expect(replayDurationMs(40, 40)).toBe(3000);
+    expect(replayDurationMs(0.4, 0.4)).toBe(3000);
   });
 
-  it("floors a near-zero measurement at 200 ms rather than an unwatchable sub-frame flash", () => {
-    expect(replayDurationMs(0.05)).toBe(200);
-    expect(replayDurationMs(0)).toBe(200);
+  it("every other racer scales proportionally to its own measured share of the slowest", () => {
+    expect(replayDurationMs(1, 3)).toBe(1000);
+    expect(replayDurationMs(1.5, 3)).toBe(1500);
+    expect(replayDurationMs(20, 30)).toBe(2000);
   });
 
-  it("does not touch a measurement already comfortably above the floor — pure scaling takes over", () => {
-    expect(replayDurationMs(1)).toBe(2000);
-    expect(replayDurationMs(10)).toBe(20_000);
+  it("floors a tiny share at 200 ms rather than an unwatchable sub-frame flash (CH's sliver stays visible)", () => {
+    expect(replayDurationMs(0.01, 30)).toBe(200); // raw share would be 1 ms
+    expect(replayDurationMs(0, 5)).toBe(200);
   });
 
-  it("has no upper cap — a slow measured racer earns an honestly long replay", () => {
-    expect(replayDurationMs(50)).toBe(100_000); // 50 ms measured -> 100 s replay, uncapped
+  it("an all-zero race (every measurement 0, or a lone 0 max) resolves to the floor, never NaN", () => {
+    expect(replayDurationMs(0, 0)).toBe(200);
   });
 });
 
-describe("per-layer fraction math at a fixed timestamp (spec §19.4 — different racers, different durations, one shared clock)", () => {
-  it("a fast (small-ms) layer reads fully settled while a slow (large-ms) layer in the SAME race, at the SAME elapsedMs, is still partial", () => {
-    const chDuration = replayDurationMs(0.3); // 600 ms
-    const dijDuration = replayDurationMs(5); // 10,000 ms
-    const elapsedMs = 650; // past ch's own duration; nowhere near dijkstra's
+describe("per-layer fraction math at a fixed timestamp (spec §23.1 — different racers, different durations, one shared 3 s clock)", () => {
+  it("a fast (small-ms) layer reads fully settled while the slowest layer in the SAME race, at the SAME elapsedMs, is still partial", () => {
+    const chDuration = replayDurationMs(0.3, 5); // 180 -> floored to 200 ms
+    const dijDuration = replayDurationMs(5, 5); // the slowest: 3000 ms
 
+    const elapsedMs = 650; // past ch's own duration; a fifth into dijkstra's
     expect(sliceForFrame(214, elapsedMs, chDuration)).toBe(214); // CH: done
     const dijUp = sliceForFrame(21_480, elapsedMs, dijDuration);
     expect(dijUp).toBeGreaterThan(0);
     expect(dijUp).toBeLessThan(21_480); // Dijkstra: still mid-flood, same instant
   });
 
-  it("the same elapsedMs against the same total gives different reveal fractions once the two durations differ — proof the racers no longer share one clock", () => {
+  it("the same elapsedMs against the same total gives different reveal fractions once the two durations differ — the racers never share one reveal clock", () => {
     const total = 1000;
     const elapsedMs = 1000;
-    const fastFrac = sliceForFrame(total, elapsedMs, replayDurationMs(0.4)); // 800 ms duration -> already done
-    const slowFrac = sliceForFrame(total, elapsedMs, replayDurationMs(4)); // 8,000 ms duration -> 12.5% in
+    const fastFrac = sliceForFrame(total, elapsedMs, replayDurationMs(1, 3)); // 1000 ms duration -> exactly done
+    const slowFrac = sliceForFrame(total, elapsedMs, replayDurationMs(3, 3)); // 3000 ms duration -> a third in
     expect(fastFrac).toBe(1000);
-    expect(slowFrac).toBe(125);
+    expect(slowFrac).toBe(333);
   });
 });
 
@@ -700,7 +702,7 @@ describe("RaceController.run() — non-finite measured `ms` doesn't stall the wh
 // elapsed time it observes, without leaning on assumptions about how
 // vitest's built-in fake timers interleave with a recursive rAF-driven
 // Promise chain.
-describe("RaceController — per-layer replay pacing (spec §19.4, the animated path)", () => {
+describe("RaceController — per-layer replay pacing (spec §19.4 honesty × §23.1 3 s normalization, the animated path)", () => {
   function mockUi(): RaceUi {
     return { setRow: vi.fn(), setTime: vi.fn(), setHeadline: vi.fn(), announce: vi.fn(), setRowDelta: vi.fn() };
   }
@@ -766,8 +768,8 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
       data: {
         id: req!.id,
         results: {
-          ch: fakeAlgoResult([0, 1], [0, 1], 0.3), // duration 600 ms
-          dijkstra: fakeAlgoResult([0, 1, 2, 3], [0, 1], 5), // duration 10,000 ms
+          ch: fakeAlgoResult([0, 1], [0, 1], 0.3), // §23.1: 0.3/5 share -> floored 200 ms
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [0, 1], 5), // the slowest: exactly 3,000 ms
         },
       },
     } as unknown as MessageEvent<WorkerResponse>);
@@ -777,7 +779,7 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     // pending .then() hop regardless of how many are chained ahead of it.
     await new Promise((r) => setTimeout(r, 0));
 
-    // Past ch's own 600 ms duration, nowhere near dijkstra's 10,000 ms one.
+    // Past ch's own 200 ms duration, nowhere near dijkstra's 3,000 ms one.
     clock.advance(650);
     expect(ui.setTime).toHaveBeenCalledWith("ch", 0.3);
     expect(ui.setTime).not.toHaveBeenCalledWith("dijkstra", expect.anything());
@@ -785,7 +787,7 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     expect(ui.setHeadline).not.toHaveBeenCalled();
     expect(setItemSpy).not.toHaveBeenCalled();
 
-    // Past dijkstra's own 10,000 ms duration too — the LAST active layer —
+    // Past dijkstra's own 3,000 ms duration too — the LAST active layer —
     // which is what lets animate()'s promise (and so run() itself) resolve.
     clock.advance(10_000);
     expect(ui.setTime).toHaveBeenCalledWith("dijkstra", 5);
@@ -798,6 +800,62 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
 
     clock.restore();
     setItemSpy.mockRestore();
+  });
+
+  it("setPins mid-replay: the very next frame draws pins at the NEW nodes (spec §23.2 — a dragged pin follows the pointer instead of freezing at its race-start node)", async () => {
+    // The shared fixture graph's lon/lat are all zeros (toyGraph), which
+    // can't distinguish "pin A at node 0" from "pin A at node 1" — this
+    // test alone needs coordinates that tell the two nodes apart, so it
+    // hands the NEXT controller its own graph via mockResolvedValueOnce
+    // (the shared mockResolvedValue keeps serving every other test).
+    const g = toyGraph(2, [[0, 1, 100]], { undirected: true });
+    g.lon[0] = 10;
+    g.lat[0] = 1;
+    g.lon[1] = 20;
+    g.lat[1] = 2;
+    const data = await import("../data");
+    // The real loadRouting's type carries ch/renderOf/meta too, but the
+    // controller's routingPromise only ever reads `.graph` — same shape
+    // the file-level mock factory already serves.
+    vi.mocked(data.loadRouting).mockResolvedValueOnce({ graph: g } as never);
+
+    const ui = mockUi();
+    const view = mockView();
+    const controller = new RaceController(view as unknown as MapView, ui);
+    const clock = fakeClock();
+
+    const runPromise = controller.run(0, 1);
+    const worker = FakeWorker.instances.at(-1);
+    const req = worker?.sent[0];
+    expect(req).toBeDefined();
+    worker?.onmessage?.({
+      data: {
+        id: req!.id,
+        results: {
+          ch: fakeAlgoResult([0, 1], [0, 1], 0.3), // §23.1: floored 200 ms
+          dijkstra: fakeAlgoResult([0, 1], [0, 1], 5), // the slowest: exactly 3,000 ms
+        },
+      },
+    } as unknown as MessageEvent<WorkerResponse>);
+    await new Promise((r) => setTimeout(r, 0));
+
+    // Mid-replay, race-start pins: A at node 0 (10, 1), B at node 1 (20, 2).
+    clock.advance(500);
+    expect(view.drawPin).toHaveBeenCalledWith(10, 1, "A");
+    expect(view.drawPin).toHaveBeenCalledWith(20, 2, "B");
+
+    // The drag hands the controller swapped pins; the NEXT frame must draw
+    // them at the new nodes — before §23.2 every frame kept overpainting
+    // the race-start positions, so a dragged pin looked frozen.
+    view.drawPin.mockClear();
+    controller.setPins(1, 0);
+    clock.advance(16); // one frame
+    expect(view.drawPin).toHaveBeenCalledWith(20, 2, "A"); // A now at node 1
+    expect(view.drawPin).toHaveBeenCalledWith(10, 1, "B"); // B now at node 0
+
+    clock.advance(5000); // let the race finish so run() resolves cleanly
+    await runPromise;
+    clock.restore();
   });
 
   // spec §20.1 (sixth build review) retires the pre-§20.1 rule this block
@@ -824,9 +882,9 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
       data: {
         id: req!.id,
         results: {
-          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms, exact this race
-          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // duration 10,000 ms, exact this race
-          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.02, 130), // duration 200 ms (floor); 30% longer -> disclosed/inexact
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.5, 100), // §23.1: 0.5/5 share -> 300 ms, exact this race
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // the slowest: exactly 3,000 ms, exact this race
+          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.02, 130), // floored 200 ms; 30% longer -> disclosed/inexact
         },
       },
     } as unknown as MessageEvent<WorkerResponse>);
@@ -852,8 +910,8 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     expect(opts0.dashed).toBeFalsy();
     expect(opts0.color).toEqual(expect.anything());
 
-    // Past ch's 600 ms too: ch's own route joins now (still no dash) —
-    // dijkstra (10,000 ms) is nowhere close, so its own route must NOT be
+    // Past ch's 300 ms too: ch's own route joins now (still no dash) —
+    // dijkstra (3,000 ms) is nowhere close, so its own route must NOT be
     // among this frame's calls (the surviving half of the retired
     // property, narrowed to "before ITS OWN finish").
     view.drawRoute.mockClear();
@@ -885,10 +943,10 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
       data: {
         id: req!.id,
         results: {
-          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms, exact
-          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 2, 100), // duration 4,000 ms, exact
-          "astar-straight": fakeAlgoResult([0, 1], [10, 13, 12], 0.5, 100), // duration 1,000 ms, exact
-          "astar-greedy": fakeAlgoResult([0], [10, 14, 15, 12], 0.05, 130), // duration 200 ms (floor); disclosed
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // §23.1: 0.3/2 share -> 450 ms, exact
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 2, 100), // the slowest: exactly 3,000 ms, exact
+          "astar-straight": fakeAlgoResult([0, 1], [10, 13, 12], 0.5, 100), // 0.5/2 share -> 750 ms, exact
+          "astar-greedy": fakeAlgoResult([0], [10, 14, 15, 12], 0.05, 130), // floored 200 ms; disclosed
         },
       },
     } as unknown as MessageEvent<WorkerResponse>);
@@ -900,8 +958,8 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     expect(view.drawRoute).toHaveBeenCalledTimes(1);
     expect(view.drawRoute.mock.calls[0][0]).toEqual([10, 14, 15, 12]);
 
-    // t=650: astar-greedy AND ch (600 ms) — exactly 2 of the 4 active
-    // racers, neither astar-straight (1,000 ms) nor dijkstra (4,000 ms)
+    // t=650: astar-greedy AND ch (450 ms) — exactly 2 of the 4 active
+    // racers, neither astar-straight (750 ms) nor dijkstra (3,000 ms)
     // yet. ROSTER order (dijkstra, astar-straight, astar-greedy, ch) puts
     // astar-greedy's call before ch's.
     view.drawRoute.mockClear();
@@ -910,7 +968,7 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     expect(view.drawRoute.mock.calls[0][0]).toEqual([10, 14, 15, 12]); // astar-greedy
     expect(view.drawRoute.mock.calls[1][0]).toEqual([10, 12]); // ch
 
-    // t=1050: astar-straight (1,000 ms) joins too — 3 of 4, still ROSTER
+    // t=1050: astar-straight (750 ms) joins too — 3 of 4, still ROSTER
     // order, dijkstra still absent.
     view.drawRoute.mockClear();
     clock.advance(400);
@@ -919,7 +977,7 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     expect(view.drawRoute.mock.calls[1][0]).toEqual([10, 14, 15, 12]); // astar-greedy
     expect(view.drawRoute.mock.calls[2][0]).toEqual([10, 12]); // ch
 
-    // t=4100: dijkstra (4,000 ms) finishes last — all four now, still
+    // t=4100: dijkstra (3,000 ms) finishes last — all four now, still
     // ROSTER order (dijkstra first).
     view.drawRoute.mockClear();
     clock.advance(3050);
@@ -949,9 +1007,9 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
       data: {
         id: req!.id,
         results: {
-          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms, exact
-          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // duration 10,000 ms, exact
-          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.05, 130), // duration 200 ms (floor); disclosed
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // §23.1: floored 200 ms, exact
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // the slowest: exactly 3,000 ms, exact
+          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.05, 130), // floored 200 ms; disclosed
         },
       },
     } as unknown as MessageEvent<WorkerResponse>);
@@ -1005,14 +1063,14 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
       data: {
         id: req!.id,
         results: {
-          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms
-          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 0.3, 100), // duration 600 ms too — both finish together
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // §23.1: equal-slowest -> the full 3,000 ms
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 0.3, 100), // equal-slowest too — both finish together at 3 s
         },
       },
     } as unknown as MessageEvent<WorkerResponse>);
     await new Promise((r) => setTimeout(r, 0));
 
-    clock.advance(650); // both racers finished — two routes AND two pins draw this frame
+    clock.advance(3050); // both racers finished — two routes AND two pins draw this frame
     await runPromise;
 
     expect(order.filter((e) => e === "route")).toHaveLength(2);
@@ -1039,8 +1097,8 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
       data: {
         id: req1!.id,
         results: {
-          ch: fakeAlgoResult([0, 1], [0, 1], 0.3), // duration 600 ms
-          dijkstra: fakeAlgoResult([0, 1, 2, 3], [0, 1], 5), // duration 10,000 ms
+          ch: fakeAlgoResult([0, 1], [0, 1], 0.3), // §23.1: floored 200 ms
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [0, 1], 5), // the slowest: exactly 3,000 ms
         },
       },
     } as unknown as MessageEvent<WorkerResponse>);
@@ -1051,8 +1109,8 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     expect(ui.setTime).toHaveBeenCalledWith("ch", 0.3);
 
     // ...then a NEW race supersedes it (any of run()'s real callers: a new
-    // pin, a preset click, "R") while race 1's dijkstra layer is still only
-    // ~6.5% settled. Race 2's own request is deliberately left unanswered —
+    // pin, a preset click, "R") while race 1's dijkstra layer is still
+    // mid-flood. Race 2's own request is deliberately left unanswered —
     // that isolates "race 1 never gets to report" from "race 2 eventually
     // reports its own results": if ANY race-end effect fires below, it can
     // only be race 1's, since race 2 can structurally never reach that
@@ -1062,7 +1120,7 @@ describe("RaceController — per-layer replay pacing (spec §19.4, the animated 
     expect(req2).toBeDefined(); // the request itself still goes out synchronously — only its reply never arrives
     await new Promise((r) => setTimeout(r, 0));
 
-    // Advance well past where race 1's dijkstra (10,000 ms) would have
+    // Advance well past where race 1's dijkstra (3,000 ms) would have
     // completed had it not been cancelled.
     clock.advance(12_000);
     await new Promise((r) => setTimeout(r, 0));
@@ -1158,9 +1216,9 @@ describe("RaceController.run() (renderAt) — Compare-mode per-panel route revea
       data: {
         id: req!.id,
         results: {
-          ch: fakeAlgoResult([0, 1], [10, 12], 0.3, 100), // duration 600 ms, exact
-          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // duration 10,000 ms, exact
-          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.02, 130), // duration 200 ms (floor); 30% longer -> disclosed
+          ch: fakeAlgoResult([0, 1], [10, 12], 0.5, 100), // §23.1: 0.5/5 share -> 300 ms, exact
+          dijkstra: fakeAlgoResult([0, 1, 2, 3], [10, 11, 12], 5, 100), // the slowest: exactly 3,000 ms, exact
+          "astar-greedy": fakeAlgoResult([0], [10, 14], 0.02, 130), // floored 200 ms; 30% longer -> disclosed
         },
       },
     } as unknown as MessageEvent<WorkerResponse>);
@@ -1176,8 +1234,8 @@ describe("RaceController.run() (renderAt) — Compare-mode per-panel route revea
     expect(chPanel.drawRoute).not.toHaveBeenCalled();
     expect(dijPanel.drawRoute).not.toHaveBeenCalled();
 
-    // Past ch's 600 ms too: ITS panel reveals now, undashed (exact) —
-    // dijkstra's panel still hasn't, nowhere near its own 10,000 ms.
+    // Past ch's 300 ms too: ITS panel reveals now, undashed (exact) —
+    // dijkstra's panel still hasn't, nowhere near its own 3,000 ms.
     clock.advance(400); // ~650 ms total
     expect(chPanel.drawRoute).toHaveBeenCalledTimes(1);
     expect(chPanel.drawRoute).toHaveBeenCalledWith(
