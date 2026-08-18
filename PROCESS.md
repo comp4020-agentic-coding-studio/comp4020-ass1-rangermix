@@ -32,10 +32,10 @@ comes from with five toys that run the same algorithm code as the race.
    closed ([`d82d677...60fae72`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/d82d677...60fae72)).
 
 2. **The feedback → spec → implementation loop.** Every time I reviewed
-   the live build, my feedback became binding spec amendments (§14–§22)
+   the live build, my feedback became binding spec amendments (§14–§23)
    with contract tests *before* any code changed, then went through the
-   same task/review loop — eight rounds of it
-   ([`b078bfd...2e7dd8a`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...2e7dd8a)).
+   same task/review loop — nine rounds of it
+   ([`b078bfd...3164a72`](https://github.com/comp4020-agentic-coding-studio/comp4020-ass1-rangermix/compare/b078bfd...3164a72)).
    The loop kept catching what neither I nor the agent would have caught
    alone: a "footer out of style" complaint root-caused to a curly-quote
    `class=”site-foot”` typo a fix wave had shipped; my "greedy A\* looks
